@@ -1,0 +1,1015 @@
+/* ============================================================
+   Naveena Skincare — Management System
+   Brand theme: magenta / pink, clean & premium
+   ============================================================ */
+:root{
+  --magenta:var(--magenta);
+  --magenta-dark:var(--magenta-dark);
+  --pink:var(--pink);
+  --pink-soft:var(--pink-soft);
+  --rose-bg:var(--rose-bg);
+  --leaf:var(--leaf);
+  --ink:#2B1B27;
+  --ink-2:#6B5A65;
+  --line:var(--line);
+  --white:#fff;
+  --ok:#12805C;
+  --ok-bg:#E4F6EF;
+  --warn:#9A6700;
+  --warn-bg:#FFF4DC;
+  --danger:#B3261E;
+  --danger-bg:#FDE8E7;
+  --info:#1B5E9E;
+  --info-bg:#E7F1FB;
+  --brand-accent:var(--leaf);
+  --brand-accent-dark:#5E9B2A;
+  --brand-accent-mid:#7CB342;
+  --brand-soft:var(--pink-soft);
+  --brand-tint:#FFFBFD;
+  --brand-tint2:#FFF8FB;
+  --brand-hover:#FFFAFC;
+  --brand-hover2:#FFF3F8;
+  --brand-bg3:#F7EDF2;
+  --brand-chip:#F2EAF0;
+  --brand-bright:#D6336C;
+  --sidebar-grad:linear-gradient(170deg,var(--magenta-dark) 0%,var(--magenta) 52%,var(--brand-bright) 100%);
+  --btn-grad:linear-gradient(135deg,var(--pink),var(--magenta));
+  --stat-grad:linear-gradient(140deg,var(--magenta),var(--pink));
+  --stat-leaf-grad:linear-gradient(140deg,var(--brand-accent-dark),var(--leaf));
+  --btn-leaf-grad:linear-gradient(135deg,var(--brand-accent-mid),var(--brand-accent-dark));
+  --auth-grad:linear-gradient(160deg,var(--magenta-dark),var(--magenta) 55%,var(--pink));
+  --progress-grad:linear-gradient(90deg,var(--pink),var(--magenta));
+  /* SKALA TAMPILAN (ronde 39) — setelan "Ukuran Tampilan" di Pengaturan Sistem.
+     Pemilik merasa tampilan di PC/laptop terlalu besar dan baru terasa pas setelah
+     memperkecil peramban ke 80%. Karena hampir seluruh ukuran teks memakai `rem`
+     (relatif ke <html>) dan teks dasar memakai px di `body`, KEDUANYA diskalakan
+     dari satu angka: --ui-scale (1 = 100%). */
+  --ui-scale:1;
+  --ui-html:calc(16px * var(--ui-scale));
+  --ui-body:calc(14.5px * var(--ui-scale));
+  --radius:16px;
+  --radius-sm:10px;
+  --shadow:0 10px 30px rgba(120,20,70,.08);
+  --shadow-sm:0 3px 12px rgba(120,20,70,.07);
+  --sidebar-w:262px;
+  --font:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+}
+/* Skala dasar: ukuran HURUF ikut mengecil (berlaku di semua peramban). */
+html{font-size:var(--ui-html)}
+/* ==================================================================
+ * SKALA TAMPILAN = PERSIS Ctrl+− PADA PERAMBAN (ronde 39b)
+ *
+ * Skala huruf saja TIDAK cukup: jarak/padding tetap penuh sehingga halaman tetap
+ * terasa besar (terukur: tinggi halaman 4352px vs 3490px pada zoom peramban 80%).
+ * Karena itu pada LAYAR BESAR (PC/laptop, >1024px) dipakai `zoom` sehingga SELURUH
+ * ukuran (teks, padding, ikon, kartu, sidebar) ikut mengecil proporsional — sama
+ * seperti menekan Ctrl+−. Pada layar HP/tablet skala ini SENGAJA tidak dipakai
+ * (tampilan HP sudah dioptimalkan dan harus tetap nyaman dibaca).
+ *
+ * Bila `zoom` aktif, ukuran huruf dikembalikan ke DASAR supaya tidak terhitung
+ * dua kali (zoom × font-scale).
+ * ================================================================== */
+@supports (zoom: 1) {
+  /* `screen` WAJIB: halaman DOKUMEN CETAK (dokumen laporan & PDF) juga memuat
+     app.css, sehingga tanpa ini hasil cetaknya ikut mengecil 80% — padahal
+     setelan skala hanya untuk kenyamanan di layar PC/laptop. */
+  @media screen and (min-width:1025px) {
+    html{font-size:16px;zoom:var(--ui-scale)}
+    body{font-size:14.5px}
+  }
+}
+/* ==================================================================
+ * SAAT DICETAK: ukuran SELALU dasar (16px/14,5px), tidak mengikuti setelan
+ * "Ukuran Tampilan". Setelan itu untuk kenyamanan membaca di layar PC/laptop;
+ * dokumen/struk yang dicetak harus tetap seukuran aslinya supaya tidak mengecil
+ * dan tetap terbaca.
+ * ================================================================== */
+@media print{
+  html{font-size:16px!important;zoom:1!important}
+  body{font-size:14.5px!important}
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  font-family:var(--font);color:var(--ink);background:var(--rose-bg);
+  font-size:var(--ui-body);line-height:1.55;-webkit-font-smoothing:antialiased;
+  background-image:
+    radial-gradient(900px 420px at 8% -5%, rgba(233,30,99,.10), transparent 60%),
+    radial-gradient(700px 380px at 96% 4%, rgba(139,195,74,.10), transparent 60%),
+    radial-gradient(800px 500px at 70% 100%, rgba(194,24,91,.07), transparent 60%);
+  background-attachment:fixed;
+}
+a{color:var(--magenta);text-decoration:none}
+a:hover{text-decoration:underline}
+h1,h2,h3,h4{margin:0;font-weight:700;letter-spacing:-.015em;color:var(--ink)}
+h2{font-size:1.32rem}h3{font-size:1.06rem}
+p{margin:.35rem 0}
+.muted{color:var(--ink-2);font-size:.86rem}
+.small{font-size:.8rem}
+.right{text-align:right}.center{text-align:center}
+.nowrap{white-space:nowrap}
+.mt-0{margin-top:0}.mt-1{margin-top:8px}.mt-2{margin-top:16px}.mt-3{margin-top:24px}.mt-4{margin-top:32px}
+.mb-0{margin-bottom:0}.mb-1{margin-bottom:8px}.mb-2{margin-bottom:16px}.mb-3{margin-bottom:24px}
+.flex{display:flex;gap:12px;align-items:center}
+.flex-wrap{flex-wrap:wrap}
+.between{justify-content:space-between}
+.grow{flex:1}
+.gap-sm{gap:8px}.gap-lg{gap:20px}
+.hide{display:none!important}
+
+/* ---------- Layout ---------- */
+.shell{min-height:100vh;display:flex;flex-direction:column}
+.main{flex:1;display:flex;flex-direction:column;margin-left:var(--sidebar-w);min-width:0}
+.content{padding:26px 30px 40px;flex:1}
+.foot{padding:14px 30px 26px;color:var(--ink-2);font-size:.78rem}
+.sidebar{
+  position:fixed;top:0;left:0;bottom:0;width:var(--sidebar-w);z-index:60;
+  background:var(--sidebar-grad);
+  color:#fff;display:flex;flex-direction:column;overflow-y:auto;
+  box-shadow:4px 0 24px rgba(120,10,60,.18);
+}
+.sidebar-head{padding:20px 18px 12px}
+.nav{padding:6px 12px 12px;display:flex;flex-direction:column;gap:2px}
+.nav-group{margin-top:14px}
+.nav-group-title{padding:6px 12px;font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.62);font-weight:700}
+.nav-link{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:10px;color:rgba(255,255,255,.93);font-size:.885rem;font-weight:500;text-decoration:none;transition:.15s}
+.nav-link:hover{background:rgba(255,255,255,.14);text-decoration:none;color:#fff}
+.nav-link.active{background:rgba(255,255,255,.22);color:#fff;font-weight:650;box-shadow:inset 0 0 0 1px rgba(255,255,255,.28)}
+.ico{width:18px;height:18px;flex:0 0 18px}
+.sidebar-foot{margin-top:auto;padding:14px;border-top:1px solid rgba(255,255,255,.16);display:flex;flex-direction:column;gap:8px}
+.sf-user{display:flex;gap:10px;align-items:center}
+.avatar{width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.22);display:grid;place-items:center;font-weight:700}
+.sf-meta strong{display:block;font-size:.85rem;font-weight:650}
+.sf-meta small{color:rgba(255,255,255,.72);font-size:.72rem}
+.sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(43,27,39,.45);z-index:55}
+
+.brand{display:flex;align-items:center;gap:11px;min-width:0}
+.brand-img .logo-img{display:block;height:40px;width:auto;max-width:190px;object-fit:contain}
+.brand-sm.brand-img .logo-img{height:34px;max-width:160px}
+/* Di sidebar berlatar magenta, logo ditempatkan pada chip putih agar tetap terbaca
+   (logo asli umumnya berlatar terang). */
+.sidebar .brand-img{background:#fff;border-radius:12px;padding:7px 10px;box-shadow:0 4px 14px rgba(60,0,30,.18)}
+.sidebar .brand-img .logo-img{height:30px;max-width:150px}
+.auth-visual .brand-img{background:#fff;border-radius:14px;padding:10px 14px;display:inline-block}
+.auth-visual .brand-img .logo-img{height:44px}
+.auth-form .brand-img{margin-bottom:4px}
+.receipt .rhead .brand-img{display:inline-block}
+.receipt .rhead .logo-img{height:44px;max-width:190px}
+.brand-mark{display:block}
+.brand-text{display:flex;flex-direction:column;line-height:1;min-width:0;max-width:100%}
+.brand-name{font-size:1.5rem;font-weight:300;letter-spacing:.01em;color:var(--magenta);line-height:1.15;overflow-wrap:anywhere}
+.brand-sub{font-size:.72rem;letter-spacing:.34em;text-transform:lowercase;color:var(--ink-2);margin-left:2px}
+.sidebar .brand-name{color:#fff}
+.sidebar .brand-sub{color:rgba(255,255,255,.85)}
+.brand-sm .brand-name{font-size:1.3rem}
+/* Nama klinik yang panjang (mis. "Athena Beauty & Aesthetic Center") dibuat
+   mengecil & membungkus supaya sidebar/login/struk tidak rusak tata letaknya. */
+.brand-long .brand-name{font-size:1.05rem}
+.brand-xlong .brand-name{font-size:.92rem}
+.sidebar .brand-long .brand-name{font-size:.98rem}
+.sidebar .brand-xlong .brand-name{font-size:.86rem}
+.brand-long .brand-sub,.brand-xlong .brand-sub{letter-spacing:.16em}
+.sidebar .brand-text{max-width:calc(var(--sidebar-w) - 46px)}
+
+.topbar{
+  position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:16px;
+  padding:14px 30px;background:rgba(255,255,255,.86);backdrop-filter:blur(14px) saturate(160%);
+  border-bottom:1px solid var(--line);
+}
+.topbar-title h1{font-size:1.14rem}
+.crumb{font-size:.76rem;color:var(--ink-2)}
+.topbar-actions{margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:nowrap}
+@media (max-width:760px){
+  .topbar{padding:10px 14px;gap:10px}
+  .topbar-title{min-width:0;flex:1 1 auto}
+  .topbar-title h1{font-size:.98rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  .crumb{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .topbar-actions{margin-left:auto;gap:6px;flex:0 0 auto}
+  .branch-switch{min-width:0}
+  .branch-switch select{min-width:0;width:112px;max-width:130px;padding:6px 8px;font-size:.74rem}
+  .icon-btn{width:34px;height:34px}
+}
+.branch-switch select{min-width:190px}
+.icon-btn{position:relative;display:grid;place-items:center;width:38px;height:38px;border-radius:11px;border:1px solid var(--line);background:#fff;color:var(--ink-2);cursor:pointer}
+.icon-btn:hover{color:var(--magenta);border-color:var(--pink-soft);text-decoration:none}
+.bell .dot{position:absolute;top:-6px;right:-6px;background:var(--pink);color:#fff;font-size:.62rem;font-weight:700;padding:1px 5px;border-radius:20px;font-style:normal}
+.mobile-only{display:none}
+
+/* ---------- Cards & grid ---------- */
+.card{background:#fff;border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-sm);padding:20px;margin-bottom:22px;min-width:0;max-width:100%}
+.card.tight{padding:0;overflow:hidden}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 20px;border-bottom:1px solid var(--line)}
+.card-head h3{margin:0}
+.card-body{padding:20px}
+.card-body.tight{padding:0}
+.grid{display:grid;gap:20px}
+/* ==================================================================
+ * JARAK KARTU SETELAH SEBUAH GRID (ronde 39) — perbaikan bug tata letak.
+ *
+ * `.grid` hanya memakai `gap` di DALAM dirinya dan TIDAK punya margin bawah,
+ * sedangkan `.card` hanya punya margin BAWAH. Akibatnya kartu yang berada tepat
+ * setelah sebuah grid MENEMPEL ke grid di atasnya. Ini terlihat nyata pada:
+ *   • Dashboard — kartu "Ringkasan Transaksi Berdasarkan Periode" menempel untuk
+ *     Kasir & Admin/Dokter (bagi owner ada kartu "Perbandingan" di antaranya yang
+ *     memberi jarak, sehingga bug-nya tidak terlihat),
+ *   • Stok & Movement — kartu pencarian (termasuk pilihan "Jenis Item") menempel
+ *     ke baris kartu statistik di atasnya.
+ * Kartu yang MEMANG sudah diberi jarak sendiri (memakai kelas `mt-1..mt-4`)
+ * dikecualikan agar tidak menambah/mengubah jarak yang sudah disengaja. */
+.grid + .card:not(.mt-0):not(.mt-1):not(.mt-2):not(.mt-3):not(.mt-4){margin-top:22px}
+.grid + .table-wrap{margin-top:22px}
+/* Grid/flex children must be allowed to shrink below their content's
+   min-content width, otherwise wide tables blow the page layout out. */
+.grid > *{min-width:0}
+.stat{min-width:0}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.g5{grid-template-columns:repeat(5,minmax(0,1fr))}
+/* Grid yang MENYESUAIKAN SENDIRI: kartu tidak pernah dipersempit di bawah
+   lebar minimum yang terbaca (mis. kartu grafik "Perbandingan" pada dashboard).
+   Dipakai untuk kartu yang isinya grafik/tabel ringkas — bukan untuk kartu
+   statistik kecil yang tetap memakai .g2–.g5. */
+.grid-fit{grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr))}
+.stat{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow-sm);display:flex;flex-direction:column;gap:6px}
+.stat .lbl{font-size:.76rem;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-2);font-weight:650}
+.stat .val{font-size:1.5rem;font-weight:750;letter-spacing:-.02em}
+.stat .sub{font-size:.76rem;color:var(--ink-2)}
+.stat.accent{background:var(--stat-grad);border:0;color:#fff}
+.stat.accent .lbl,.stat.accent .sub{color:rgba(255,255,255,.85)}
+.stat.leaf{background:var(--stat-leaf-grad);border:0;color:#fff}
+.stat.leaf .lbl,.stat.leaf .sub{color:rgba(255,255,255,.88)}
+.page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:22px;flex-wrap:wrap}
+.page-actions{display:flex;gap:10px;flex-wrap:wrap}
+.section-title{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-2);font-weight:700;margin:26px 0 12px}
+
+/* ---------- Buttons ---------- */
+.btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;color:var(--ink);
+  padding:9px 15px;border-radius:11px;font-size:.86rem;font-weight:600;cursor:pointer;text-decoration:none;transition:.15s;font-family:inherit}
+.btn:hover{text-decoration:none;border-color:var(--pink-soft);color:var(--magenta)}
+.btn-primary{background:var(--btn-grad);border-color:transparent;color:#fff;box-shadow:0 6px 16px rgba(194,24,91,.25)}
+.btn-primary:hover{color:#fff;filter:brightness(1.05)}
+.btn-leaf{background:var(--btn-leaf-grad);border-color:transparent;color:#fff}
+.btn-leaf:hover{color:#fff}
+.btn-danger{background:var(--danger-bg);border-color:#F5C9C6;color:var(--danger)}
+.btn-danger:hover{background:#FBD9D7;color:var(--danger)}
+.btn-ghost{background:transparent;border-color:transparent;color:inherit}
+.sidebar .btn-ghost{border-color:rgba(255,255,255,.28);color:#fff;justify-content:center}
+.sidebar .btn-ghost:hover{background:rgba(255,255,255,.15);color:#fff}
+.btn-sm{padding:6px 11px;font-size:.79rem;border-radius:9px}
+.btn-block{width:100%;justify-content:center}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+
+/* ---------- Forms ---------- */
+.form-grid{display:grid;gap:16px}
+.form-grid.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.form-grid.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.form-grid.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.field > label{font-size:.79rem;font-weight:650;color:var(--ink-2)}
+.field .hint{font-size:.72rem;color:var(--ink-2)}
+.input,select.input,textarea.input{
+  width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:clamp(8px,1.4vw,11px);
+  font-size:.875rem;font-family:inherit;color:var(--ink);background:#fff;outline:none;transition:.15s}
+.input:focus{border-color:var(--pink);box-shadow:0 0 0 3px rgba(233,30,99,.13)}
+.input-sm{padding:7px 10px;font-size:.8rem}
+textarea.input{min-height:96px;resize:vertical}
+.check{display:inline-flex;align-items:center;gap:8px;font-size:.85rem}
+.inline-form{display:inline-flex;gap:8px;align-items:center;margin:0}
+.filter-bar{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;padding:16px 20px;border-bottom:1px solid var(--line);background:var(--brand-tint)}
+.filter-bar .field{min-width:150px}
+.req{color:var(--pink)}
+fieldset{border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:0}
+legend{padding:0 6px;font-size:.78rem;font-weight:700;color:var(--ink-2);text-transform:uppercase;letter-spacing:.08em}
+
+/* ---------- Tables ---------- */
+.table-wrap{width:100%;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
+/* ==================================================================
+ * GESER TABEL DENGAN TAHAN-KLIK (ronde 40)
+ * Tabel yang lebih lebar dari wadahnya dapat digeser kiri/kanan dengan menahan
+ * klik pada isi tabel (tanpa harus mencari batang geser di dasar wadah).
+ * Kursor berubah menjadi "genggam" sebagai petunjuk bahwa tabel bisa diseret.
+ * ================================================================== */
+.table-wrap.is-scrollable{cursor:grab}
+.table-wrap.is-dragging{cursor:grabbing;user-select:none;-webkit-user-select:none}
+.table-wrap.is-dragging *{cursor:grabbing!important;user-select:none!important;-webkit-user-select:none!important}
+/* Saat menyeret tabel: jangan biarkan teks halaman ikut terseleksi. */
+body.table-dragging{user-select:none;-webkit-user-select:none}
+/* Kolom isian/tombol di dalam tabel tetap memakai kursor normal agar jelas
+   bisa diklik (bukan diseret). */
+.table-wrap.is-scrollable input,.table-wrap.is-scrollable select,
+.table-wrap.is-scrollable textarea,.table-wrap.is-scrollable button,
+.table-wrap.is-scrollable a{cursor:auto}
+.table-wrap.is-scrollable button,.table-wrap.is-scrollable a{cursor:pointer}
+/* ---------- Tabel panjang dengan BATAS TINGGI (dapat digulir atas/bawah) ----------
+   Dipakai pada kartu "Perhitungan <mode>" (menu Keuangan): tingginya dibatasi
+   setelan `finance_calc_max_px` supaya kartu tidak memanjang ke bawah saat pos
+   biaya atau cabang bertambah — isinya tetap dapat digulir seperti tabel biasa.
+   Lebar tetap punya guliran sendiri (sumbu X) seperti tabel lain. */
+.table-wrap.scroll-y{overflow-y:auto;overscroll-behavior-y:contain;scrollbar-width:thin}
+/* Keterangan gulir memakai blok biasa (BUKAN flex): di dalam flex, potongan teks
+   antar elemen menjadi item yang tidak boleh membungkus sehingga keterangan ini
+   bisa melebarkan halaman di layar sempit (≤320px). */
+.table-scroll-note{line-height:1.55}
+.table-scroll-note svg{vertical-align:-3px;margin-right:2px}
+.table-toolbar{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;
+  padding:0 0 12px;margin:0 0 4px;border-bottom:1px solid var(--line)}
+/* Isi toolbar (label + pemilih setelan + tombol) tidak boleh melebarkan halaman:
+   pemilih setelan tingginya dibatasi lebar kartu dan boleh menyusut di HP. */
+.table-toolbar form,.table-toolbar .table-scroll-note{min-width:0;max-width:100%;overflow-wrap:anywhere}
+.table-toolbar select{max-width:100%}
+/* <select> memakai lebar teks pilihan TERPANJANG, sehingga di layar HP pemilih
+   dengan label panjang bisa melebarkan kartu (halaman jadi bisa digeser ke
+   samping). Semua pemilih karena itu dibatasi lebar kartu & boleh menyusut. */
+select.input{max-width:100%;min-width:0}
+table.tbl{width:100%;min-width:max-content;border-collapse:separate;border-spacing:0;font-size:.855rem}
+table.tbl th{
+  text-align:left;padding:11px 14px;background:var(--brand-tint2);color:var(--ink-2);font-weight:700;
+  font-size:.75rem;text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--line);white-space:nowrap}
+table.tbl td{padding:11px 14px;border-bottom:1px solid var(--brand-bg3);vertical-align:middle}
+table.tbl tbody tr:hover td{background:var(--brand-hover)}
+table.tbl tbody tr:last-child td{border-bottom:0}
+table.tbl td.num,table.tbl th.num{text-align:right;font-variant-numeric:tabular-nums}
+.row-actions{display:flex;gap:6px;flex-wrap:wrap}
+/* Sorotan sementara (mis. bagian pemetaan setelah file import dibaca). */
+.flash-target{box-shadow:0 0 0 3px rgba(233,30,99,.28)!important;transition:box-shadow .2s}
+
+/* ---------- Kolom JUMLAH pada Order Baru ----------
+   Satuan ditulis mengikuti satuan barang di inventory (mis. "liter"), sehingga
+   petugas tidak menebak apakah angkanya pcs/kg/liter. Isian berupa teks dengan
+   inputmode=decimal agar koma desimal ("0,5 liter") bisa diketik di HP/desktop. */
+.qty-cell{display:flex;align-items:center;gap:6px;min-width:0}
+.qty-cell .o-qty{min-width:0;flex:1 1 auto;text-align:right;min-height:38px;font-size:.9rem}
+.qty-unit{flex:0 0 auto;font-size:.78rem;font-weight:650;color:var(--ink-2);white-space:nowrap}
+.qty-hint{display:block;margin-top:3px;font-size:.72rem}
+table.tbl tbody tr.o-over{background:var(--danger-bg)}
+table.tbl tbody tr.o-over .qty-hint,table.tbl tbody tr.o-over .o-stock-warn{color:var(--danger);font-weight:650}
+@media (max-width:640px){
+  /* Kolom jumlah ditekan pakai jari & font 16px agar HP tidak auto-zoom. */
+  .qty-cell .o-qty{min-height:42px;font-size:16px}
+  .qty-unit{font-size:.8rem}
+  .qty-cell{gap:8px}
+}
+.empty{padding:46px 20px;text-align:center;color:var(--ink-2)}
+.empty-ico{width:52px;height:52px;margin:0 auto 10px;border-radius:50%;background:var(--rose-bg);display:grid;place-items:center;color:var(--magenta)}
+.empty-ico .ico{width:24px;height:24px}
+
+/* ---------- Badges & alerts ---------- */
+.badge{display:inline-block;padding:3px 9px;border-radius:999px;font-size:.72rem;font-weight:700;background:var(--brand-chip);color:#6B5A65;white-space:nowrap}
+.badge-green,.badge-ok{background:var(--ok-bg);color:var(--ok)}
+.badge-red,.badge-danger{background:var(--danger-bg);color:var(--danger)}
+.badge-yellow,.badge-warn{background:var(--warn-bg);color:var(--warn)}
+.badge-blue,.badge-info{background:var(--info-bg);color:var(--info)}
+.badge-pink{background:var(--pink-soft);color:var(--magenta-dark)}
+.badge-gray{background:var(--brand-chip);color:#6B5A65}
+.alert{padding:12px 16px;border-radius:12px;margin-bottom:16px;font-size:.87rem;border:1px solid transparent}
+.alert-success{background:var(--ok-bg);color:var(--ok);border-color:#BEE7D7}
+.alert-error{background:var(--danger-bg);color:var(--danger);border-color:#F5C9C6}
+.alert-warning{background:var(--warn-bg);color:var(--warn);border-color:#F5E0AE}
+.alert-info{background:var(--info-bg);color:var(--info);border-color:#C4DCF5}
+.notice{background:var(--brand-tint2);border:1px dashed var(--pink-soft);color:var(--ink-2);padding:12px 14px;border-radius:12px;font-size:.83rem}
+
+/* ---------- Pagination ---------- */
+.pagination{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 18px;flex-wrap:wrap;border-top:1px solid var(--line)}
+.pg-info{font-size:.79rem;color:var(--ink-2)}
+.pg-links{display:flex;gap:6px}
+.pg{display:grid;place-items:center;min-width:34px;height:34px;padding:0 9px;border-radius:9px;border:1px solid var(--line);background:#fff;font-size:.82rem;font-weight:600;color:var(--ink-2)}
+.pg:hover{border-color:var(--pink);color:var(--magenta);text-decoration:none}
+.pg.active{background:var(--btn-grad);border-color:transparent;color:#fff}
+.pg.disabled{opacity:.45}
+
+/* ---------- Modal ---------- */
+.modal{position:fixed;inset:0;z-index:80;display:none;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto;background:rgba(43,27,39,.5)}
+.modal.open{display:flex}
+.modal-box{background:#fff;border-radius:var(--radius);width:100%;max-width:620px;box-shadow:0 24px 60px rgba(80,10,45,.28);animation:pop .18s ease}
+.modal-box.wide{max-width:880px}
+.modal-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line)}
+.modal-body{padding:20px}
+.modal-foot{display:flex;justify-content:flex-end;gap:10px;padding:16px 20px;border-top:1px solid var(--line);background:var(--brand-tint);border-radius:0 0 var(--radius) var(--radius)}
+.modal-box.sheet{margin:auto 0;max-width:520px}
+@keyframes pop{from{transform:translateY(8px) scale(.985);opacity:0}to{transform:none;opacity:1}}
+
+/* ---------- Auth ---------- */
+.auth-body{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}
+.auth-wrap{width:100%;max-width:1000px}
+.auth-card{display:grid;grid-template-columns:1.05fr .95fr;background:#fff;border-radius:22px;overflow:hidden;box-shadow:0 26px 70px rgba(120,20,70,.18);border:1px solid var(--line)}
+.auth-visual{background:var(--auth-grad);color:#fff;padding:38px 34px;display:flex;flex-direction:column;justify-content:space-between}
+.auth-visual h2{color:#fff;font-size:1.5rem;margin-bottom:8px}
+.auth-visual p{color:rgba(255,255,255,.88);font-size:.88rem}
+.auth-visual ul{margin:18px 0 0;padding-left:18px;font-size:.84rem;color:rgba(255,255,255,.92)}
+.auth-visual li{margin-bottom:6px}
+.auth-form{padding:38px 34px}
+.auth-form h2{margin-bottom:4px}
+.auth-hint{margin-top:18px;font-size:.78rem;color:var(--ink-2);background:var(--brand-tint2);border:1px dashed var(--pink-soft);padding:10px 12px;border-radius:10px}
+.auth-hint code{background:#fff;padding:1px 5px;border-radius:5px;color:var(--magenta-dark);font-size:.75rem}
+.deny-card{text-align:center;max-width:520px;margin:40px auto}
+.deny-ico{width:62px;height:62px;margin:0 auto 14px;border-radius:50%;background:var(--danger-bg);color:var(--danger);display:grid;place-items:center}
+.deny-ico .ico{width:28px;height:28px}
+
+/* ==================================================================
+   MODE PEMELIHARAAN (maintenance)
+   1) .maint-banner  : pemberitahuan di atas isi halaman (dalam aplikasi)
+   2) .maint-*       : halaman pemeliharaan penuh (dilihat pengguna lain)
+   3) .maint-toast   : pesan singkat saat aksi yang diblokir diklik
+   ================================================================== */
+.maint-banner{
+  display:flex;align-items:center;gap:12px;margin:0 0 18px;padding:13px 16px;border-radius:14px;
+  border:1px solid #E8C880;background:var(--warn-bg);color:var(--warn);font-size:.86rem;line-height:1.45
+}
+.maint-banner .mb-ico{display:inline-flex;flex:0 0 auto}
+.maint-banner .mb-sub{font-size:.79rem;opacity:.92;margin-top:2px}
+.maint-banner .btn{margin-left:auto;flex:0 0 auto}
+.maint-banner-super{border-color:var(--line);background:var(--brand-tint2);color:var(--ink)}
+.maint-banner-super .mb-sub{color:var(--ink-2)}
+
+.maint-body{padding:28px 20px;align-items:flex-start}
+.maint-wrap{width:100%;max-width:920px;margin:0 auto}
+.maint-card{
+  background:#fff;border:1px solid var(--line);border-radius:22px;padding:30px 32px 26px;
+  box-shadow:0 26px 70px rgba(120,20,70,.16);max-width:100%
+}
+.maint-top{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:22px}
+.maint-pill{
+  display:inline-flex;align-items:center;gap:8px;padding:7px 13px;border-radius:999px;
+  background:var(--warn-bg);color:var(--warn);border:1px solid #E8C880;font-size:.76rem;font-weight:700;
+  letter-spacing:.04em;text-transform:uppercase
+}
+.maint-pill .ico{width:15px;height:15px}
+.maint-ico{
+  width:66px;height:66px;border-radius:50%;display:grid;place-items:center;margin-bottom:14px;
+  background:var(--auth-grad);color:#fff;box-shadow:0 12px 28px rgba(120,20,70,.24)
+}
+.maint-ico .ico{width:30px;height:30px}
+.maint-title{font-size:1.5rem;margin-bottom:8px}
+.maint-msg{color:var(--ink-2);font-size:.92rem;line-height:1.6;margin-bottom:18px;max-width:70ch}
+.maint-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:20px}
+.maint-box{border:1px solid var(--line);border-radius:14px;padding:13px 15px;background:var(--brand-tint)}
+.maint-box-h{font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;font-weight:700;color:var(--ink-2)}
+.maint-box-v{font-weight:700;color:var(--ink);font-size:.9rem;margin-top:3px}
+.maint-box-s{font-size:.76rem;color:var(--ink-2);margin-top:2px}
+.maint-lists{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px}
+.maint-list{border:1px solid var(--line);border-radius:16px;padding:15px 17px}
+.maint-list-h{font-weight:700;font-size:.85rem;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.maint-list ul{margin:0;padding-left:18px;font-size:.83rem;line-height:1.6;color:var(--ink-2)}
+.maint-list li{margin-bottom:4px}
+.maint-off{background:var(--danger-bg);border-color:#F3C7C4}
+.maint-off .maint-list-h{color:var(--danger)}
+.maint-on{background:var(--ok-bg);border-color:#BFE6D6}
+.maint-on .maint-list-h{color:var(--ok)}
+.maint-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+.maint-foot{margin:16px 0 0;font-size:.76rem;color:var(--ink-2)}
+.maint-toast{
+  position:fixed;left:50%;bottom:26px;transform:translate(-50%,14px);z-index:300;max-width:92vw;
+  background:#2B1B27;color:#fff;padding:12px 18px;border-radius:12px;font-size:.85rem;
+  box-shadow:0 14px 34px rgba(0,0,0,.28);opacity:0;pointer-events:none;transition:.22s ease
+}
+.maint-toast.on{opacity:1;transform:translate(-50%,0)}
+.nav-link-locked{opacity:.55}
+.nav-link-locked::after{content:'🔒';margin-left:auto;font-size:.72rem}
+@media (max-width:760px){
+  .maint-card{padding:22px 18px 20px;border-radius:18px}
+  .maint-lists{grid-template-columns:1fr}
+  .maint-title{font-size:1.22rem}
+  .maint-banner{flex-wrap:wrap}
+  .maint-banner .btn{margin-left:0;width:100%;justify-content:center}
+  .maint-actions .btn{flex:1 1 46%;justify-content:center}
+}
+
+/* ---------- Misc widgets ---------- */
+.hint-inline{font-weight:500;color:var(--ink-2);font-size:.72rem;text-transform:none;letter-spacing:0}
+.icd-ok{color:var(--ok);font-weight:600}
+.icd-warn{color:var(--danger);font-weight:600}
+.suggest .item code{background:var(--pink-soft);color:var(--magenta-dark);padding:1px 5px;border-radius:5px;font-size:.82rem;font-weight:700}
+.tabs{display:flex;gap:6px;border-bottom:1px solid var(--line);margin-bottom:18px;overflow-x:auto}
+.tab{padding:9px 14px;font-size:.85rem;font-weight:600;color:var(--ink-2);border-bottom:2px solid transparent;white-space:nowrap}
+.tab.active{color:var(--magenta);border-color:var(--magenta)}
+.tab:hover{text-decoration:none;color:var(--magenta)}
+.chart-box{position:relative;height:300px}
+.chart-box.sm{height:240px}
+.chart-box.lg{height:340px}
+/* Keterangan kecil di atas tiap kotak grafik (mis. "Treatment vs Skincare"
+   dan "Total Pendapatan" yang ditampilkan berdampingan). */
+.chart-cap{font-size:.8rem;font-weight:700;color:var(--ink-2);margin:0 0 6px;text-transform:none;letter-spacing:0}
+@media (max-width:700px){ .chart-box{height:250px} .chart-box.sm{height:210px} .chart-box.lg{height:270px} }
+.progress{height:8px;border-radius:99px;background:var(--brand-chip);overflow:hidden}
+.progress > i{display:block;height:100%;background:var(--progress-grad)}
+.kv{display:grid;grid-template-columns:150px 1fr;gap:8px 14px;font-size:.87rem;min-width:0}
+.kv dd{word-break:break-word}
+.kv dt{color:var(--ink-2);font-weight:600}
+.kv dd{margin:0}
+.list-clean{list-style:none;margin:0;padding:0}
+.list-clean li{display:flex;justify-content:space-between;gap:12px;padding:11px 0;border-bottom:1px solid var(--brand-bg3);font-size:.86rem}
+.list-clean li:last-child{border-bottom:0}
+.timeline{list-style:none;margin:0;padding:0}
+.timeline li{position:relative;padding:0 0 18px 22px;border-left:2px solid var(--pink-soft)}
+.timeline li:last-child{border-color:transparent;padding-bottom:0}
+.timeline li::before{content:'';position:absolute;left:-7px;top:3px;width:12px;height:12px;border-radius:50%;background:var(--pink);border:2px solid #fff}
+.pill{display:inline-flex;gap:6px;align-items:center;padding:7px 12px;border-radius:999px;background:#fff;border:1px solid var(--line);font-size:.8rem;font-weight:600}
+.pill.active{background:var(--pink-soft);border-color:var(--pink-soft);color:var(--magenta-dark)}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px}
+.cal .dow{font-size:.72rem;font-weight:700;text-transform:uppercase;color:var(--ink-2);text-align:center;padding:4px 0}
+.cal .day{min-height:88px;border:1px solid var(--line);border-radius:12px;padding:7px 8px;background:#fff;font-size:.78rem}
+.cal .day.other{opacity:.45;background:#FCFAFB}
+.cal .day.today{border-color:var(--pink);box-shadow:0 0 0 2px rgba(233,30,99,.12)}
+.cal .day .dnum{font-weight:700;color:var(--ink-2);display:block;margin-bottom:4px}
+.cal .ev{display:block;background:var(--pink-soft);color:var(--magenta-dark);border-radius:6px;padding:2px 5px;margin-bottom:3px;font-size:.7rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cal .ev.done{background:var(--ok-bg);color:var(--ok)}
+.cal .ev.cancel{background:#EFE9ED;color:#8B7B85}
+.alert-list li{display:flex;justify-content:space-between;gap:10px;font-size:.85rem;padding:9px 0;border-bottom:1px solid var(--brand-bg3)}
+.alert-list li:last-child{border-bottom:0}
+.strength{font-size:.72rem;font-weight:700}
+.strength.weak{color:var(--danger)}.strength.medium{color:var(--warn)}.strength.strong{color:var(--ok)}
+.receipt{max-width:430px;margin:0 auto;background:#fff;padding:24px;border-radius:14px;border:1px solid var(--line);font-size:.83rem}
+.receipt .rhead{text-align:center;border-bottom:1px dashed var(--line);padding-bottom:12px;margin-bottom:12px}
+.receipt table{width:100%;font-size:.8rem;border-collapse:collapse}
+.receipt table td{padding:3px 0;vertical-align:top}
+.receipt .tot{border-top:1px dashed var(--line);margin-top:10px;padding-top:8px}
+.photo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:14px}
+.photo-grid figure{margin:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff}
+.photo-grid img{width:100%;height:130px;object-fit:cover;display:block}
+.photo-grid figcaption{padding:7px 9px;font-size:.74rem;color:var(--ink-2);display:flex;justify-content:space-between;gap:6px}
+.rank{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-weight:700;font-size:.78rem;background:var(--brand-chip);color:#6B5A65}
+.rank.r1{background:linear-gradient(135deg,#F7C948,#E8A200);color:#4A3400}
+.rank.r2{background:#E3E6EB;color:#4A5259}
+.rank.r3{background:#F2D5BC;color:#7A4A1B}
+.overlay-load{position:fixed;inset:0;background:rgba(255,255,255,.6);display:none;place-items:center;z-index:200}
+.overlay-load.on{display:grid}
+.spinner{width:38px;height:38px;border-radius:50%;border:3px solid var(--pink-soft);border-top-color:var(--magenta);animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.searchbox{position:relative}
+.searchbox .ico{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--ink-2)}
+.searchbox input{padding-left:34px}
+.suggest{position:absolute;z-index:30;left:0;right:0;top:calc(100% + 4px);background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);max-height:280px;overflow-y:auto;display:none}
+.suggest.open{display:block}
+.suggest .item{padding:10px 12px;cursor:pointer;font-size:.85rem;border-bottom:1px solid var(--brand-bg3)}
+.suggest .item:hover,.suggest .item.hl{background:var(--brand-hover2)}
+.suggest .item small{display:block;color:var(--ink-2);font-size:.74rem}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.toggle{display:inline-flex;align-items:center;gap:9px;font-size:.85rem;font-weight:600;color:var(--ink-2)}
+
+/* ---------- Responsive ---------- */
+@media (max-width:1100px){
+  .g4,.g5{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .form-grid.g4{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+/* Menu samping dibuat dapat dibuka-tutup sejak 1024px (lihat blok ≤1024px di
+   bagian bawah) karena pada lebar itu menu tetap memakan 262px sehingga isi
+   halaman menyempit dan tabel harus digeser terlalu jauh. */
+@media (max-width:900px){
+  .g2,.g3,.g4,.g5{grid-template-columns:1fr}
+  .form-grid.g2,.form-grid.g3,.form-grid.g4{grid-template-columns:1fr}
+  .auth-card{grid-template-columns:1fr}
+  .auth-visual{padding:26px 22px}
+  .auth-form{padding:26px 22px}
+  .kv{grid-template-columns:1fr}
+}
+@media print{
+  .sidebar,.topbar,.foot,.page-actions,.filter-bar,.no-print{display:none!important}
+  .main{margin-left:0}
+  .content{padding:0}
+  body{background:#fff}
+  .card{border:0;box-shadow:none;padding:0}
+}
+
+/* ==================================================================
+   KARTU MEMBER
+   1) .member-box   : kotak pemilihan "Ada kartu member?" di Order Baru
+   2) .mcard        : pratinjau kartu digital (dapat dicetak)
+   ================================================================== */
+.member-box{border:1px solid var(--line);border-radius:14px;padding:13px 15px;background:var(--brand-tint);margin-top:14px}
+.member-box-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.member-box-head .mb-title{font-weight:750;display:inline-flex;align-items:center;gap:8px;color:var(--ink)}
+.member-box-head .mb-title .ico{width:17px;height:17px;color:var(--magenta)}
+.member-picker{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.member-picker .status-opt{padding:10px 12px}
+@media (max-width:640px){ .member-picker{grid-template-columns:1fr} }
+
+/* Kotak Kartu Member pada Order Baru saat BELUM ada pasien terpilih:
+   ditandai jelas bahwa kotak belum dapat dipakai (radio dinonaktifkan). */
+.member-box.locked{opacity:.6;border-style:dashed}
+.member-box.locked .status-opt{cursor:not-allowed}
+.member-box.locked .status-opt:hover{border-color:var(--line)}
+
+/* Pilihan kartu member yang TIDAK sesuai keadaan pasien (mis. "Tidak ada kartu"
+   saat pasien jelas pemegang kartu) — dinonaktifkan dan tidak dapat diklik. */
+.member-box .status-opt.disabled{opacity:.45;pointer-events:none;filter:grayscale(.3)}
+.member-box .status-opt.disabled::after{content:'';}
+
+/* Kartu digital: rasio kartu ATM 85,6 × 54 mm (1.586 : 1), DUA SISI.
+   Semua teks memakai overflow-wrap + clamp ukuran huruf supaya tidak pernah
+   keluar dari area kartu (permintaan pemilik klinik). */
+.mcard-set{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));align-items:start}
+.mcard{position:relative;aspect-ratio:1.586/1;max-width:520px;border-radius:16px;overflow:hidden;
+  background:#fff;border:1px solid var(--line);box-shadow:var(--shadow)}
+.mcard.has-bg{background-image:var(--mcard-bg);background-size:100% 100%;background-position:center}
+/* Sisi depan: pita warna di kiri (berisi tulisan MEMBER vertikal) + isi kartu.
+   Tanpa background unggahan, pita warna ini yang dipakai; kalau ada background
+   unggahan, pita dilewati dan isi kartu memakai lebar penuh. */
+.mcard-front{position:absolute;inset:0;display:grid;grid-template-columns:25% minmax(0,1fr)}
+.mcard.has-bg .mcard-front{grid-template-columns:minmax(0,1fr)}
+.mcard-side{background:linear-gradient(180deg,var(--mcard-dark,#8E0E42),var(--mcard-brand,#C2185B));
+  display:flex;align-items:center;justify-content:center;padding:7% 0}
+/* Tulisan MEMBER vertikal: setiap huruf satu baris, disebar RATA dari tepi atas
+   sampai tepi bawah pita dan masing-masing di tengah lebar pita (jarak kiri-kanan
+   sama). Dulu tulisan ini ditulis memakai writing-mode DAN logo diposisikan
+   absolute di titik yang sama sehingga keduanya saling menumpuk. */
+.mcard-tag{display:flex;flex-direction:column;justify-content:space-between;align-items:center;
+  width:100%;height:100%;font-size:clamp(.78rem,4.4cqw,1.2rem);font-weight:800;line-height:1;
+  letter-spacing:0;color:rgba(255,255,255,.96);text-transform:uppercase;text-align:center}
+.mcard-tag i{font-style:normal;display:block}
+/* Isi kartu disusun TIGA kelompok dan jaraknya dibagi rata (space-between):
+   (1) logo, (2) nama + "Member Card - level", (3) rincian nomor/cabang.
+   Dengan begitu ruang kosong tidak menumpuk di satu tempat sehingga kartu
+   terlihat proporsional (dulu logo diposisikan absolute sehingga bertumpuk
+   dengan tulisan MEMBER di pita kiri). */
+.mcard-front-body{position:relative;z-index:1;padding:6% 5.5% 6% 5%;display:flex;flex-direction:column;
+  justify-content:space-between;gap:1.5%;min-width:0}
+.mcard.has-bg .mcard-front-body{padding-left:6%}
+/* Logo di bagian ATAS kartu (di atas garis), bukan lagi menumpuk di pita kiri. */
+.mcard-logo{display:flex;align-items:center;min-height:0;flex:0 0 auto}
+.mcard-logo img{max-width:62%;max-height:clamp(20px,7cqw,32px);width:auto;object-fit:contain;display:block}
+.mcard.has-bg .mcard-logo.on-bg{background:rgba(255,255,255,.88);border-radius:8px;padding:3px 6px;align-self:flex-start}
+/* Nama klinik di bagian atas kartu (dipakai bila logo belum diunggah). */
+.mcard-co{font-size:clamp(.6rem,1.7cqw + .42rem,.82rem);font-weight:800;color:#000;
+  overflow-wrap:anywhere;line-height:1.2}
+.mcard-head{display:flex;flex-direction:column;gap:clamp(6px,3cqw,14px)}
+.mcard-line{height:2px;background:var(--mcard-brand,#C2185B);border-radius:2px;flex:0 0 auto}
+.mcard-id{display:flex;flex-direction:column;gap:2%}
+.mcard-name{font-size:clamp(.85rem,3.1cqw + .6rem,1.18rem);font-weight:800;line-height:1.15;color:#000;
+  overflow-wrap:anywhere;word-break:break-word;max-height:2.4em;overflow:hidden}
+.mcard-level{font-size:clamp(.6rem,1.5cqw + .45rem,.78rem);font-weight:750;letter-spacing:.03em;color:#000}
+.mcard-rows{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9% 12px}
+.mcard-rows > div{min-width:0}
+.mcard-rows span{display:block;font-size:clamp(.5rem,1cqw + .38rem,.62rem);letter-spacing:.05em;
+  text-transform:uppercase;color:#444}
+.mcard-rows strong{display:block;font-size:clamp(.62rem,1.2cqw + .5rem,.84rem);color:#000;overflow-wrap:anywhere}
+.mcard-back{position:absolute;inset:0;padding:5% 6%;display:flex;flex-direction:column;gap:2%;min-width:0}
+.mcard-back-title{font-size:clamp(.66rem,1.6cqw + .5rem,.9rem);font-weight:800;letter-spacing:.04em;color:#000}
+.mcard-benefits{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1%}
+.mcard-benefits li{font-size:clamp(.56rem,1.3cqw + .42rem,.76rem);color:#000;line-height:1.3}
+.mcard-benefits li.on{font-weight:800}
+.mcard-benefits li.on::before{content:'★ '}
+.mcard-note{font-size:clamp(.5rem,1.1cqw + .38rem,.68rem);line-height:1.35;color:#333;margin:0;
+  overflow-wrap:anywhere}
+.mcard{container-type:inline-size}
+@media print{ .mcard{box-shadow:none;border-color:#bbb} }
+@media print{
+  .mcard{box-shadow:none;border-color:#999}
+}
+
+/* Kolom pemilih warna (<input type=color>) dibuat setinggi kontrol lain
+   (minimal 40px) supaya nyaman disentuh di HP dan tidak mengecilkan tata letak. */
+.chart-color{min-height:40px;padding:4px 6px;cursor:pointer}
+
+/* ---------- Pemilih tema warna (Pengaturan) ---------- */
+/* Pemilih tema: kartu sendiri, banyak kolom, dan areanya dapat digulir.
+   Dengan 18 tema, daftar satu-kolom membuat halaman Pengaturan sangat panjang
+   ke bawah — karena itu dipakai grid rapat + tinggi maksimum. */
+/* Pemilih tema: kartu sendiri, ditata PER KELUARGA WARNA (label di kiri, 4 pilihan
+   berjajar ke kanan), dengan tinggi maksimum + dapat digulir supaya halaman
+   Pengaturan tidak memanjang ke bawah walau pilihannya banyak (32 tema). */
+/* ---------- PEMILIH KELUARGA WARNA (di ATAS daftar tema) ----------
+   Menyaring baris keluarga yang tampil supaya pemilik tidak perlu menggulir jauh
+   mencari warna tertentu. Tombolnya `type="button"` sehingga tidak mengirim form. */
+.theme-fam-picker{display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 6px}
+.fam-btn{display:inline-flex;align-items:center;gap:6px;padding:7px 11px;border:1px solid var(--line);
+  border-radius:99px;background:#fff;color:var(--ink);font-size:.8rem;font-weight:650;cursor:pointer;
+  transition:.15s;min-height:34px}
+.fam-btn:hover{border-color:var(--brand-soft);background:var(--brand-hover)}
+.fam-btn.active{border-color:var(--magenta);background:var(--brand-tint2);box-shadow:0 0 0 2px var(--brand-soft)}
+.fam-btn.has-active{font-weight:800}
+.fam-btn .fam-dot{width:11px;height:11px;border-radius:50%;display:inline-block;border:1px solid rgba(0,0,0,.12)}
+.fam-btn .fam-n{font-size:.7rem;font-weight:600;color:var(--ink-2);background:var(--brand-chip);
+  border-radius:99px;padding:1px 6px}
+.theme-picker{max-height:min(52vh,430px);overflow:auto;padding:2px 6px 2px 2px;scrollbar-width:thin}
+.theme-family{display:grid;grid-template-columns:118px minmax(0,1fr);gap:12px;align-items:start;
+  padding:10px 0;border-top:1px dashed var(--brand-bg3)}
+.theme-family:first-child{border-top:0;padding-top:2px}
+.theme-family-head{display:flex;flex-direction:column;gap:2px;padding-top:4px}
+.theme-family-head .tf-label{font-weight:750;font-size:.86rem;color:var(--ink)}
+.theme-family-head .tf-desc{font-size:.68rem;color:var(--ink-2);line-height:1.3}
+.theme-family-head .tf-count{font-size:.66rem;color:var(--ink-2);opacity:.85}
+/* 4 kartu berjajar ke kanan pada tiap keluarga */
+.theme-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+@media (max-width:1024px){
+  .theme-family{grid-template-columns:104px minmax(0,1fr);gap:10px}
+  .theme-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:560px){
+  .theme-family{grid-template-columns:1fr;gap:6px}
+  .theme-family-head{flex-direction:row;align-items:baseline;gap:8px}
+  .theme-family-head .tf-desc{display:none}
+  .theme-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+.theme-card{display:flex;flex-direction:column;gap:5px;padding:10px;border:2px solid var(--line);border-radius:12px;
+  background:#fff;cursor:pointer;transition:.15s;position:relative}
+.theme-card:hover{border-color:var(--brand-soft);box-shadow:var(--shadow-sm)}
+.theme-card.active{border-color:var(--magenta);box-shadow:0 0 0 3px var(--brand-soft)}
+.theme-card input{position:absolute;opacity:0;pointer-events:none}
+.theme-swatch{height:30px;border-radius:8px;display:block;position:relative;overflow:hidden}
+.theme-swatch i{position:absolute;right:5px;bottom:5px;width:15px;height:15px;border-radius:50%;border:2px solid rgba(255,255,255,.85)}
+.theme-name{font-size:.8rem;font-weight:700;line-height:1.2}
+.theme-desc{font-size:.7rem;color:var(--ink-2);line-height:1.25;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.theme-check{position:absolute;top:6px;right:8px;font-size:.64rem;font-weight:700;color:var(--magenta);
+  background:#fff;padding:1px 6px;border-radius:20px;border:1px solid var(--line)}
+@media (max-width:900px){ .theme-picker{max-height:none;overflow:visible} }
+@media (max-width:640px){
+  /* Tombol keluarga: ikut aturan ramah sentuh (≥40px) & boleh menyusut */
+  .fam-btn{min-height:40px;padding:9px 12px}
+  .theme-fam-picker{gap:6px}
+}
+@media (max-width:640px){
+  .theme-swatch{height:26px}
+  .theme-desc{display:none}       /* keterangan disembunyikan agar kartu tetap ringkas di HP */
+  .theme-name{font-size:.76rem}
+}
+
+/* ---------- Pemilih status penanganan (rekam medis) ---------- */
+.status-picker{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.status-opt{position:relative;display:flex;flex-direction:column;gap:3px;padding:12px 14px;border:2px solid var(--line);
+  border-radius:12px;background:#fff;cursor:pointer;transition:.15s}
+.status-opt:hover{border-color:var(--brand-soft)}
+.status-opt.active{border-color:var(--magenta);background:var(--brand-tint2);box-shadow:0 0 0 3px var(--brand-soft)}
+.status-opt input{position:absolute;opacity:0;pointer-events:none}
+.status-opt .st-name{font-weight:700;font-size:.88rem;color:var(--ink)}
+.status-opt .st-desc{font-size:.74rem;color:var(--ink-2);line-height:1.35}
+.status-opt.active .st-name{color:var(--magenta)}
+@media (max-width:700px){ .status-picker{grid-template-columns:1fr} }
+
+/* ---------- Foto orang (avatar) & keterangan foto ---------- */
+.avatar-img{display:inline-block;vertical-align:middle;background:#F2EAF0}
+.avatar{display:inline-grid;place-items:center;vertical-align:middle;background:var(--brand-chip);color:var(--magenta);
+  font-weight:700}
+.person-cell{display:flex;align-items:center;gap:10px;min-width:0}
+.person-cell .pc-name{min-width:0}
+.person-cell strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.photo-grid figcaption{display:block;align-items:flex-start}
+/* Keterangan foto: tampil UTUH di bawah foto (tanpa dipotong ellipsis) supaya
+   terbaca juga di HP — teks panjang membungkus ke baris berikutnya. */
+.photo-grid figcaption .cap{
+  display:block;font-weight:600;color:var(--ink);line-height:1.4;
+  /* UKURAN MINIMUM 12px: keterangan foto wajib terbaca (permintaan pemilik) —
+     karena itu TIDAK ikut mengecil melewati batas ini saat skala tampilan
+     diturunkan (mis. 80% seperti setelan bawaan di PC/laptop). */
+  font-size:max(12px, .82rem);
+  overflow-wrap:anywhere;word-break:break-word;white-space:normal
+}
+.photo-grid figcaption .cap.none{font-weight:500;font-style:italic;color:var(--ink-2)}
+.photo-grid figcaption .cap-meta{
+  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 10px;margin-top:5px
+}
+/* Kartu foto: isi kartu rata atas, tombol Hapus selalu di dasar kartu. */
+.photo-grid figure{display:flex;flex-direction:column}
+.photo-grid figcaption{flex:1 1 auto;display:flex;flex-direction:column;align-items:stretch}
+.photo-grid figcaption .cap-meta+.cap-meta{margin-top:2px}
+.photo-grid figcaption form{margin-top:auto;padding-top:8px}
+.photo-grid figcaption form .btn{width:100%;justify-content:center}
+.ph-doc{display:block;padding:26px;text-align:center;color:var(--ink-2)}
+
+/* ---------- Penanda "perubahan belum disimpan" ----------
+   Muncul hanya bila ada isian yang diubah dan belum ditekan Simpan. Di layar
+   kecil seluruh blok ini menempel di bawah layar supaya pengguna HP selalu
+   melihat status "belum disimpan" beserta tombol simpannya. */
+.unsaved-note{
+  display:none;align-items:flex-start;gap:10px;margin:0 0 12px;padding:12px 14px;
+  border:1px solid #E8C880;border-radius:12px;background:var(--warn-bg);color:var(--warn);
+  font-size:.83rem;line-height:1.45
+}
+.unsaved-note.on{display:flex}
+.unsaved-note .ico-wrap{flex:0 0 auto;display:inline-flex}
+.unsaved-note .ico-wrap .ico{width:18px;height:18px}
+.btn.dirty{box-shadow:0 0 0 3px rgba(154,103,0,.22)}
+/* Form yang SEDANG dikirim: tombol kirim tidak menerima klik lagi (ditandai
+   kelas, bukan atribut disabled, agar nilai tombol yang diklik tetap terkirim).
+   Ini yang mencegah data tersimpan dua kali saat jaringan lambat. */
+form.is-submitting button[type=submit],form.is-submitting input[type=submit]{
+  opacity:.6;pointer-events:none;cursor:progress}
+form.is-submitting{position:relative}
+@media (max-width:900px){
+  .form-actions{
+    position:sticky;bottom:0;z-index:15;background:#fff;border:1px solid var(--line);
+    border-radius:14px;padding:10px 12px 12px;margin-top:18px;
+    box-shadow:0 -4px 18px rgba(120,20,70,.08)
+  }
+  .form-actions .flex{margin-bottom:0}
+  .form-actions .unsaved-note{margin-bottom:10px}
+}
+.photo-thumb-upload{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.photo-thumb-upload .pv{border:1px solid var(--line);border-radius:12px;padding:8px;background:#fff}
+.photo-thumb-upload .pv img{display:block;width:84px;height:84px;object-fit:cover;border-radius:10px}
+
+/* ==================================================================
+   RESPONSIF HP & TABLET
+   Tujuan: data mudah dibaca di layar kecil — TABEL TETAP BERBENTUK TABEL
+   dan cukup digeser ke samping (bukan diubah menjadi kartu), kolom isian
+   nyaman disentuh, dan tombol berukuran cukup besar.
+   ================================================================== */
+
+/* ---------- TABLET (≤1100px): kolom isian lebih ringkas ---------- */
+@media (max-width:1100px){
+  .filter-bar{gap:10px;padding:14px 16px}
+  .filter-bar .field{min-width:140px}
+  .table-wrap table.tbl{font-size:.83rem}
+}
+
+/* ---------- TABLET & HP (≤900px) ---------- */
+@media (max-width:900px){
+  /* kartu data: 2 kolom untuk kartu angka agar tidak terlalu panjang */
+  .grid.g3:has(> .stat), .grid.g4:has(> .stat), .grid.g5:has(> .stat){
+    grid-template-columns:repeat(2,minmax(0,1fr));gap:14px
+  }
+  .grid:has(> .stat) .stat .val{font-size:1.3rem}
+  .content{padding:16px 14px 32px}
+  .card{padding:16px;margin-bottom:18px}
+  .card-head{padding:14px 16px;flex-wrap:wrap;gap:8px}
+  .card-body{padding:16px}
+  .page-head{margin-bottom:16px;gap:12px}
+  .page-head h2{font-size:1.15rem}
+  /* modal nyaman di layar kecil */
+  .modal{padding:14px 10px 24px}
+  .modal-box{max-width:100%;border-radius:14px}
+  .modal-body{padding:16px}
+  .modal-head,.modal-foot{padding:13px 16px}
+  .modal-foot{flex-wrap:wrap}
+  .modal-foot .btn{flex:1 1 auto;justify-content:center}
+}
+
+/* ---------- TABEL TETAP TABEL: digeser ke samping ----------
+   Tabel data TIDAK diubah menjadi kartu di layar kecil. Bentuknya tetap tabel
+   di HP/tablet/PC, hanya saja dapat digeser ke samping di dalam wadahnya.
+   Bayangan tepi hanya diberikan pada wadah yang BENAR-BENAR lebih lebar dari
+   layar (kelas .is-scrollable diisi JavaScript) dan lebarnya dibuat tipis
+   supaya tidak menutupi tulisan di tepi tabel. */
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;position:relative}
+.table-wrap.is-scrollable{
+  background:
+    linear-gradient(to right,#fff 20%,rgba(255,255,255,0)) left center/14px 100% no-repeat local,
+    linear-gradient(to left,#fff 20%,rgba(255,255,255,0)) right center/14px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%,rgba(43,27,39,.20),rgba(43,27,39,0)) left center/9px 100% no-repeat,
+    radial-gradient(farthest-side at 100% 50%,rgba(43,27,39,.20),rgba(43,27,39,0)) right center/9px 100% no-repeat;
+}
+/* Petunjuk geser (diisi JavaScript hanya bila tabel memang lebih lebar). */
+.table-hint{display:none;margin:0;padding:8px 20px 12px;font-size:.74rem;color:var(--ink-2)}
+.table-hint .arw{font-weight:700;color:var(--magenta)}
+
+/* ---------- LAYAR KECIL–MENENGAH (≤1024px): HP, tablet, & "situs desktop" di HP ----------
+   Banyak HP memakai mode "situs desktop" (lebar tampilan ±980px). Bila menu
+   samping tetap memakan 262px pada lebar itu, isi halaman hanya tersisa ±718px
+   sehingga tabel harus digeser sangat jauh dan hurufnya mengecil. Karena itu
+   menu samping dibuat dapat dibuka-tutup (off-canvas) sampai 1024px, isi
+   halaman memakai lebar penuh, dan ukuran huruf dinaikkan agar terbaca.
+   PENTING: ukuran font di aplikasi ini memakai rem, jadi yang dinaikkan adalah
+   font elemen akar (html) — menaikkan `body` tidak berpengaruh sama sekali. */
+@media (max-width:1024px){
+  /* "Situs desktop di HP": teks dinaikkan agar tabel tetap terbaca (minimal 13px
+     per kolom tabel). Ukuran ini SENGAJA TIDAK ikut skala tampilan: setelan
+     "Ukuran Tampilan" adalah preferensi layar PC/laptop, sedangkan layar HP/tablet
+     harus tetap nyaman dibaca. */
+  html{font-size:17px}
+  .sidebar{transform:translateX(-100%);transition:transform .22s ease}
+  body.nav-open .sidebar{transform:none}
+  body.nav-open .sidebar-overlay{display:block}
+  .main{margin-left:0}
+  .mobile-only{display:grid}
+  .content{padding:20px 18px 34px}
+  .topbar{padding:13px 18px}
+  .foot{padding:14px 18px 26px}
+  /* tabel: huruf utama ±14px (bawaan ±13px) & sel pendamping ±13.6px */
+  table.tbl{font-size:.84rem}
+  table.tbl th{font-size:.76rem}
+  table.tbl th,table.tbl td{padding:11px 13px}
+  .table-hint{display:block;padding:8px 16px 12px}
+  /* Scrollbar mendatar tipis yang selalu tampak (Chrome/Edge/Android) agar
+     jelas bahwa tabel bisa digeser — iOS memakai scrollbar bawaan saat digeser. */
+  .table-wrap::-webkit-scrollbar{height:9px}
+  .table-wrap::-webkit-scrollbar-track{background:var(--brand-bg3);border-radius:99px}
+  .table-wrap::-webkit-scrollbar-thumb{background:var(--pink);border-radius:99px}
+  .table-wrap.scroll-y::-webkit-scrollbar{width:9px}
+}
+
+@media (max-width:900px){
+  /* pagination tetap nyaman di layar kecil */
+  .pagination{flex-direction:column;align-items:stretch;gap:10px;padding:12px 14px}
+  .pg-info{text-align:center}
+  .pg-links{justify-content:center;flex-wrap:wrap}
+  /* tabel: sedikit lebih rapat supaya lebih banyak kolom terlihat sekaligus */
+  table.tbl{font-size:.8rem}
+  table.tbl th,table.tbl td{padding:10px 12px}
+}
+
+/* ---------- HP SANGAT KECIL (≤400px) ----------
+   Kartu statistik dipaksa 1 kolom: pada 2 kolom label terpanjang
+   ("Pendapatan Treatment") lebih lebar daripada kartunya sehingga terpotong. */
+@media (max-width:400px){
+  .grid:has(> .stat){grid-template-columns:1fr!important}
+  .stat .lbl{font-size:.72rem}
+  .content{padding:16px 14px 30px}
+  .card{padding:15px}
+  .card-body{padding:15px}
+}
+
+/* ---------- HP (≤640px) ---------- */
+@media (max-width:640px){
+  /* Kolom isian: satu kolom penuh + tinggi ramah sentuh (mencegah iOS zoom) */
+  .form-grid.g2,.form-grid.g3,.form-grid.g4{grid-template-columns:1fr}
+  /* font 16px juga pada kolom kecil: mencegah iOS memperbesar halaman saat mengetik */
+  .input,select.input,textarea.input,.input-sm,select.input-sm{padding:11px 12px;font-size:16px}
+  .input-sm{padding:11px 11px}
+  .btn{padding:12px 16px;min-height:44px}
+  .btn-sm{padding:11px 14px;font-size:.84rem;min-height:40px}
+  .icon-btn{width:42px;height:42px}
+  /* filter: tiap kolom penuh lebar supaya mudah diisi */
+  .filter-bar{flex-direction:column;align-items:stretch;gap:10px;padding:14px}
+  /* width:100% sudah membuat tiap kolom filter selebar barisnya; JANGAN memakai
+     min-width:100% — nilainya membentuk lingkaran dengan lebar pemilih di
+     dalamnya sehingga di layar sempit (≤320px) kolom bisa lebih lebar daripada
+     layar dan halaman jadi bergeser ke samping. */
+  .filter-bar .field{min-width:0;width:100%;max-width:100%}
+  .filter-bar .btn,.filter-bar .inline-form,.filter-bar form.inline-form{width:100%}
+  .filter-bar .inline-form select{width:100%}
+  .inline-form{width:100%}
+  /* aksi halaman: tombol lebar penuh agar mudah ditekan */
+  .page-actions{width:100%;gap:8px}
+  .page-actions .btn{flex:1 1 46%;justify-content:center}
+  /* statistik 2 kolom; jika terlalu sempit tetap terbaca */
+  .grid:has(> .stat){gap:12px}
+  .grid:has(> .stat) .stat{padding:14px}
+  .grid:has(> .stat) .stat .val{font-size:1.15rem}
+  .stat .lbl{font-size:.68rem}
+  /* modal mendekati layar penuh */
+  .modal{padding:8px}
+  .modal-box{max-height:94vh;overflow:auto;border-radius:12px}
+  .modal-foot .btn{flex:1 1 100%}
+  /* tabs dapat digeser & tidak memotong label */
+  .tabs{-webkit-overflow-scrolling:touch;scrollbar-width:none;padding-bottom:2px}
+  .tabs::-webkit-scrollbar{display:none}
+  .tab{padding:10px 13px}
+  /* tabel: tetap tabel, dapat digeser ke samping */
+  table.tbl th,table.tbl td{padding:9px 11px}
+  /* struk & dokumen */
+  .receipt{padding:16px}
+  /* tanggal/grafik */
+  .chart-box{height:230px}
+  .chart-box.sm{height:200px}
+  .chart-box.lg{height:250px}
+  /* kartu foto: sedikit lebih lebar supaya keterangan tidak terpotong */
+  .photo-grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+  .person-cell strong{white-space:normal}
+}
+/* ---------- TOPBAR di HP: dua baris agar tidak berdesakan ---------- */
+@media (max-width:700px){
+  .topbar{flex-wrap:wrap;row-gap:8px;padding:10px 12px}
+  .topbar-title{flex:1 1 auto;min-width:0}
+  .topbar-actions{
+    width:100%;margin-left:0;justify-content:space-between;gap:8px;flex-wrap:nowrap
+  }
+  .branch-switch{flex:1 1 auto;min-width:0}
+  .branch-switch select{width:100%;min-width:0;max-width:none}
+  .topbar-actions .icon-btn{flex:0 0 auto}
+}
+/* ---------- Sentuhan nyaman di tablet ---------- */
+@media (max-width:1024px){
+  .input-sm{min-height:34px}
+  .filter-bar .btn-sm{min-height:36px}
+  .row-actions .btn-sm{min-height:36px}
+}
+
+/* ---------- Penutup: ukuran sentuh tombol kecil di HP ----------
+   Diletakkan paling akhir agar tidak tertimpa aturan `.row-actions .btn-sm`
+   pada blok tablet (spesifisitasnya lebih tinggi). */
+@media (max-width:640px){
+  .row-actions .btn-sm,
+  .filter-bar .btn-sm,
+  .pagination .btn-sm,
+  .card-head .btn-sm,
+  .page-actions .btn-sm{min-height:40px;padding:11px 14px;font-size:.84rem}
+  .row-actions{gap:8px}
+}
+
+/* ---------- Daftar BIAYA OPERASIONAL (menu Keuangan) ----------
+   SATU form untuk seluruh daftar (satu tombol Simpan di bawah) dan satu pillihan
+   CAKUPAN di atasnya (Semua cabang / per cabang) — bukan lagi satu pilihan
+   "berlaku untuk" per baris. Di layar kecil, kolom berubah menjadi tumpukan
+   label-nilai. */
+.fc-list{display:flex;flex-direction:column;gap:10px;margin-top:6px}
+.fc-head{display:grid;grid-template-columns:1.5fr 1.2fr 1.2fr .9fr 1fr .8fr 1.6fr .7fr;gap:10px;
+  font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-2);padding:0 4px}
+.fc-row{display:grid;grid-template-columns:1.5fr 1.2fr 1.2fr .9fr 1fr .8fr 1.6fr .7fr;gap:10px;align-items:start;
+  border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#fff}
+.fc-row.fc-off{background:var(--bg3,#faf7f9);opacity:.72}
+.fc-cell{min-width:0;display:flex;flex-direction:column;gap:4px}
+.fc-cell .input{width:100%}
+.fc-num{font-size:.86rem;font-weight:650;color:var(--ink)}
+.fc-lbl{display:none;font-size:.68rem;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-2)}
+.fc-actions{flex-direction:row;flex-wrap:wrap;gap:6px;align-items:center}
+.fc-empty{padding:14px;border:1px dashed var(--line);border-radius:12px;text-align:center}
+@media (max-width:1024px){
+  .fc-head{display:none}
+  .fc-row{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:12px}
+  .fc-lbl{display:block}
+  .fc-actions{grid-column:1/-1;flex-direction:row}
+}
+@media (max-width:640px){
+  .fc-row{grid-template-columns:1fr}
+}

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 660 250" width="660" height="250">
+  <defs>
+    <linearGradient id="petalBig" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#C81E7C"/><stop offset="1" stop-color="#B0156C"/>
+    </linearGradient>
+    <linearGradient id="petalMid" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#E062A6"/><stop offset="1" stop-color="#C81E7C"/>
+    </linearGradient>
+    <linearGradient id="petalSoft" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F3C2DC"/><stop offset="1" stop-color="#E68FC0"/>
+    </linearGradient>
+    <linearGradient id="leafA" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#9CCB3B"/><stop offset="1" stop-color="#7BB32A"/>
+    </linearGradient>
+    <linearGradient id="leafB" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#CDE86A"/><stop offset="1" stop-color="#A6CE39"/>
+    </linearGradient>
+  </defs>
+
+  <!-- kuntum bunga (lotus) -->
+  <g transform="translate(300,10)">
+    <!-- kelopak kecil paling kiri -->
+    <path d="M52 96 C30 74 22 44 34 16 C56 34 68 66 52 96 Z" fill="url(#petalSoft)"/>
+    <!-- kelopak tengah -->
+    <path d="M78 104 C56 70 62 32 96 4 C118 44 112 84 78 104 Z" fill="url(#petalMid)"/>
+    <!-- kelopak besar kanan -->
+    <path d="M84 108 C118 84 168 74 214 88 C196 122 150 142 108 130 C96 126 88 118 84 108 Z" fill="url(#petalBig)"/>
+    <!-- daun -->
+    <path d="M74 104 C64 126 46 142 24 148 C26 124 44 108 74 104 Z" fill="url(#leafA)"/>
+    <path d="M92 112 C92 136 80 156 60 168 C56 142 68 122 92 112 Z" fill="url(#leafB)"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="34" y="228" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="118" font-weight="300" letter-spacing="1" fill="#B3167B">na<tspan font-size="152" dy="-8">V</tspan><tspan dy="8">eena</tspan></text>
+  <text x="446" y="243" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="46" font-weight="300" letter-spacing="1" fill="#C81E7C">skincare</text>
+</svg>
