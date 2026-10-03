@@ -418,6 +418,36 @@ function run_migrations(PDO $pdo): void
     )");
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_login_2fa_user ON login_2fa_codes(user_id)');
 
+    /* TABEL AI DEVELOPER (ronde 41): menyimpan tiap permintaan pengembangan
+       (revisi/perbaikan/tambah fitur) beserta RENCANA, PATCH yang diusulkan AI,
+       hasil uji di folder staging, dan keadaan penerapan/rollback. Disimpan di
+       basis data supaya persetujuan Super Admin & riwayatnya tetap ada. */
+    $pdo->exec("CREATE TABLE IF NOT EXISTS ai_tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        request TEXT NOT NULL,
+        provider TEXT,
+        model TEXT,
+        status TEXT NOT NULL DEFAULT 'draft',
+        stage TEXT,
+        plan TEXT,
+        patch TEXT,
+        diff TEXT,
+        lint TEXT,
+        files TEXT,
+        suite TEXT,
+        test_status TEXT,
+        test_log TEXT,
+        staging_dir TEXT,
+        snapshot_dir TEXT,
+        applied_at TEXT,
+        rolled_back_at TEXT,
+        error TEXT,
+        created_at TEXT DEFAULT (datetime('now','localtime')),
+        updated_at TEXT
+    )");
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_tasks_status ON ai_tasks(status)');
+
     migrate_finance_cost_amounts($pdo);
     migrate_finance_cost_modes($pdo);
 }
@@ -1102,6 +1132,23 @@ function seed_core(PDO $pdo): void
         /* Ukuran tampilan (%) — pengganti kebiasaan menekan Ctrl+− pada peramban.
            Bawaan 80% karena tampilan 100% terasa terlalu besar di PC/laptop. */
         'ui_scale'              => '80',
+        /* ---- AI DEVELOPER (ronde 41) ----
+           Penyedia AI untuk membantu revisi/perbaikan/penambahan fitur.
+           Bawaan 'gemini' karena kunci Gemini sudah tersedia di produksi.
+           `ai_scope` = folder yang boleh dibaca/diubah AI (dipisah koma):
+           'naveena' (aplikasi) dan 'naveena_dev/test' (skrip uji). */
+        'ai_enabled'            => '1',
+        'ai_provider'           => 'gemini',
+        'ai_api_key'            => '',
+        'ai_model'              => 'gemini-flash-latest',
+        'ai_scope'              => 'naveena,naveena_dev/test',
+        'ai_max_files'          => '12',
+        'ai_max_file_kb'        => '120',
+        /* Nama suite WAJIB sama persis dengan yang ada di run_all.sh
+           (mis. "sintaks-js", bukan "sintaks" — dulu salah sehingga pilihan
+           bawaan tidak ada di daftar). */
+        'ai_default_suite'      => 'sintaks-js',
+        'ai_mock_reply'         => '',
         /* KEAMANAN LOGIN (ronde 38): lingkup wajib 2FA, durasi "ingat saya"
            (1/3/7 hari), dan batas tidak aktif tanpa "ingat saya" (1/3/5/8 jam). */
         'login_security_enabled' => '1',

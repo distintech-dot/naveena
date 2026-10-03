@@ -81,6 +81,9 @@ function app_summary_modules(): array
         'settings.php' => ['Pengaturan Sistem', 'Pengaturan operasional: identitas klinik, tema warna, kompresi foto, email, WhatsApp, pembayaran, kartu member.'],
         'developer.php' => ['Developer Settings', 'Pengaturan tingkat sistem (khusus Super Admin): nama klinik, retensi data, backup, mode pemeliharaan, integrasi, hapus/isi data, dan dokumen ini.'],
         'backup.php' => ['Backup Database', 'Salinan database terkompres (.sql.gz) + pemulihan, dijalankan manual atau otomatis harian.'],
+        'ai_settings.php' => ['AI Settings', 'Pengaturan penyedia AI (Gemini/OpenAI) untuk menu AI Developer: kunci API, model, cakupan folder (aplikasi + skrip uji), ukuran/berkas maksimal, suite uji bawaan, dan uji koneksi. Khusus Super Admin.'],
+        'ai_developer.php' => ['AI Developer', 'Asisten pengembangan: minta AI merevisi/memperbaiki/menambah fitur — AI membaca kode, menyusun usulan (patch), ditampilkan sebagai PRATINJAU (diff + pemeriksaan sintaks), diuji di folder STAGING, lalu DITERAPKAN hanya setelah disetujui Super Admin, dengan tombol pembatalan.'],
+        'ai_worker.php' => ['Pekerja AI (CLI)', 'Menjalankan analisis AI & suite uji di latar belakang (hanya dari baris perintah; menolak dijalankan dari peramban).'],
         'maintenance.php' => ['Mode Pemeliharaan', 'Halaman pemberitahuan saat sistem dibatasi hanya-baca (mis. saat pemeliharaan), otomatis kembali normal.'],
         'profile.php' => ['Profil Saya', 'Ubah data akun sendiri dan kata sandi.'],
         'bayar.php' => ['Halaman Bayar', 'Halaman pembayaran pasien untuk tagihan gateway (QRIS/transfer) dan tombol cek status.'],
@@ -245,6 +248,8 @@ function app_summary_rules(): array
         ['Ekspor', 'Semua ekspor lewat `export.php` (CSV/Excel .xlsx/dokumen cetak). Excel asli disusun `includes/xlsx.php`, dokumen cetak `includes/report_document.php`, PDF dengan grafik `includes/report_pdf.php`.'],
         ['Dokumen & angka harus sinkron', 'Laporan di layar, dokumen cetak, Excel, dan email memakai SUMBER yang sama (`includes/reports.php` untuk kinerja, `includes/finance.php` untuk keuangan). Jangan menghitung ulang di halaman.'],
         ['Zona waktu', 'Server berjalan UTC, aplikasi memaksa `Asia/Jakarta` (config.php) baik untuk PHP maupun koneksi SQLite.'],
+        ['AI Developer tidak boleh menulis kode sendiri', 'AI hanya menghasilkan teks patch (`includes/ai.php`). Penerapan dilakukan aplikasi setelah persetujuan Super Admin, selalu memakai pencocokan teks PERSIS ("search" harus ditemukan tepat sekali; kalau tidak, seluruh patch ditolak), dibatasi cakupan folder, diuji di folder staging, dan disertai salinan pengaman + tombol pembatalan.'],
+        ['Kunci API rahasia', 'Kunci penyedia AI disimpan di setelan dan tidak pernah ditampilkan kembali/ditulis ke log. Jangan mengirimnya ke peramban.'],
     ];
 }
 

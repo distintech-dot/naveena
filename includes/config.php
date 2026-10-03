@@ -62,7 +62,7 @@ function resolve_db_path(): string
 }
 define('DB_PATH', resolve_db_path());
 define('BACKUP_DIR', dirname(APP_DIR) . '/naveena_backups');
-define('SCHEMA_VERSION', '1.24.0');
+define('SCHEMA_VERSION', '1.25.0');
 /** Naikkan angka ini setiap kali isi data/icd10.tsv atau data/icd9cm.tsv berubah,
  *  agar kamus pada database yang sudah terpasang ikut dimuat ulang otomatis. */
 define('ICD_DATASET_VERSION', '2');
@@ -76,6 +76,8 @@ require_once __DIR__ . '/appointment.php';
 require_once __DIR__ . '/clinic.php';
 require_once __DIR__ . '/patient.php';
 require_once __DIR__ . '/retention.php';
+/* AI Developer (ronde 41): bantu revisi/perbaikan/tambah fitur — hanya Super Admin. */
+require_once __DIR__ . '/ai.php';
 /* Keamanan login: "ingat saya", batas tidak aktif, 2FA, lupa password, dan
    kode pemulihan. Dimuat lebih awal karena penjaga sesinya dijalankan di bawah. */
 require_once __DIR__ . '/login_security.php';

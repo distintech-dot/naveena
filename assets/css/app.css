@@ -295,6 +295,14 @@ legend{padding:0 6px;font-size:.78rem;font-weight:700;color:var(--ink-2);text-tr
 .table-wrap.is-dragging *{cursor:grabbing!important;user-select:none!important;-webkit-user-select:none!important}
 /* Saat menyeret tabel: jangan biarkan teks halaman ikut terseleksi. */
 body.table-dragging{user-select:none;-webkit-user-select:none}
+/* ---------- AI DEVELOPER (ronde 41) ----------
+   Kotak pratinjau diff/uji memakai font tetap, dapat digeser, dan tinggi
+   terbatas supaya halaman tetap ringkas walau pratinjaunya panjang. */
+.ai-pre{background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 14px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.78rem;line-height:1.5;
+  max-height:340px;overflow:auto;white-space:pre;margin:0}
+.ai-pre code{font-size:.78rem}
+.hide{display:none!important}
 /* Kolom isian/tombol di dalam tabel tetap memakai kursor normal agar jelas
    bisa diklik (bukan diseret). */
 .table-wrap.is-scrollable input,.table-wrap.is-scrollable select,

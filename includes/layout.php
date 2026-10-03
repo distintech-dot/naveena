@@ -119,6 +119,13 @@ function nav_items(): array
     /* Menu Backup Database hanya untuk pemegang permission `backup.manage`
        (Super Admin) — level lain tidak boleh mengaksesnya sama sekali. */
     if (has_perm('backup.manage') || has_perm('maintenance.manage')) $set[] = ['backup.php', 'Backup Database', 'database', 'backup'];
+    /* MENU AI (ronde 41) — tepat DI BAWAH "Backup Database", urutannya
+       "AI Settings" lalu "AI Developer". Khusus Super Admin karena AI Developer
+       dapat mengubah kode aplikasi; server juga menolak level lain (is_super()). */
+    if (is_super()) {
+        $set[] = ['ai_settings.php', 'AI Settings', 'settings', 'ai_settings'];
+        $set[] = ['ai_developer.php', 'AI Developer', 'sparkles', 'ai_developer'];
+    }
     if ($set) $items[] = ['Pengaturan', $set];
     return $items;
 }
