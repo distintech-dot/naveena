@@ -170,6 +170,13 @@ function run_migrations(PDO $pdo): void
         ['orders', 'receipt_sent_to', 'TEXT'],
         ['orders', 'receipt_sent_via', 'TEXT'],
         ['orders', 'receipt_status', 'TEXT'],
+        /* STRUK LEWAT EMAIL punya kolom SENDIRI (perbaikan ronde 48).
+           Sebelumnya pengiriman email menulis ke kolom `receipt_*` yang dipakai
+           WhatsApp, sehingga di halaman Detail Transaksi baris "Struk WhatsApp"
+           menampilkan ALAMAT EMAIL pasien — membingungkan. Sekarang dipisah. */
+        ['orders', 'receipt_email_to', 'TEXT'],
+        ['orders', 'receipt_email_status', 'TEXT'],
+        ['orders', 'receipt_email_sent_at', 'TEXT'],
         // Foto orang (pasien/dokter/terapis) + waktu perubahan untuk cache-busting
         ['patients', 'photo_file', 'TEXT'],
         ['patients', 'photo_updated_at', 'TEXT'],
@@ -219,6 +226,8 @@ function run_migrations(PDO $pdo): void
         ['users', 'totp_secret', 'TEXT'],
         ['users', 'totp_enabled', 'INTEGER'],
         ['users', 'totp_confirmed_at', 'TEXT'],
+        /* AI DEVELOPER — kolom jawaban mentah ditambahkan SETELAH tabel ai_tasks
+           dibuat di bawah (lihat catatan di sana), BUKAN di daftar $adds. */
     ];
     foreach ($adds as [$t, $col, $type]) {
         if (!table_has_column($pdo, $t, $col)) {
@@ -443,13 +452,205 @@ function run_migrations(PDO $pdo): void
         applied_at TEXT,
         rolled_back_at TEXT,
         error TEXT,
+        raw_reply TEXT,
+        finish_reason TEXT,
+        /* RONDE 44: lampiran (Excel/PDF/gambar) + brief dari mode kolaborasi,
+           halaman pratinjau yang dipilih AI, dan PEMAKAIAN TOKEN per tugas. */
+        attachments TEXT,
+        brief TEXT,
+        preview_page TEXT,
+        engine TEXT,
+        calls INTEGER DEFAULT 0,
+        tokens_in INTEGER DEFAULT 0,
+        tokens_out INTEGER DEFAULT 0,
+        tokens_think INTEGER DEFAULT 0,
+        tokens_total INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now','localtime')),
         updated_at TEXT
     )");
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_tasks_status ON ai_tasks(status)');
+    /* RONDE 43: kolom jawaban MENTAH AI + alasan berhenti (finishReason) supaya
+       kegagalan seperti "JSON tidak sah"/terpotong dapat ditelusuri pemilik.
+       PENTING: ditambahkan DI SINI (setelah tabelnya dibuat), bukan di daftar
+       `$adds` di atas — pada database BARU tabel ai_tasks belum ada saat daftar
+       itu dijalankan, sehingga ALTER TABLE akan gagal dan MEMBATALKAN seluruh
+       pembuatan skema (instalasi baru jadi kosong). Sudah pernah terjadi saat
+       menambahkan kolom ini. */
+    $kolomAiTasks = [
+        'raw_reply' => 'TEXT', 'finish_reason' => 'TEXT',
+        /* RONDE 44: lampiran, brief kolaborasi, halaman pratinjau, & pemakaian token. */
+        'attachments' => 'TEXT', 'brief' => 'TEXT', 'preview_page' => 'TEXT', 'engine' => 'TEXT',
+        'calls' => 'INTEGER DEFAULT 0', 'tokens_in' => 'INTEGER DEFAULT 0',
+        'tokens_out' => 'INTEGER DEFAULT 0', 'tokens_think' => 'INTEGER DEFAULT 0',
+        'tokens_total' => 'INTEGER DEFAULT 0',
+        /* RONDE 45: laporan akhir + saran AI, dan judul singkat untuk daftar percakapan. */
+        'suggestions' => 'TEXT', 'summary' => 'TEXT', 'title' => 'TEXT',
+        /* Ringkasan + daftar pemeriksaan yang GAGAL dari uji staging (ronde 48).
+           Berkas log bisa dibersihkan oleh pembersih folder sementara, sehingga
+           alasannya hilang; teks ini disimpan agar tetap dapat dibaca kapan pun. */
+        'test_ringkas' => 'TEXT',
+        /* RONDE 50: maksud permintaan (obrolan vs pekerjaan), status workflow resmi,
+           berkas yang benar-benar terbaca/dilewati, dan hasil penelusuran dampak.
+           Semuanya dipakai agar STATUS MESIN & STATUS TAMPILAN selalu konsisten
+           dan kegagalan AI dapat ditelusuri tanpa menebak. */
+        'intent' => 'TEXT', 'intent_note' => 'TEXT', 'workflow' => 'TEXT',
+        /* Mode yang DIMINTA pemilik (auto/jawab/audit/rencana/kerjakan) — dipisah dari
+           kolom `intent` yang menyimpan JENIS pekerjaan hasil klasifikasi. */
+        'intent_mode' => 'TEXT',
+        'audit_status' => 'TEXT', 'files_read' => 'TEXT', 'files_skipped' => 'TEXT',
+        'impact_note' => 'TEXT',
+    ];
+    foreach ($kolomAiTasks as $col => $type) {
+        if (!table_has_column($pdo, 'ai_tasks', $col)) {
+            $pdo->exec("ALTER TABLE ai_tasks ADD COLUMN {$col} {$type}");
+        }
+    }
+    /* Berkas lampiran tiap permintaan (Excel/PDF/gambar). Isi berkasnya disimpan
+       DI LUAR folder aplikasi yang disajikan publik (`naveena_ai/uploads`). */
+    $pdo->exec("CREATE TABLE IF NOT EXISTS ai_task_files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL,
+        name TEXT,
+        ext TEXT,
+        mime TEXT,
+        size INTEGER,
+        path TEXT,
+        chars INTEGER DEFAULT 0,
+        sent INTEGER DEFAULT 0,
+        note TEXT,
+        created_at TEXT DEFAULT (datetime('now','localtime'))
+    )");
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_task_files ON ai_task_files(task_id)');
+    /* Catatan PEMAKAIAN TOKEN setiap panggilan AI (untuk menjawab "habis berapa
+       token setiap pengerjaan") — satu baris per panggilan, dengan tujuannya. */
+    $pdo->exec("CREATE TABLE IF NOT EXISTS ai_usage_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER,
+        provider TEXT,
+        model TEXT,
+        purpose TEXT,
+        calls INTEGER DEFAULT 1,
+        tokens_in INTEGER DEFAULT 0,
+        tokens_out INTEGER DEFAULT 0,
+        tokens_think INTEGER DEFAULT 0,
+        tokens_total INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now','localtime'))
+    )");
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_usage_task ON ai_usage_log(task_id)');
+    /* LANGKAH BERJALAN (ronde 45): supaya pemilik dapat MELIHAT prosesnya seperti
+       agen — "sedang membaca berkas", "sedang menyusun patch", "sedang diuji".
+       Ditulis pekerja AI dari waktu ke waktu dan dibaca halaman lewat polling. */
+    $pdo->exec("CREATE TABLE IF NOT EXISTS ai_steps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL,
+        kind TEXT DEFAULT 'info',
+        text TEXT,
+        detail TEXT,
+        created_at TEXT DEFAULT (datetime('now','localtime'))
+    )");
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_steps_task ON ai_steps(task_id)');
+    /* PERCAKAPAN (ronde 45): pesan pemilik & jawaban AI dalam satu utas, sehingga
+       perintah lanjutan dapat melanjutkan pekerjaan yang sama (seperti mengobrol). */
+    $pdo->exec("CREATE TABLE IF NOT EXISTS ai_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
+        text TEXT,
+        created_at TEXT DEFAULT (datetime('now','localtime'))
+    )");
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_messages_task ON ai_messages(task_id)');
+    /* JEJAK KERJA AI (ronde 50): satu baris per FASE pekerjaan (klasifikasi maksud,
+       penelusuran berkas, pembacaan, penelusuran dampak, penyusunan patch, uji,
+       hasil akhir). Dipakai agar kegagalan AI Developer dapat ditelusuri sendiri
+       oleh pemilik/dev tanpa menebak-nebak — termasuk berkas yang gagal dibaca
+       beserta alasannya. */
+    $pdo->exec("CREATE TABLE IF NOT EXISTS ai_traces (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL,
+        phase TEXT,
+        data TEXT,
+        created_at TEXT DEFAULT (datetime('now','localtime'))
+    )");
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_traces_task ON ai_traces(task_id)');
 
     migrate_finance_cost_amounts($pdo);
     migrate_finance_cost_modes($pdo);
+    migrate_ai_audit_status($pdo);
+}
+
+/**
+ * PERBAIKAN DATA LAMA: baris AI yang menyimpulkan "tidak ada perubahan" padahal
+ * auditnya TIDAK lengkap (regression #926/#927/#930 — ronde 52).
+ *
+ * Dulu jawaban AI yang meminta membaca berkas tambahan dan menyatakan "berkas yang
+ * tersedia belum cukup" tetap dikonversi menjadi NO_CHANGE hanya karena daftar ops-nya
+ * kosong. Baris-baris lama itu kini ditandai apa adanya sebagai AUDIT_INCOMPLETE supaya
+ * status tersimpan, workflow, dan tampilan konsisten dengan kenyataannya.
+ *
+ * Idempoten: setelah diperbarui, statusnya bukan 'noop' lagi sehingga tidak ikut diproses
+ * ulang pada migrasi berikutnya. HANYA menyentuh metadata tugas AI — tidak ada tabel
+ * bisnis, skema, atau data klinik yang diubah.
+ */
+function migrate_ai_audit_status(PDO $pdo): void
+{
+    try {
+        /* Dua kelompok diperbaiki:
+           (1) baris lama yang MASIH 'noop' padahal auditnya belum lengkap → diubah statusnya;
+           (2) baris yang SUDAH audit_incomplete tetapi daftar alasannya masih kosong →
+               dilengkapi alasannya supaya UI dapat menampilkan berkas/area yang belum
+               diperiksa (permintaan pemilik). Keduanya idempoten: setelah diisi, barisnya
+               tidak lagi cocok dengan syarat di bawah. */
+        $rows = $pdo->query("SELECT id, plan, raw_reply, files_skipped, files_read, status, audit_status
+              FROM ai_tasks WHERE status = 'noop'
+                 OR (status = 'audit_incomplete' AND COALESCE(files_skipped, '') IN ('', '[]', 'null'))")
+            ->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        return;   // tabel belum ada (instalasi baru) → tidak ada yang perlu diperbaiki
+    }
+    if (!$rows) return;
+    $upd = $pdo->prepare("UPDATE ai_tasks SET status = 'audit_incomplete', workflow = 'AUDIT_INCOMPLETE',
+        audit_status = 'belum_lengkap', stage = ?, files_skipped = ? WHERE id = ?");
+    foreach ($rows as $r) {
+        $teks = strtolower((string)($r['plan'] ?? '') . ' ' . (string)($r['raw_reply'] ?? ''));
+        $skipped = trim((string)($r['files_skipped'] ?? ''));
+        $adaSkipped = ($skipped !== '' && $skipped !== '[]' && $skipped !== 'null');
+        $ragu = (bool)preg_match('/audit_incomplete|audit belum lengkap|belum cukup|belum lengkap|'
+            . 'perlu membaca|tidak cukup untuk|belum dapat disimpulkan|dependency belum/', $teks);
+        $sudahTertanda = ((string)($r['status'] ?? '') === 'audit_incomplete');
+        if (!$ragu && !$adaSkipped && !$sudahTertanda) continue;
+        /* Baris yang sudah tertanda tetapi alasannya kosong tetap diproses untuk
+           MELENGKAPI alasannya (status tidak diubah lagi). */
+        $ragu = $ragu || $sudahTertanda;
+        /* Alasannya IKUT dicatat supaya UI dapat menampilkan berkas/area mana yang belum
+           selesai diperiksa (permintaan pemilik). Sumbernya: daftar berkas yang diminta AI
+           pada jawaban mentahnya, ditambah pernyataan AI bahwa auditnya belum cukup. */
+        $alasan = [];
+        $raw = (string)($r['raw_reply'] ?? '');
+        /* Berkas yang diminta AI DAN benar-benar belum terbaca (tidak ada di files_read)
+           yang dilaporkan sebagai "belum selesai diperiksa" — supaya daftar alasannya
+           jujur, bukan menyebut berkas yang sebenarnya sudah dibaca. */
+        $sudahDibaca = [];
+        if (preg_match('~^\s*\{.*\}$~s', (string)($r['files_read'] ?? ''))) {
+            $fr = json_decode((string)$r['files_read'], true);
+            if (is_array($fr)) $sudahDibaca = array_keys($fr);
+        }
+        if (preg_match('~"read"\s*:\s*\[(.*?)\]~s', $raw, $m)) {
+            if (preg_match_all('~"([^"]{3,120})"~', $m[1], $mm)) {
+                foreach (array_slice(array_unique($mm[1]), 0, 12) as $f) {
+                    if (in_array($f, $sudahDibaca, true)) continue;
+                    $alasan[] = 'berkas yang diminta AI belum selesai diperiksa: ' . $f;
+                }
+            }
+        }
+        if (preg_match('~(audit_incomplete[^."]{0,160}|audit belum (lengkap|cukup)[^."]{0,160}|'
+            . 'belum cukup[^."]{0,160}|belum lengkap[^."]{0,160}|perlu membaca[^."]{0,160})~i',
+            (string)($r['plan'] ?? ''), $mp)) {
+            $alasan[] = 'pernyataan AI: ' . trim((string)$mp[1]);
+        }
+        if (!$alasan) $alasan[] = 'AI menyatakan auditnya belum cukup untuk menyimpulkan perubahan.';
+        $upd->execute(['Audit belum lengkap (AUDIT_INCOMPLETE) — diperbaiki otomatis (ronde 52)',
+            json_encode(array_values(array_unique($alasan)), JSON_UNESCAPED_UNICODE), (int)$r['id']]);
+    }
 }
 
 /**
@@ -1149,6 +1350,17 @@ function seed_core(PDO $pdo): void
            bawaan tidak ada di daftar). */
         'ai_default_suite'      => 'sintaks-js',
         'ai_mock_reply'         => '',
+        /* RONDE 50: mode obrolan (AI membedakan bertanya vs minta dikerjakan) dan
+           penelusuran dampak (mencari berkas lain yang ikut terpengaruh). */
+        'ai_chat_mode'          => '1',
+        'ai_impact_scan'        => '1',
+        /* RONDE 51: auto error recovery (self-healing) — AI memperbaiki error uji
+           sendiri lalu menguji ulang, tanpa menyembunyikan error. */
+        'ai_heal_on'            => '1',
+        'ai_heal_rounds'        => '3',
+        /* RONDE 52: batas percobaan ulang bila HARNESS uji sendiri tidak berjalan
+           (mis. port/sisa proses) — berbeda dari putaran perbaikan kode. */
+        'ai_harness_retry'      => '2',
         /* KEAMANAN LOGIN (ronde 38): lingkup wajib 2FA, durasi "ingat saya"
            (1/3/7 hari), dan batas tidak aktif tanpa "ingat saya" (1/3/5/8 jam). */
         'login_security_enabled' => '1',

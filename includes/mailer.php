@@ -767,6 +767,46 @@ function receipt_email_replace(string $tpl, array $o): string
  * Kirim struk (PDF) ke email pasien.
  * @return array{ok:bool,error:string,subject:string,to:string}
  */
+/**
+ * Ringkasan keadaan "struk lewat EMAIL" untuk sebuah transaksi.
+ *
+ * Dipakai halaman Detail Transaksi & halaman struk supaya pemilik/kasir dapat
+ * melihat APA ADANYA: sudah terkirim ke alamat mana, pernah gagal, atau pasien
+ * memang belum punya email. Terpisah dari status WhatsApp (`receipt_*`).
+ *
+ * @return array{status:string,label:string,tone:string,to:string,at:string,catatan:string,alamatValid:bool}
+ */
+function receipt_email_state(array $o): array
+{
+    $to = trim((string)($o['receipt_email_to'] ?? ''));
+    $st = trim((string)($o['receipt_email_status'] ?? ''));
+    $at = trim((string)($o['receipt_email_sent_at'] ?? ''));
+    $alamatValid = $to !== '' && filter_var($to, FILTER_VALIDATE_EMAIL) !== false;
+    $catatan = '';
+    if ($st === 'sent') {
+        $label = 'Terkirim'; $tone = 'green';
+        $catatan = 'Email diserahkan ke layanan pengiriman. Pengiriman ke kotak masuk tetap tergantung '
+            . 'penyedia email tujuan (alamat yang tidak benar akan MEMANTUL, dan pantulan itu tidak dapat '
+            . 'diketahui langsung oleh aplikasi ini).';
+    } elseif ($st === 'failed') {
+        $label = 'Gagal terakhir'; $tone = 'red';
+        $catatan = 'Percobaan pengiriman terakhir DITOLAK oleh layanan email. Lihat "Riwayat Pengiriman Email" '
+            . 'di Pengaturan Sistem untuk pesan aslinya, lalu coba kirim ulang.';
+    } elseif ($st === 'no_email') {
+        $label = 'Tanpa email'; $tone = 'yellow';
+        $catatan = 'Pasien ini belum punya alamat email, jadi struk tidak dikirim. Isi email di '
+            . 'Data Pasien (atau saat mengirim struk) terlebih dahulu.';
+    } else {
+        $label = 'Belum dikirim'; $tone = 'gray';
+        $catatan = 'Struk belum pernah dikirim lewat email untuk transaksi ini.';
+    }
+    if ($to !== '' && !$alamatValid) {
+        $catatan .= ' Alamat yang tersimpan TIDAK berbentuk email yang sah, sehingga pengiriman akan ditolak.';
+    }
+    return ['status' => $st, 'label' => $label, 'tone' => $tone, 'to' => $to, 'at' => $at,
+            'catatan' => $catatan, 'alamatValid' => $alamatValid];
+}
+
 function send_receipt_email(array $o, string $to, ?string $subjectOverride = null): array
 {
     $to = trim($to);

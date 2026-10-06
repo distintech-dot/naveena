@@ -442,7 +442,19 @@ page_head('Order Baru', 'order_baru');
     <div class="modal-head"><h3>Langkah Pembayaran</h3>
       <button type="button" class="icon-btn" data-modal-close="payModal"><?= icon('x') ?></button></div>
     <div class="modal-body">
+      <?php /* RINCIAN YANG DIBELI (permintaan pemilik, ronde 48): pada kartu langkah
+         pembayaran ditampilkan daftar treatment/skincare yang diambil beserta diskon
+         member yang diberikan, supaya kasir & pasien sama-sama melihat rinciannya
+         saat memindai QRIS. Isinya diisi skrip (pmRecap()) dari baris item yang
+         sedang dipilih — jadi selalu sama dengan yang akan ditagihkan. */ ?>
+      <div class="field" style="margin-bottom:12px">
+        <label>Rincian yang dibeli</label>
+        <div class="pm-recap" id="pmRecap"></div>
+      </div>
       <dl class="kv">
+        <dt>Subtotal</dt><dd><strong id="pmSubtotal">Rp 0</strong></dd>
+        <dt>Diskon manual</dt><dd><span id="pmDiscount">Rp 0</span></dd>
+        <dt>Diskon member</dt><dd><span id="pmMemberDisc">Rp 0</span> <span class="small muted" id="pmMemberNote"></span></dd>
         <dt>Total Tagihan</dt><dd><strong id="pmTotal">Rp 0</strong></dd>
         <dt>Kode Unik</dt><dd><strong id="pmCode">-</strong>
           <div class="small muted">Ditambahkan otomatis untuk transfer/QRIS (mudah dicocokkan dengan mutasi).</div></dd>
@@ -462,7 +474,8 @@ page_head('Order Baru', 'order_baru');
       </div>
 
       <div id="pmInfo" class="hide">
-        <div class="notice" id="pmClinic"></div>
+        <?php /* Isi kotak ini rata TENGAH (teks & gambar QRIS) — permintaan pemilik. */ ?>
+        <div class="notice pm-clinic" id="pmClinic"></div>
         <div class="field mt-2"><label>Jenis Pembayaran Transfer/QRIS</label>
           <select class="input" id="pmMode">
             <option value="manual">Manual — staf cek mutasi/QRIS lalu konfirmasi</option>
@@ -629,7 +642,7 @@ function addItem(type, id, name, code, price, stock, unit, components, kind) {
     }).join(', ') + ' — stok ikut berkurang saat disimpan</div>';
   }
   tr.innerHTML =
-    '<td><strong>' + name + '</strong><div class="small muted">' + code + ' · ' + O_TYPE_LABEL[type] +
+    '<td><strong class="o-name">' + name + '</strong><div class="small muted">' + code + ' · ' + O_TYPE_LABEL[type] +
       (stock !== undefined && stock !== null ? ' · stok ' + Naveena.angka(stock) + (unit ? ' ' + unit : '') : '') + '</div>' +
       compTxt +
       '<input type="hidden" name="items[' + i + '][type]" value="' + type + '">' +
@@ -967,6 +980,57 @@ function recalc() {
     return Number(raw || 0);
   }
   function isCash(m) { return m === 'Cash'; }
+  /* RINCIAN ITEM pada kartu pembayaran (ronde 48) — dibaca dari baris item yang
+     sedang diisi di halaman, jadi apa yang dilihat pasien = apa yang ditagihkan. */
+  function pmRecap() {
+    var kotak = el('pmRecap');
+    if (!kotak) return;
+    var baris = [];
+    document.querySelectorAll('#o_items_body tr').forEach(function (tr) {
+      if (tr.id === 'o_empty_row') return;
+      var q = numval((tr.querySelector('.o-qty') || {}).value);
+      var p = numval((tr.querySelector('.o-price') || {}).value);
+      var nm = itemName(tr);
+      if (q <= 0 || nm.trim() === '') return;
+      baris.push({ nama: nm.trim(), qty: q, harga: p, total: q * p, unit: tr.dataset.unit || '' });
+    });
+    if (!baris.length) {
+      kotak.innerHTML = '<span class="muted">Belum ada item yang dipilih.</span>';
+      return;
+    }
+    var html = '<table class="pm-recap-tbl"><tbody>';
+    baris.forEach(function (b) {
+      html += '<tr><td>' + esc(b.nama) + '<div class="small muted">' + qtyText(b.qty)
+        + (b.unit ? ' ' + esc(b.unit) : '') + ' × ' + fmt(b.harga) + '</div></td>'
+        + '<td class="num nowrap">' + fmt(b.total) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    /* Angka diskon diambil dari perhitungan recalc() (sumber yang sama dengan tagihan). */
+    var memo = [];
+    if (Number(el('o_subtotal') ? el('o_subtotal').textContent.replace(/[^0-9]/g, '') : 0) > 0
+        && O_MEMBER.lastDisc && O_MEMBER.lastDisc.ok && O_MEMBER.lastDisc.pct > 0) {
+      memo.push('Member ' + esc(O_MEMBER.lastDisc.level || '') + ' · ' + qtyText(O_MEMBER.lastDisc.pct) + '%');
+    }
+    if (memo.length) html += '<div class="small muted">' + memo.join(' · ') + '</div>';
+    kotak.innerHTML = html;
+  }
+  /* Nama item yang sedang dipilih: dibaca dari elemen `.o-name`, dengan cadangan
+     dari kolom tersembunyi `items[i][name]`. Cadangan ini WAJIB ada — perbaikan
+     permintaan pemilik (rincian di langkah pembayaran kosong): dulu hanya
+     `.o-name` yang dibaca, sedangkan baris item tidak memakai kelas itu sehingga
+     daftar selalu dianggap kosong ("Belum ada item yang dipilih"). */
+  function itemName(tr) {
+    var n = tr.querySelector('.o-name');
+    if (n && String(n.textContent || '').trim() !== '') return String(n.textContent).trim();
+    var h = tr.querySelector('input[type=hidden][name$="[name]"]');
+    return h && h.value ? String(h.value) : '';
+  }
+  /* Escapce teks dari DOM (nama item) sebelum dimasukkan kembali sebagai HTML. */
+  function esc(t) {
+    var d = document.createElement('div');
+    d.textContent = t == null ? '' : String(t);
+    return d.innerHTML;
+  }
   function refreshPay() {
     var m = el('pmMethod').value;
     var total = totalNow();
@@ -978,6 +1042,19 @@ function recalc() {
     el('pmTotal').textContent = fmt(total);
     el('pmCode').textContent = code > 0 ? code : 'tanpa kode unik';
     el('pmPay').textContent = fmt(payAmount);
+    /* Rincian item + diskon pada kartu pembayaran. */
+    var sub = numval((el('o_subtotal') || {}).textContent ? el('o_subtotal').textContent.replace(/[^0-9]/g, '') : 0);
+    var discManual = numval((el('o_discount') || {}).value);
+    var discMember = numval((el('o_member_view') || {}).textContent ? el('o_member_view').textContent.replace(/[^0-9]/g, '') : 0);
+    if (el('pmSubtotal')) el('pmSubtotal').textContent = fmt(sub);
+    if (el('pmDiscount')) el('pmDiscount').textContent = fmt(discManual);
+    if (el('pmMemberDisc')) el('pmMemberDisc').textContent = fmt(discMember);
+    if (el('pmMemberNote')) {
+      var ket = (el('o_member_label') || {}).textContent || '';
+      el('pmMemberNote').textContent = discMember > 0 ? ket : (O_MEMBER.lastDisc && O_MEMBER.lastDisc.using
+        ? 'kartu member dipakai, tetapi belum memenuhi syarat diskon' : '');
+    }
+    pmRecap();
     el('pmCash').classList.toggle('hide', !isCash(m));
     el('pmInfo').classList.toggle('hide', isCash(m));
     el('pmRefWrap').classList.toggle('hide', isCash(m));
@@ -986,21 +1063,43 @@ function recalc() {
       if (!inEl.dataset.touched) inEl.value = Math.round(payAmount);
       el('pmChange').textContent = fmt(Math.max(0, numval(inEl.value) - payAmount));
     } else {
-      /* Jelaskan rekening/QRIS klinik apa adanya. */
+      /* Jelaskan rekening/QRIS klinik apa adanya.
+         PERMINTAAN PEMILIK (ronde 49): keterangan cara membayar HARUS mengikuti
+         metode yang benar-benar dipilih — memilih Transfer tidak boleh
+         memunculkan gambar QRIS; gambar QRIS hanya muncul saat metode = QRIS.
+         Isi kotak pink juga dibuat rata TENGAH (teks maupun gambarnya). */
       var c = O_PAY.clinic || {};
-      var html = '<strong>Transfer/QRIS ke klinik</strong><div class="small mt-1">';
-      if (c.bank_name && c.bank_account) {
+      var isQris = (m === 'QRIS');
+      var isTransfer = (m === 'Transfer');
+      var html = '<strong>' + (isQris ? 'QRIS' : (isTransfer ? 'Transfer' : esc(m))) + ' ke klinik</strong>'
+        + '<div class="small mt-1">';
+      if (isTransfer && c.bank_name && c.bank_account) {
         html += 'Bank <strong>' + c.bank_name + '</strong> · No. Rek <strong>' + c.bank_account + '</strong>'
              + (c.bank_holder ? ' · a.n. ' + c.bank_holder : '') + '<br>';
       }
-      if (O_PAY.qrisReady) html += 'Gambar QRIS klinik tersedia — lihat di halaman pembayaran setelah disimpan.<br>';
-      if (!c.bank_name && !O_PAY.qrisReady) {
-        html += '<em>Data rekening/QRIS belum diisi di Pengaturan → Pembayaran.</em><br>';
+      if (isQris) {
+        /* Gambar QRIS ditampilkan LANGSUNG dan HANYA pada metode QRIS supaya
+           pasien dapat memindainya saat itu juga. */
+        if (O_PAY.qrisReady && c.qris_url) {
+          html += '<div class="mt-1"><img src="' + c.qris_url + '" alt="QRIS klinik" '
+               + 'style="max-width:220px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:6px">'
+               + '<div class="small muted">Pindai QRIS ini untuk membayar (nominal di bawah).</div></div>';
+        } else if (O_PAY.qrisReady) {
+          /* QRIS sudah diunggah tetapi berkasnya tidak terbaca dari sisi server. */
+          html += 'Gambar QRIS sudah diunggah, tetapi berkasnya belum dapat dibaca — '
+               + 'unggah ulang di Pengaturan → Pembayaran.';
+        } else {
+          html += '<em>Gambar QRIS belum diunggah di Pengaturan → Pembayaran.</em><br>';
+        }
+      } else if (!isTransfer) {
+        html += '<em>Pembayaran dengan ' + esc(m) + ' dicatat apa adanya (tanpa kode unik).</em><br>';
+      } else if (!c.bank_name || !c.bank_account) {
+        html += '<em>Nomor rekening belum diisi di Pengaturan → Pembayaran.</em><br>';
       }
       html += 'Nominal yang harus dibayar <strong>' + fmt(payAmount) + '</strong>'
             + (code > 0 ? ' (termasuk kode unik <strong>' + code + '</strong>)' : '') + '.</div>';
       if (c.note) html += '<div class="small mt-1">' + c.note + '</div>';
-      if (O_PAY.gatewayOn) html += '<div class="small mt-1">Mode otomatis: tagihan QRIS dibuat di '
+      if (isQris && O_PAY.gatewayOn) html += '<div class="small mt-1">Mode otomatis: tagihan QRIS dibuat di '
         + O_PAY.gatewayName + ' dan transaksi tersimpan otomatis setelah dinyatakan lunas.</div>';
       el('pmClinic').innerHTML = html;
     }

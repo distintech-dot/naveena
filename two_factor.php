@@ -68,7 +68,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             q("UPDATE users SET last_login = datetime('now','localtime') WHERE id = ?", [(int)$u['id']]);
             audit('Login 2FA', 'Auth', (int)$u['id'], null, ['metode' => $metode],
                 'Verifikasi 2 langkah berhasil (' . $metode . ')');
-            header('Location: dashboard.php');
+            /* Halaman tujuan (bila pengguna diarahkan ke halaman masuk karena
+               sesinya berakhir saat membuka halaman tertentu). */
+            $tujuan = trim((string)($_SESSION['login_next'] ?? ''));
+            unset($_SESSION['login_next']);
+            if ($tujuan === '' || strpos($tujuan, '//') !== false || strpos($tujuan, '://') !== false
+                || strpos($tujuan, ':') !== false || preg_match('~[<>"\']~', $tujuan)) {
+                $tujuan = 'dashboard.php';
+            } else {
+                $tujuan = ltrim($tujuan, '/');
+            }
+            header('Location: ' . $tujuan);
             exit;
         }
         $_SESSION['2fa_fail'] = (int)($_SESSION['2fa_fail'] ?? 0) + 1;

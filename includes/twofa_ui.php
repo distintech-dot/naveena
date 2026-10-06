@@ -21,6 +21,18 @@ require_once __DIR__ . '/login_security.php';
 /** Nomor langkah/aksi penyiapan 2FA (dipakai kedua halaman). */
 function twofa_handle_post(array $user, string $act): void
 {
+    /* PENGAMAN (ronde 42, permintaan pemilik): penyiapan 2FA hanya untuk level
+       yang sudah DIBUKA Super Admin (`twofa_setup_allowed()`); Super Admin sendiri
+       selalu bebas. Diperiksa di SERVER juga — tombol yang disembunyikan masih
+       mungkin dikirim langsung sebagai form, jadi tidak boleh hanya mengandalkan
+       tampilan. */
+    if (($act === 'twofa_start' || $act === 'twofa_confirm') && !twofa_setup_allowed($user)) {
+        audit('Penyiapan 2FA Ditolak', 'Auth', (int)$user['id'], null, null,
+            'Level pengguna belum dibuka Super Admin untuk verifikasi 2 langkah');
+        flash('Penyiapan verifikasi 2 langkah belum dibuka Super Admin untuk level akun Anda — '
+            . 'kunci & QR tidak dibuat. Hubungi Super Admin bila akun Anda perlu memakainya.', 'error');
+        return;
+    }
     if ($act === 'twofa_start') {
         /* Buat kunci baru (belum aktif) + tampilkan QR untuk dipindai. */
         $secret = totp_secret();
@@ -90,6 +102,7 @@ function twofa_handle_post(array $user, string $act): void
 function twofa_render_card(array $user, string $formAction, string $id = 'keamanan2fa'): void
 {
     $aktif = user_2fa_active($user);
+    $boleh = twofa_setup_allowed($user);          // boleh menyiapkan (lihat login_security.php)
     $secret = (string)($user['totp_secret'] ?? '');
     $sisaKode = recovery_codes_remaining((int)$user['id']);
     $tampilKode = $_SESSION['twofa_recovery_show'] ?? null;
@@ -103,15 +116,28 @@ function twofa_render_card(array $user, string $formAction, string $id = 'keaman
     <span>
       <?= $aktif ? badge('AKTIF untuk akun ini', 'green') : badge('Belum aktif', 'gray') ?>
       <?php if ($wajib && !$aktif): ?><?= badge('Diwajibkan untuk level Anda', 'yellow') ?><?php endif; ?>
+      <?php if (!$boleh && !$aktif): ?><?= badge('Belum dibuka untuk level Anda', 'gray') ?><?php endif; ?>
     </span>
   </div>
   <div class="card-body">
     <p class="muted">Setelah aktif, setiap kali masuk Anda akan diminta <strong>6 angka dari aplikasi
       Google Authenticator</strong> (di HP) sesudah email &amp; kata sandi benar. Bila HP hilang, gunakan
-      <strong>kode pemulihan</strong>. Level yang diwajibkan saat ini:
-      <strong><?= e(twofa_level_options()[$scope] ?? $scope) ?></strong> — dapat diubah Super Admin.</p>
+      <strong>kode pemulihan</strong>. Level yang sudah <strong>dibuka Super Admin</strong> untuk
+      menyiapkan 2FA saat ini: <strong><?= e(twofa_level_options()[$scope] ?? $scope) ?></strong> —
+      hanya level itu yang dapat memindai QR; Super Admin sendiri selalu dapat menyiapkan. Levelnya
+      dapat diubah Super Admin di Developer Settings.</p>
 
-    <?php if ($aktif): ?>
+    <?php if (!$boleh && !$aktif): ?>
+      <!-- RONDE 42 (permintaan pemilik): tombol "Mulai Penyiapan" & kode QR
+           disembunyikan untuk level yang belum diberi akses Super Admin. -->
+      <div class="alert alert-warning">
+        <strong>Penyiapan verifikasi 2 langkah belum dibuka untuk level akun Anda.</strong>
+        Tombol penyiapan dan <strong>kode QR sengaja disembunyikan</strong> sampai Super Admin
+        membukanya (Developer Settings → Keamanan Login → <em>"Wajib verifikasi 2 langkah untuk"</em>).
+        Hubungi Super Admin bila akun Anda ingin memakai Google Authenticator.
+      </div>
+
+    <?php elseif ($aktif): ?>
       <div class="alert alert-info">
         <strong>2FA aktif sejak <?= e(tgl((string)$user['totp_confirmed_at'], true)) ?>.</strong>
         Kode pemulihan tersisa: <strong><?= num($sisaKode) ?></strong> dari 8.

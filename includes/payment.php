@@ -96,12 +96,17 @@ function pay_unique_code_for(string $method): int
 /** Daftar rekening bank & QRIS klinik (dari Pengaturan Sistem). */
 function pay_clinic_info(): array
 {
+    $qris = trim((string)setting('pay_qris_file'));
     return [
         'bank_name'    => trim((string)setting('pay_bank_name')),
         'bank_account' => trim((string)setting('pay_bank_account')),
         'bank_holder'  => trim((string)setting('pay_bank_holder')),
         'note'         => trim((string)setting('pay_note')),
-        'qris_file'    => trim((string)setting('pay_qris_file')),
+        'qris_file'    => $qris,
+        /* URL gambar QRIS yang SIAP DIPAKAI di halaman mana pun (termasuk dari
+           dalam modal Order Baru). Ditulis RELATIF terhadap halaman — bukan URL
+           absolut — supaya tetap benar di alamat sub-folder maupun domain sendiri. */
+        'qris_url'     => $qris !== '' ? 'qris.php?v=' . rawurlencode(substr(md5($qris), 0, 6)) : '',
     ];
 }
 

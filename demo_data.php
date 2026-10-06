@@ -35,7 +35,7 @@ function demo_plan(): array
         'Kartu member' => '8 pasien (4 per cabang)',
         'Rekam medis' => '1–2 catatan per pasien (kode ICD dari kamus resmi)',
         'Reservasi' => '10 per cabang (sebagian multi-treatment)',
-        'Transaksi' => '3–5 transaksi per hari dari awal bulan ' . DEMO_MONTHS . ' bulan lalu SAMPAI HARI INI, tiap cabang — sebagian berupa <strong>penjualan paket</strong>',
+        'Transaksi' => '3–5 transaksi per hari SAMPAI HARI INI (3 bulan terakhir), tiap cabang — sebagian berupa <strong>penjualan paket</strong>',
         'Riwayat stok' => 'Pergerakan stok dari penjualan & pemakaian bahan (termasuk restok)',
         'Audit log' => 'Jejak tindakan pengisian data demo',
     ];
@@ -44,9 +44,8 @@ function demo_plan(): array
 /** Rentang tanggal transaksi demo yang akan diisi (relatif HARI INI). */
 function demo_range_text(): string
 {
-    $mulai = (new DateTimeImmutable('first day of this month'))
-        ->modify('-' . (DEMO_MONTHS - 1) . ' months');
-    return tglIndo($mulai->format('Y-m-d')) . ' s.d. ' . tglIndo(date('Y-m-d')) . ' (hari ini)';
+    $r = demo_date_range();
+    return tglIndo($r['mulai']) . ' s.d. ' . tglIndo($r['akhir']);
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -68,7 +67,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $res = demo_seed((int)$user['id']);
             audit('Isi Data Demo', 'Pengaturan', null, $before,
                 ['hasil' => $res, 'snapshot' => $snap['file']],
-                'Data demo diisi (2 cabang, 30 pasien, 1 bulan transaksi)');
+                'Data demo diisi (2 cabang, 30 pasien, transaksi ' . demo_range_text() . ')');
             /* Akhiri dengan pergi ke dashboard supaya pengguna langsung melihat
                aplikasi yang sudah berisi data. */
             $rinci = [];
@@ -153,10 +152,12 @@ page_head('Isi Data Demo', '');
       sungguhan dari data tersebut. Data demo juga <strong>mengurangi stok</strong> seperti transaksi asli dan
       tercatat di pergerakan stok.
       <br><br>
-      <strong>Cakupan transaksi: <?= e(demo_range_text()) ?>.</strong> Data diisi <strong>sampai hari ini</strong>,
-      jadi bulan berjalan selalu ada isinya. Tombol ini bersifat <strong>melengkapi (top up)</strong>: hari yang
-      sudah punya transaksi di cabang itu dilewati, sehingga menekannya lagi bulan depan akan mengisi bulan baru
-      yang masih kosong <strong>tanpa menggandakan</strong> data lama.
+      <strong>Cakupan transaksi: <?= e(demo_range_text()) ?> (SAMPAI HARI INI).</strong> Rentangnya
+      dihitung dari tanggal hari ini, jadi menekan tombol ini lagi bulan depan akan mengisi bulan
+      baru yang masih kosong.
+      Tombol ini bersifat <strong>melengkapi (top up)</strong>: hari yang sudah punya transaksi di cabang itu
+      dilewati, sehingga pengisian ulang hanya melengkapi hari yang masih kosong <strong>tanpa menggandakan</strong>
+      data lama.
     </div>
   </div>
 </div>
@@ -166,7 +167,8 @@ page_head('Isi Data Demo', '');
     <span><?= badge('Wajib password', 'yellow') ?></span></div>
   <form method="post"
         data-heavy-confirm="ISI DATA DEMO"
-        data-heavy-warning="Sistem akan membuat <strong>2 cabang (bila belum ada), 30 pasien, rekam medis, reservasi, dan 1 bulan transaksi tiap cabang</strong> beserta master treatment/skincare/bahan.<br><br>
+        data-heavy-warning="Sistem akan membuat <strong>2 cabang (bila belum ada), 30 pasien, rekam medis, reservasi, dan transaksi tiap cabang
+        <span class="nowrap">3 bulan terakhir SAMPAI HARI INI (<?= e(demo_range_text()) ?>)</span></strong> beserta master treatment/skincare/bahan.<br><br>
           Data contoh ini <strong>ditambahkan</strong> ke database (data lama tidak dihapus) dan dapat dibersihkan kembali lewat tombol Hapus Semua Data. Snapshot pengaman dibuat otomatis lebih dulu."
         data-heavy-confirm2="PERINGATAN KEDUA (terakhir): data demo akan dibuat sekarang. Proses ini dapat berjalan beberapa detik. Lanjutkan?">
     <?= csrf_field() ?>

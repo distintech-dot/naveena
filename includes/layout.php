@@ -59,6 +59,19 @@ function brand_block(bool $small = false): string
       . '</div></div>';
 }
 
+/**
+ * Ubah teks pesan AI menjadi HTML ringan (tebal + baris baru + daftar "•").
+ * Dipakai kartu percakapan AI Developer. Isi dibersihkan lebih dulu (`e()`), jadi
+ * tidak ada HTML dari AI yang dieksekusi — hanya penanda sederhana yang diformat.
+ */
+function chat_md(string $teks): string
+{
+    $aman = e($teks);
+    $aman = preg_replace('/\*\*(.+?)\*\*/s', '<strong>$1</strong>', $aman) ?? $aman;
+    $aman = preg_replace('/(?m)^\s*[•\-]\s+/', '• ', $aman) ?? $aman;
+    return nl2br($aman);
+}
+
 function nav_items(): array
 {
     $items = [];
@@ -119,14 +132,21 @@ function nav_items(): array
     /* Menu Backup Database hanya untuk pemegang permission `backup.manage`
        (Super Admin) — level lain tidak boleh mengaksesnya sama sekali. */
     if (has_perm('backup.manage') || has_perm('maintenance.manage')) $set[] = ['backup.php', 'Backup Database', 'database', 'backup'];
-    /* MENU AI (ronde 41) — tepat DI BAWAH "Backup Database", urutannya
-       "AI Settings" lalu "AI Developer". Khusus Super Admin karena AI Developer
-       dapat mengubah kode aplikasi; server juga menolak level lain (is_super()). */
-    if (is_super()) {
-        $set[] = ['ai_settings.php', 'AI Settings', 'settings', 'ai_settings'];
-        $set[] = ['ai_developer.php', 'AI Developer', 'sparkles', 'ai_developer'];
-    }
     if ($set) $items[] = ['Pengaturan', $set];
+
+    /* KELOMPOK "AI WORKSPACE" (ronde 42, permintaan pemilik) — menu AI dipisah
+       menjadi kelompok tersendiri (seperti "Operasional", "Kasir / Transaksi",
+       "Inventory") dan diletakkan PALING BAWAH sidebar.
+       URUTAN: "AI Developer" lebih dulu, lalu "AI SETTINGS PALING BAWAH" — tempat
+       paling bawah itu sengaja disiapkan untuk menu AI Assistant berikutnya.
+       Khusus Super Admin (is_super()) karena AI Developer dapat mengubah kode
+       aplikasi; server juga menolak level lain. */
+    $ai = [];
+    if (is_super()) {
+        $ai[] = ['ai_developer.php', 'AI Developer', 'cpu', 'ai_developer'];
+        $ai[] = ['ai_settings.php', 'AI Settings', 'sliders', 'ai_settings'];
+    }
+    if ($ai) $items[] = ['AI Workspace', $ai];
     return $items;
 }
 
@@ -168,6 +188,8 @@ function icon(string $name): string
         'key'       => '<circle cx="8" cy="15" r="3"/><path d="M10.5 12.5L20 3M16 7l2 2M14 9l2 2"/>',
         'x'         => '<path d="M6 6l12 12M18 6L6 18"/>',
         'menu'      => '<path d="M4 7h16M4 12h16M4 17h16"/>',
+        'cpu'       => '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3"/>',
+        'sliders'   => '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>'
     ];
     $d = $p[$name] ?? $p['grid'];
     return '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' . $d . '</svg>';

@@ -1492,13 +1492,13 @@ $ugc = is_super() ? upload_gc_scan(true) : null;   // dengan daftar contoh berka
   <div class="card-body">
     <p class="muted">Mengisi aplikasi dengan <strong>data contoh lengkap</strong> agar semua menu, laporan, dan
       grafik langsung terlihat hidup: 2 cabang, 30 pasien, master treatment/skincare/bahan treatment,
-      rekam medis, reservasi, dan <strong>transaksi tiap cabang sampai HARI INI</strong>.</p>
+      rekam medis, reservasi, dan <strong>transaksi tiap cabang dari 1 November 2025 s.d. 5 Oktober 2026</strong>.</p>
     <div class="notice">
       Transaksi demo dibuat lewat jalur kasir yang sama (harga, stok, diskon member, dan nomor invoice dihitung
       server), sehingga laporan &amp; grafik menampilkan hasil perhitungan sungguhan — dan diisi
-      <strong>sampai hari ini</strong>, jadi bulan berjalan selalu ada datanya. Tombol ini bersifat
-      <strong>melengkapi</strong>: menekannya lagi pada bulan berikutnya mengisi bulan baru tanpa menggandakan
-      data lama. Data demo dapat dihapus kembali dengan tombol <strong>Hapus Semua Data</strong> di atas —
+      <strong>pada rentang 1 November 2025 s.d. 5 Oktober 2026</strong>. Tombol ini bersifat
+      <strong>melengkapi</strong>: pengisian ulang melewati hari yang sudah memiliki transaksi dan hanya mengisi
+      hari kosong dalam rentang tersebut. Data demo dapat dihapus kembali dengan tombol <strong>Hapus Semua Data</strong> di atas —
       keduanya sudah terintegrasi.
     </div>
     <p class="muted small mt-2">Saat ini: <?= num((int)scalar('SELECT COUNT(*) FROM patients')) ?> pasien ·

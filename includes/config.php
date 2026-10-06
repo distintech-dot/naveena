@@ -62,7 +62,7 @@ function resolve_db_path(): string
 }
 define('DB_PATH', resolve_db_path());
 define('BACKUP_DIR', dirname(APP_DIR) . '/naveena_backups');
-define('SCHEMA_VERSION', '1.25.0');
+define('SCHEMA_VERSION', '1.33.2');
 /** Naikkan angka ini setiap kali isi data/icd10.tsv atau data/icd9cm.tsv berubah,
  *  agar kamus pada database yang sudah terpasang ikut dimuat ulang otomatis. */
 define('ICD_DATASET_VERSION', '2');
@@ -77,6 +77,7 @@ require_once __DIR__ . '/clinic.php';
 require_once __DIR__ . '/patient.php';
 require_once __DIR__ . '/retention.php';
 /* AI Developer (ronde 41): bantu revisi/perbaikan/tambah fitur — hanya Super Admin. */
+require_once __DIR__ . '/ai_playbook.php';
 require_once __DIR__ . '/ai.php';
 /* Keamanan login: "ingat saya", batas tidak aktif, 2FA, lupa password, dan
    kode pemulihan. Dimuat lebih awal karena penjaga sesinya dijalankan di bawah. */
@@ -105,6 +106,18 @@ if (session_status() !== PHP_SESSION_ACTIVE) {
     session_set_cookie_params(['httponly' => true, 'samesite' => 'Lax']);
     session_name('naveena_sid');
     session_start();
+}
+
+/* PRATINJAU AI DEVELOPER (ronde 44): saat aplikasi dijalankan sebagai SALINAN
+   PRATINJAU (`ai_preview.php` memanggil berkas halaman lewat PHP CLI), sesi tidak
+   ada sehingga setiap halaman akan mengalihkan ke halaman masuk. Konstanta ini
+   hanya didefinisikan oleh proses pratinjau tersebut — aplikasi normal tidak
+   pernah mendefinisikannya, jadi tidak ada perubahan perilaku di produksi.
+   Pratinjau memakai SALINAN BASIS DATA di folder salinannya sendiri, sehingga
+   tidak mungkin mengubah data asli. */
+if (defined('AI_PREVIEW_USER_ID')) {
+    $_SESSION['user_id'] = (int)AI_PREVIEW_USER_ID;
+    $_SESSION['last_seen'] = time();
 }
 
 require_once __DIR__ . '/schema.php';
@@ -237,6 +250,22 @@ function badge($text, string $tone = 'gray'): string
     return '<span class="badge badge-' . e($tone) . '">' . e($text) . '</span>';
 }
 /** Warna badge untuk kode role (dipakai daftar user & matriks hak akses). */
+/**
+ * Keterangan level akun yang sedang masuk — dipakai pada pesan penolakan akses
+ * supaya pengguna tahu SIAPA yang sedang masuk dan kenapa ditolak.
+ */
+function deny_role_detail(string $butuh = 'Super Admin'): string
+{
+    $u = current_user();
+    if (!$u) return '';
+    $peran = (string)($u['role_name'] ?? '');
+    $cab = (string)($u['branch_name'] ?? '');
+    return 'Akun Anda saat ini berlevel ' . ($peran !== '' ? $peran : (string)($u['role_code'] ?? '-'))
+        . ($cab !== '' ? ' (' . $cab . ')' : '') . '. Halaman ini memerlukan level ' . $butuh . '. '
+        . 'Bila Anda perlu memakainya, minta Super Admin menaikkan level akun Anda (Manajemen User → Hak Akses) '
+        . 'atau masuk memakai akun yang berhak.';
+}
+
 function user_role_tone(string $code): string
 {
     return [
@@ -434,8 +463,47 @@ function require_perm(string $code): void
         deny('Anda tidak memiliki hak akses untuk modul ini.');
     }
 }
-function deny(string $msg = '403 Forbidden', string $detail = ''): void
+/**
+ * Tolak akses dengan penjelasan yang JUJUR dan jelas.
+ *
+ * Ada DUA keadaan yang berbeda dan tidak boleh dicampur (perbaikan ronde 48):
+ *   1. Pengguna BELUM MASUK (sesi berakhir / keluar / belum pernah login) —
+ *      dulu halaman ini menampilkan "Akses Ditolak (403): hanya dapat dibuka oleh
+ *      Super Admin", padahal masalahnya sesi habis. Sekarang pengguna diarahkan ke
+ *      halaman masuk dengan keterangan sesi berakhir + kembali ke halaman tujuan.
+ *   2. Pengguna SUDAH MASUK tetapi levelnya tidak berhak — barulah 403 ditampilkan,
+ *      dengan keterangan level yang dibutuhkan dan tombol yang jelas.
+ *
+ * @param string $msg    pesan singkat untuk pengguna
+ * @param string $detail keterangan tambahan (mis. level/izin yang dibutuhkan)
+ */
+function deny(string $msg = 'Anda tidak memiliki hak akses untuk halaman ini.', string $detail = ''): void
 {
+    $u = current_user();
+    if (!$u) {
+        /* Belum masuk / sesi berakhir. */
+        if (is_ajax()) {
+            http_response_code(401);
+            header('Content-Type: application/json');
+            echo json_encode(['ok' => false, 'relogin' => true,
+                'error' => 'Sesi Anda sudah berakhir. Silakan masuk kembali.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $_SESSION['logout_notice'] = 'Sesi Anda sudah berakhir (atau Anda baru keluar dari aplikasi). '
+            . 'Silakan masuk kembali untuk melanjutkan.';
+        $target = 'login.php';
+        $path = (string)parse_url((string)($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
+        $q = (string)($_SERVER['QUERY_STRING'] ?? '');
+        if ($path !== '' && basename($path) !== 'login.php') {
+            $target .= '?next=' . rawurlencode($path . ($q !== '' ? '?' . $q : ''));
+        }
+        if (!headers_sent()) { header('Location: ' . $target); exit; }
+        http_response_code(401);
+        echo '<!DOCTYPE html><meta charset="utf-8"><title>Sesi berakhir</title>'
+            . '<p style="font:15px system-ui;padding:24px">Sesi Anda sudah berakhir. '
+            . '<a href="' . e($target) . '">Masuk kembali</a>.</p>';
+        exit;
+    }
     http_response_code(403);
     if (is_ajax()) {
         header('Content-Type: application/json');
@@ -628,7 +696,23 @@ function verify_csrf(): void
 {
     $t = $_POST['_csrf'] ?? '';
     if (!$t || !hash_equals($_SESSION['csrf'] ?? '', (string)$t)) {
-        deny('Sesi tidak valid (CSRF). Silakan muat ulang halaman.');
+        /* Pesan dibedakan supaya pengguna tahu apa yang harus dilakukan:
+           • $_POST benar-benar KOSONG  → biasanya halaman dibuka ulang tanpa data
+             (mis. alat uji/peramban mengirim ulang permintaan tanpa isi) atau sesi
+             sudah berganti → cukup muat ulang halaman lalu ulangi tindakan;
+           • $_POST ada isinya tetapi tokennya tidak cocok → sesi berganti di tengah
+             jalan (mis. login ulang di tab lain). */
+        if (!$t) {
+            deny('Permintaan Anda tidak terkirim lengkap sehingga tidak dapat diproses.',
+                'Halaman yang dikirim tidak memuat data apa pun. Ini biasanya terjadi bila '
+                . 'halaman dimuat ulang tanpa mengisi form, atau sesi Anda baru berganti. '
+                . 'Muat ulang halaman (tombol di bawah), lalu ulangi tindakan tadi — '
+                . 'data Anda TIDAK tersimpan setengah jalan.');
+        }
+        deny('Sesi Anda berganti sehingga tombol ini tidak dapat diproses (keamanan).',
+            'Token keamanan halaman ini tidak lagi cocok dengan sesi Anda — biasanya karena '
+            . 'Anda masuk ulang di tab/perangkat lain. Muat ulang halaman lalu ulangi tindakan '
+            . 'tadi. Tidak ada data yang tersimpan setengah jalan.');
     }
     /* Pencegahan data ganda (mis. klik Simpan berkali-kali di jaringan lambat). */
     guard_single_submit();

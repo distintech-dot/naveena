@@ -1,6 +1,9 @@
 <?php
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/layout.php';
+/* receipt_email_state() dipakai untuk menampilkan keadaan struk EMAIL secara
+   terpisah dari struk WhatsApp. */
+require_once __DIR__ . '/includes/mailer.php';
 require_perm('order.view');
 $user = current_user();
 
@@ -254,17 +257,52 @@ page_head('Detail Transaksi ' . $o['invoice_number'], 'order');
           <?php endif; ?>
         </dd>
         <dt>Catatan</dt><dd><?= e($o['notes'] ?: '-') ?></dd>
+        <?php
+        /* STRUK WHATSAPP dan STRUK EMAIL ditampilkan sebagai DUA baris terpisah dengan
+           kolom basis data masing-masing. Sebelumnya pengiriman email menulis ke kolom
+           WhatsApp, sehingga baris "Struk WhatsApp" menampilkan ALAMAT EMAIL pasien
+           (membingungkan — perbaikan ronde 48). Data lama yang masih memakai kolom
+           WhatsApp untuk email tetap dibaca sebagai "Email" supaya tidak salah tampil. */
+        $waTo = (string)($o['receipt_sent_to'] ?? '');
+        $waVia = (string)($o['receipt_sent_via'] ?? '');
+        $waSebenarnyaEmail = ($waVia === 'Email' || ($waTo !== '' && filter_var($waTo, FILTER_VALIDATE_EMAIL) !== false
+            && in_array((string)($o['receipt_status'] ?? ''), ['sent', 'failed'], true)));
+        if ($waSebenarnyaEmail && !isset($o['receipt_email_to'])) { $o['receipt_email_to'] = $waTo; }
+        if ($waSebenarnyaEmail && !isset($o['receipt_email_status']) && (string)$o['receipt_status'] === 'sent') {
+            $o['receipt_email_status'] = 'sent';
+            $o['receipt_email_sent_at'] = (string)($o['receipt_sent_at'] ?? '');
+        }
+        $emailState = function_exists('receipt_email_state') ? receipt_email_state($o)
+            : ['label' => 'Belum dikirim', 'tone' => 'gray', 'to' => '', 'at' => '', 'catatan' => '', 'alamatValid' => false];
+        ?>
         <dt>Struk WhatsApp</dt><dd>
-          <?php if ($o['receipt_sent_at'] && $o['receipt_status'] === 'sent'): ?>
-            <?= badge('Terkirim via API', 'green') ?> ke <?= e($o['receipt_sent_to']) ?>
-            <div class="small muted"><?= e(tgl($o['receipt_sent_at'], true)) ?><?= $o['receipt_sent_via'] ? ' · ' . e($o['receipt_sent_via']) : '' ?></div>
-          <?php elseif ($o['receipt_sent_at']): ?>
-            <?= badge('Disiapkan (belum terkirim)', 'yellow') ?> untuk <?= e($o['receipt_sent_to']) ?>
+          <?php if (!$waSebenarnyaEmail && $o['receipt_sent_at'] && $o['receipt_status'] === 'sent'): ?>
+            <?= badge('Terkirim via API', 'green') ?> ke <?= e($waTo) ?>
+            <div class="small muted"><?= e(tgl($o['receipt_sent_at'], true)) ?><?= $waVia ? ' · ' . e($waVia) : '' ?></div>
+          <?php elseif (!$waSebenarnyaEmail && $o['receipt_sent_at']): ?>
+            <?= badge('Disiapkan (belum terkirim)', 'yellow') ?> untuk <?= e($waTo) ?>
             <div class="small muted"><?= e(tgl($o['receipt_sent_at'], true)) ?> · pesan dibuka di WhatsApp perangkat petugas; server tidak mengirim sendiri.</div>
           <?php else: ?>
-            <span class="muted">Belum dikirim ke WhatsApp.</span>
+            <span class="muted">Belum dikirim lewat WhatsApp.</span>
           <?php endif; ?>
           <?php if ($o['receipt_url']): ?><div><a class="small" href="<?= e($o['receipt_url']) ?>" target="_blank">tautan struk PDF</a></div><?php endif; ?>
+        </dd>
+        <dt>Struk Email</dt><dd>
+          <?= badge($emailState['label'], $emailState['tone']) ?>
+          <?php if ($emailState['to'] !== ''): ?> ke <strong><?= e($emailState['to']) ?></strong><?php endif; ?>
+          <?php if ($emailState['at'] !== ''): ?>
+            <div class="small muted"><?= e(tgl($emailState['at'], true)) ?></div>
+          <?php endif; ?>
+          <div class="small muted"><?= e($emailState['catatan']) ?></div>
+          <?php
+          $emailPasien = trim((string)($o['patient_email'] ?? ''));
+          if ($emailPasien === ''): ?>
+            <div class="small">Pasien belum punya email — <a href="pasien.php?edit=<?= (int)$o['patient_id'] ?>">isi di Data Pasien</a>
+              atau isi langsung saat menekan tombol Kirim Email.</div>
+          <?php elseif ($emailState['status'] !== 'sent' || $emailState['to'] !== $emailPasien): ?>
+            <div class="small">Email pasien saat ini: <strong><?= e($emailPasien) ?></strong>
+              <?= filter_var($emailPasien, FILTER_VALIDATE_EMAIL) === false ? ' (bentuknya tidak sah — perbaiki di Data Pasien)' : '' ?></div>
+          <?php endif; ?>
         </dd>
       </dl>
     </div>

@@ -75,6 +75,13 @@ try {
     if ($res['ok'] && $to !== '' && trim((string)($patient['email'] ?? '')) === '' && $patient) {
         q('UPDATE patients SET email = ?, updated_at = datetime("now","localtime") WHERE id = ?', [$to, (int)$patient['id']]);
     }
+    /* Hasil pengiriman struk LEWAT EMAIL dicatat pada kolom EMAIL (`receipt_email_*`),
+       TERPISAH dari kolom WhatsApp — supaya di halaman Detail Transaksi jelas mana
+       yang dikirim lewat WhatsApp dan mana yang lewat email. Kegagalan tetap dicatat
+       (status 'failed') agar terlihat apa adanya, bukan hanya di log. */
+    q('UPDATE orders SET receipt_email_status = ?, receipt_email_to = ?' .
+      ($res['ok'] ? ', receipt_email_sent_at = datetime("now","localtime")' : '') . '
+       WHERE id = ?', [$res['ok'] ? 'sent' : 'failed', $to !== '' ? $to : null, $id]);
     q('INSERT INTO email_report_logs (recipient, period, status, message, created_at)
        VALUES (?,?,?,?,datetime("now","localtime"))',
         [$to, 'struk ' . $o['invoice_number'], $res['ok'] ? 'sent' : 'failed',

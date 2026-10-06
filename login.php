@@ -16,6 +16,20 @@ if (gp('keluar') === '1') {
 }
 $notice = (string)($_SESSION['logout_notice'] ?? '');
 unset($_SESSION['logout_notice']);
+/* HALAMAN TUJUAN setelah masuk: dipakai bila pengguna diarahkan ke sini karena
+   sesinya berakhir (deny() menambahkan ?next=). Nilai HANYA diterima bila berupa
+   path di aplikasi ini (tanpa "://" dan tanpa "//") supaya tidak bisa dipakai
+   mengalihkan ke situs lain. */
+$next = trim((string)($_GET['next'] ?? $_POST['next'] ?? ''));
+/* Path aplikasi memang dimulai "/" (mis. "/ai_developer.php") sehingga karakter itu
+   HARUS diterima. Yang ditolak: URL absolut/protokol-relatif ("//situs-lain") dan
+   karakter yang bisa menyusupkan HTML. */
+if ($next === '' || strpos($next, '//') !== false || strpos($next, '://') !== false
+    || strpos($next, ':') !== false || preg_match('~[<>"\']~', $next)) {
+    $next = '';
+} else {
+    $next = ltrim($next, '/');
+}
 
 $email = '';
 $err = '';
@@ -41,6 +55,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['2fa_pending'] = true;
                 $_SESSION['2fa_fail'] = 0;
                 $_SESSION['2fa_remember'] = $ingat;      // diteruskan setelah kode benar
+                $_SESSION['login_next'] = $next;         // halaman tujuan setelah 2FA berhasil
                 audit('Login Tahap 1 (perlu 2FA)', 'Auth', (int)$u['id'], null, ['email' => $u['email']],
                     'Email & kata sandi benar — menunggu kode verifikasi 2 langkah');
                 header('Location: two_factor.php');
@@ -94,7 +109,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $mr = member_rollover_run((int)$u['id']);
                 if ($mr['ran']) $_SESSION['member_rollover_result'] = $mr;
             } catch (Throwable $e) { /* jangan blokir login */ }
-            header('Location: dashboard.php');
+            header('Location: ' . ($next !== '' ? $next : 'dashboard.php'));
             exit;
         }
         $_SESSION['login_fail']++;
@@ -103,6 +118,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $err = 'Email atau password salah.';
     }
 }
+if ($notice === '') $notice = trim((string)($_SESSION['deny_notice'] ?? ''));
+unset($_SESSION['deny_notice']);
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -162,6 +179,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
       <form method="post" data-loading="1">
         <?= csrf_field() ?>
+        <?php if ($next !== ""): ?><input type="hidden" name="next" value="<?= e($next) ?>"><?php endif; ?>
         <div class="form-grid">
           <div class="field">
             <label for="email">Email</label>

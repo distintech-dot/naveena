@@ -62,6 +62,24 @@ function twofa_required_for(?string $roleCode): bool
     return true;                                   // 'all'
 }
 
+/**
+ * Apakah pengguna ini BOLEH MENYIAPKAN (memindai QR) verifikasi 2 langkah?
+ *
+ * RONDE 42 (permintaan pemilik): penyiapan 2FA hanya dibuka untuk level yang
+ * sudah DIBERI AKSES oleh Super Admin lewat
+ * Developer Settings → Keamanan Login → "Wajib verifikasi 2 langkah untuk".
+ * Level lain hanya melihat keterangannya: tombol "Mulai Penyiapan" dan kode QR
+ * SENGAJA tidak dirender (dan ditolak di server, bukan hanya disembunyikan).
+ * Super Admin sendiri selalu bebas menyiapkan akunnya — supaya pemilik sistem
+ * tidak pernah terkunci hanya karena salah memilih cakupan level.
+ */
+function twofa_setup_allowed(array $u): bool
+{
+    $code = (string)($u['role_code'] ?? '');
+    if ($code === 'super_admin') return true;
+    return twofa_required_for($code);
+}
+
 /* ------------------------------------------------------------------ *
  * "INGAT SAYA" — token di cookie (bukan di sesi) supaya betul-betul
  * bertahan walau peramban ditutup, dengan masa berlaku yang diatur.

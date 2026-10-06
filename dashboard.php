@@ -135,7 +135,6 @@ $recent = all("SELECT o.*, p.name AS patient_name, b.name AS branch_name
                FROM orders o JOIN patients p ON p.id=o.patient_id JOIN branches b ON b.id=o.branch_id
                WHERE 1=1 {$bo[0]} ORDER BY o.id DESC LIMIT 8", $bo[1]);
 $alerts = stock_alerts(6);
-$alertCount = stock_alert_count();
 
 page_head('Dashboard', 'dashboard');
 
@@ -225,7 +224,7 @@ if (!empty($_SESSION['member_rollover_result'])) {
   </div>
 </div>
 
-<div class="grid g4">
+<div class="grid <?= member_card_enabled() ? 'g4' : 'g3' ?>">
   <div class="stat accent">
     <span class="lbl">Pendapatan Hari Ini</span>
     <span class="val"><?= money($revToday) ?></span>
@@ -248,11 +247,6 @@ if (!empty($_SESSION['member_rollover_result'])) {
     <span class="sub"><a href="pasien.php">Kartu member diterbitkan →</a></span>
   </div>
   <?php endif; ?>
-  <div class="stat">
-    <span class="lbl">Stok Menipis</span>
-    <span class="val"><?= num($alertCount) ?></span>
-    <span class="sub"><a href="inventory_movement.php?alert=1">Periksa inventory →</a></span>
-  </div>
 </div>
 
 <?php if ($fin): ?>
@@ -492,7 +486,7 @@ $chartBranchH = $branchCount > 8 ? min(900, 190 + ($branchCount * 34)) : 320;
     </div>
   </div>
   <div class="card">
-    <div class="card-head"><h3>Stok Menipis / Habis</h3><a class="btn btn-sm" href="inventory_movement.php?alert=1">Kelola</a></div>
+    <div class="card-head"><h3>Stok Menipis / Habis (<?= num(count($alerts)) ?>)</h3><a class="btn btn-sm" href="inventory_movement.php?alert=1">Kelola</a></div>
     <div class="card-body">
       <?php if (!$alerts): ?>
         <p class="muted">Semua stok dalam kondisi aman.</p>

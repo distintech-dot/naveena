@@ -334,12 +334,19 @@ function order_create(array $in, array $user, int $branchId): array
             if ($ro) {
                 $res = send_receipt_email($ro, $patientEmail);
                 if ($res['ok']) {
-                    q('UPDATE orders SET receipt_status = ?, receipt_sent_at = datetime("now","localtime"),
-                           receipt_sent_to = ?, receipt_sent_via = ? WHERE id = ?',
-                       ['sent', $patientEmail, 'Email', $orderId]);
+                    /* Ditulis ke kolom EMAIL (`receipt_email_*`), BUKAN kolom WhatsApp.
+                       Sebelumnya kolom WhatsApp ikut terisi alamat email sehingga halaman
+                       Detail Transaksi menampilkan email di baris "Struk WhatsApp". */
+                    q('UPDATE orders SET receipt_email_status = ?, receipt_email_sent_at = datetime("now","localtime"),
+                           receipt_email_to = ? WHERE id = ?',
+                       ['sent', $patientEmail, $orderId]);
                     $emailInfo = ' Struk dikirim ke email ' . $patientEmail . '.';
                 } else {
                     $emailInfo = ' Struk GAGAL dikirim ke email ' . $patientEmail . ' — ' . $res['error'];
+                    /* Percobaan yang GAGAL tetap dicatat supaya terlihat apa adanya
+                       di halaman detail transaksi (bukan hanya tersembunyi di log). */
+                    q('UPDATE orders SET receipt_email_status = ?, receipt_email_to = ? WHERE id = ?',
+                       ['failed', $patientEmail, $orderId]);
                 }
                 q('INSERT INTO email_report_logs (recipient, period, status, message, created_at)
                    VALUES (?,?,?,?,datetime("now","localtime"))',
@@ -348,6 +355,8 @@ function order_create(array $in, array $user, int $branchId): array
             }
         }
     } elseif (setting('email_receipt_auto') === '1' && $patientEmail === '') {
+        q('UPDATE orders SET receipt_email_status = ?, receipt_email_to = NULL WHERE id = ?',
+           ['no_email', $orderId]);
         $emailInfo = ' Pasien belum punya email — tambahkan email di data pasien bila ingin mengirim struk.';
     }
 

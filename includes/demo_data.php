@@ -14,8 +14,8 @@
  *   - 30 pasien (dibagi ke 2 cabang), sebagian memakai Kartu Member,
  *   - rekam medis (dengan kode ICD dari kamus resmi),
  *   - reservasi (termasuk yang multi-treatment),
- *   - transaksi tiap cabang dari awal bulan 3 bulan lalu SAMPAI HARI INI
- *     (item treatment/skincare/bahan + pembayaran).
+ *   - transaksi tiap cabang dari awal bulan DEMO_MONTHS-1 bulan lalu SAMPAI HARI
+ *     INI (item treatment/skincare/bahan + pembayaran).
  *
  * Transaksi dibuat lewat order_create() — SATU PINTU yang sama dengan kasir —
  * sehingga harga, stok, diskon member, nomor invoice, dan jejak stok konsisten
@@ -28,11 +28,32 @@
  * HARI yang sudah punya transaksi di cabang itu DILEWATI. Karena itu menekan
  * tombol "Isi Data Demo" lagi pada bulan berikutnya akan MELENGKAPI bulan baru
  * (yang tadinya kosong) tanpa menggandakan data bulan yang sudah terisi.
+ *
+ * JEBAKAN YANG PERNAH TERJADI (jangan diulang): rentang ini SEMPAT ditulis sebagai
+ * tanggal TETAP ('2025-11-01' s.d. '2026-10-05'). Akibatnya tombol "Isi Data Demo"
+ * berhenti menambah data setelah tanggal itu — bulan baru tetap kosong, dan uji
+ * `hapus-data-demo` gagal. Selalu hitung rentangnya dari TANGGAL HARI INI.
  */
 declare(strict_types=1);
 
 /** Berapa bulan data transaksi demo dibuat (termasuk bulan berjalan). */
 const DEMO_MONTHS = 3;
+
+/**
+ * Rentang tanggal data demo (bergulir, dihitung saat dipanggil).
+ * @return array{mulai:string,akhir:string}
+ */
+function demo_date_range(): array
+{
+    /* PENTING: ->setTime(0,0) WAJIB pada kedua ujung. `first day of this month`
+       masih memuat JAM saat ini (mis. 04:57) sehingga tanggal berjam 04:57 tidak
+       pernah "<= hari ini 00:00" dan HARI TERAKHIR (hari ini) terlewat — data demo
+       pun berhenti sehari sebelumnya. */
+    $mulai = (new DateTimeImmutable('first day of this month'))
+        ->modify('-' . (DEMO_MONTHS - 1) . ' months')->setTime(0, 0);
+    $akhir = (new DateTimeImmutable('today'))->setTime(0, 0);
+    return ['mulai' => $mulai->format('Y-m-d'), 'akhir' => $akhir->format('Y-m-d')];
+}
 
 /** Daftar cabang contoh: dipakai bila cabang belum ada / kurang dari 2. */
 function demo_branch_presets(): array
@@ -451,6 +472,11 @@ function demo_seed(?int $userId = null): array
             if (!$docs || !$ths || !$trs) throw new RuntimeException('Master data cabang ' . $b['name'] . ' belum lengkap.');
 
             /* Rekam medis: 1–2 catatan per pasien (contoh SOAP + kode ICD) */
+            /* Tanggal rekam medis dibuat di dalam rentang data demo yang sama
+               (bergulir), supaya tidak ada rekam medis bertanggal "masa depan". */
+            $rentang = demo_date_range();
+            $medicalStart = new DateTimeImmutable($rentang['mulai']);
+            $medicalDays = max(1, (int)$medicalStart->diff(new DateTimeImmutable($rentang['akhir']))->format('%a'));
             foreach ($patientIds[$bid] as $pi => $pid) {
                 /* TOP UP: pasien yang sudah punya rekam medis tidak ditambahi lagi. */
                 if ((int)scalar('SELECT COUNT(*) FROM medical_records WHERE patient_id = ?', [$pid]) > 0) continue;
@@ -458,7 +484,7 @@ function demo_seed(?int $userId = null): array
                 for ($k = 0; $k < $recs; $k++) {
                     $doc = $docs[array_rand($docs)];
                     $th  = $ths[array_rand($ths)];
-                    $date = date('Y-m-d', strtotime('-' . random_int(1, 30) . ' days'));
+                    $date = $medicalStart->modify('+' . random_int(0, $medicalDays) . ' days')->format('Y-m-d');
                     $icd10 = demo_icd('icd10', $icd10Pool[($pi + $k) % count($icd10Pool)]);
                     $icd9  = demo_icd('icd9cm', $icd9Pool[($k) % count($icd9Pool)]);
                     $status = $k === 0 ? 'Selesai' : ['Proses', 'Terjadwal'][$pi % 2];
@@ -513,8 +539,8 @@ function demo_seed(?int $userId = null): array
 
             /* Transaksi: dari awal bulan DEMO_MONTHS-1 bulan lalu SAMPAI HARI INI,
                3–5 transaksi per hari per cabang. Hari yang sudah punya transaksi
-               di cabang ini DILEWATI, jadi menekan tombol lagi bulan depan hanya
-               melengkapi hari/bulan yang masih kosong (tidak menggandakan). */
+               di cabang ini DILEWATI, jadi pengisian ulang hanya melengkapi hari
+               yang masih kosong dalam rentang tetap (tidak menggandakan). */
             $users = all('SELECT id, name, branch_id FROM users WHERE branch_id = ? AND status = "active"', [$bid]);
             $cashier = $users ? ['id' => (int)$users[0]['id'], 'name' => (string)$users[0]['name']] : $user;
             $methods = ['Cash', 'QRIS', 'Transfer', 'Debit'];
@@ -522,9 +548,9 @@ function demo_seed(?int $userId = null): array
                JAM saat ini (mis. 04:57), sehingga bila tidak dinolkan, tanggal
                dengan jam 04:57 tidak pernah "<= hari ini 00:00" dan HARI TERAKHIR
                (hari ini) terlewat — itulah sebabnya bulan berjalan bisa kosong. */
-            $mulai = (new DateTimeImmutable('first day of this month'))
-                ->modify('-' . (DEMO_MONTHS - 1) . ' months')->setTime(0, 0);
-            $hariIni = (new DateTimeImmutable('today'))->setTime(0, 0);
+            $rentangTx = demo_date_range();
+            $mulai = new DateTimeImmutable($rentangTx['mulai']);
+            $hariIni = new DateTimeImmutable($rentangTx['akhir']);
             $hariList = [];
             for ($d = $mulai; $d <= $hariIni; $d = $d->modify('+1 day')) $hariList[] = $d->format('Y-m-d');
             foreach ($hariList as $tanggal) {
@@ -616,7 +642,7 @@ function demo_seed(?int $userId = null): array
             audit('Isi Data Demo', 'Kasir', null, null,
                 ['cabang' => $b['name'], 'transaksi_baru' => $out['transaksi'],
                  'hari_terisi' => $out['hari_terisi'] ?? 0, 'hari_dilewati' => $out['hari_dilewati'] ?? 0],
-                'Transaksi contoh ' . DEMO_MONTHS . ' bulan (sampai hari ini) untuk data demo');
+                'Transaksi contoh ' . $rentangTx['mulai'] . ' s.d. ' . $rentangTx['akhir'] . ' untuk data demo');
         }
     } finally {
         if ($savedActive !== null) $_SESSION['active_branch'] = $savedActive;

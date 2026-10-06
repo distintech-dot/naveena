@@ -1021,3 +1021,53 @@ form.is-submitting{position:relative}
 @media (max-width:640px){
   .fc-row{grid-template-columns:1fr}
 }
+
+/* ---------- Percakapan AI Developer (ronde 45) ---------- */
+.chat-step{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;padding:6px 10px;margin:6px 0;
+  border-left:3px solid var(--line);background:#fff;border-radius:0 10px 10px 0;font-size:.82rem}
+.chat-step .chat-ico{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;
+  border-radius:50%;background:var(--brand-tint);color:var(--ink-2);font-weight:700;flex:0 0 18px;font-size:.7rem}
+.chat-step-ok{border-left-color:#2E7D32}
+.chat-step-ok .chat-ico{background:#E6F4E9;color:#2E7D32}
+.chat-step-error{border-left-color:#C62828}
+.chat-step-error .chat-ico{background:#FDEAEA;color:#C62828}
+.chat-step-warn{border-left-color:#E9A800}
+.chat-step-warn .chat-ico{background:#FFF6DD;color:#8A6300}
+.chat-step-work .chat-ico{background:var(--brand-chip);color:var(--brand-accent-dark)}
+.chat-det{flex-basis:100%;margin-left:26px}
+.chat-ai{font-size:.86rem;line-height:1.6}
+.chat-ai strong{color:var(--ink)}
+
+/* ---------- Kotak bergulir AI Developer (ronde 46, permintaan pemilik) ----------
+   Kartu "Percakapan & Proses" dan "Rincian teknis" bisa menjadi sangat panjang
+   (puluhan langkah / puluhan baris diff). Batas tinggi + gulir membuat halaman
+   tidak memanjang ke bawah dan prosesnya tetap nyaman dibaca. */
+.ai-scrollbox{overflow-y:auto;overscroll-behavior:contain;padding-right:6px}
+.ai-scrollbox::-webkit-scrollbar{width:10px}
+.ai-scrollbox::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px}
+.ai-scrollbox::-webkit-scrollbar-track{background:transparent}
+
+/* Kotak perintah yang TUMBUH mengikuti isi: kecil bila perintah pendek, besar
+   bila perintah panjang (tanpa harus menggulir di dalam kotak kecil). */
+textarea.auto-grow{min-height:118px;max-height:56vh;overflow-y:auto;resize:vertical;transition:height .05s linear}
+
+/* ---------- Rincian item pada kartu pembayaran (ronde 48) ---------- */
+.pm-recap{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;max-height:34vh;overflow:auto}
+.pm-recap-tbl{width:100%;border-collapse:collapse;font-size:.84rem}
+.pm-recap-tbl td{padding:5px 4px;border-bottom:1px dashed var(--line);vertical-align:top}
+.pm-recap-tbl tr:last-child td{border-bottom:none}
+.pm-recap-tbl td.num{text-align:right;font-weight:600;white-space:nowrap}
+/* Kotak cara pembayaran (pink) pada kartu langkah pembayaran: isinya rata TENGAH —
+   teks maupun gambar QRIS (permintaan pemilik, ronde 49). */
+.pm-clinic{text-align:center}
+.pm-clinic img{display:block;margin:8px auto 0}
+.pm-clinic .small.mt-1{text-align:center}
+
+/* ---------- Bilah tombol kartu AI Developer (ronde 48) ----------
+   Tombol penting (pratinjau, uji staging) diletakkan di bilah ini yang SELALU
+   terlihat di atas kartu — sebelumnya berada di dalam kotak bergulir sehingga
+   pengguna harus menggulir dulu untuk menemukannya. */
+.card-actions-bar{background:var(--brand-tint);border:1px solid var(--line);border-radius:12px;
+  padding:12px 14px;margin:0 0 14px}
+.card-actions-bar .btn{flex:0 0 auto}
+@media (max-width:640px){.card-actions-bar .btn{width:100%;justify-content:center}}
