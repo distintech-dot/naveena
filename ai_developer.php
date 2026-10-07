@@ -93,6 +93,32 @@ if (gp('log') === '1') {
 /* ------------------------------------------------------------------ *
  * Titik JSON untuk memantau pekerjaan berjalan
  * ------------------------------------------------------------------ */
+if (gp('ajax') === 'job') {
+    /* ==========================================================================
+     * TITIK AJAX JOB (ronde 53) — RINGAN & TANPA MEMUAT ULANG HALAMAN.
+     * Mengembalikan status job, progres nyata, checklist langkah, heartbeat,
+     * retry/cancel, dan ringkasan aktivitas. Sekaligus memulihkan worker yang
+     * berhenti merespons (stalled) bila masih aman — jadi refresh browser TIDAK
+     * menghilangkan pekerjaan.
+     * ======================================================================== */
+    header('Content-Type: application/json');
+    $id = (int)gp('id');
+    if ($id <= 0) { echo json_encode(['ok' => false, 'error' => 'id kosong']); exit; }
+    $pulih = ai_job_recover_stalled($id);
+    $v = ai_job_view($id);
+    $t = ai_task($id);
+    $view = $t ? ai_task_status_view($t) : null;
+    echo json_encode([
+        'ok' => true, 'job' => $v,
+        'task_status' => $t ? (string)$t['status'] : '',
+        'workflow' => $view ? $view['workflow'] : '',
+        'audit_status' => $t ? (string)($t['audit_status'] ?? '') : '',
+        'pulih' => $pulih,
+        'berjalan' => (bool)$v['berjalan'],
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 if (gp('ajax') === 'status') {    header('Content-Type: application/json');
     $id = (int)gp('id');
     $t = $id > 0 ? ai_task($id) : null;
@@ -169,6 +195,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
          * dan perintah "lanjutkan dan terapkan". Tidak ada lagi tombol uji staging
          * maupun tombol terapkan yang harus dicari-cari.
          * ========================================================================== */
+        if ($aksi === 'stop') {
+            $idStop = (int)($_POST['id'] ?? 0);
+            $t = $idStop > 0 ? ai_task($idStop) : null;
+            if (!$t) throw new RuntimeException('Tugas tidak ditemukan.');
+            $ok = ai_job_request_cancel($idStop);
+            audit('Hentikan Pekerjaan AI', 'AI Developer', $idStop, null,
+                ['job' => ai_job_summary_line(ai_job_view($idStop))], 'Pemilik menghentikan pekerjaan AI');
+            flash($ok ? 'Permintaan BERHENTI dikirim. Worker menutup pekerjaan ini dalam beberapa detik — '
+                . 'statusnya berubah menjadi "Dihentikan oleh Anda".'
+                : 'Tidak ada pekerjaan yang sedang berjalan untuk permintaan ini.', $ok ? 'warning' : 'error');
+            header('Location: ai_developer.php?id=' . $idStop);
+            exit;
+        }
         if ($aksi === 'pesan') {
             $idPesan = (int)($_POST['id'] ?? 0);
             $teksPesan = trim((string)($_POST['request'] ?? ''));
@@ -556,10 +595,72 @@ $contoh = [
         <?php endif; ?>
       </div>
     <?php else: ?>
+      <?php
+      /* ==========================================================================
+       * PANEL JOB (ronde 53) — proses kerja terlihat LANGSUNG di kartu chat:
+       * job_id, status, progres nyata, checklist langkah, heartbeat, retry, dan
+       * tombol BERHENTI. Seluruhnya diperbarui lewat AJAX ringan (tanpa memuat
+       * ulang halaman) sehingga pemilik tetap dapat menggulir & membaca percakapan.
+       * ======================================================================== */
+      $jobView = ai_job_view((int)$t['id']);
+      ?>
+      <div class="job-panel" id="jobPanel" data-task="<?= (int)$t['id'] ?>">
+        <div class="job-head">
+          <span class="job-id"><?= e($jobView['job_id'] !== '' ? 'Job ' . $jobView['job_id'] : 'Job belum dimulai') ?></span>
+          <span class="badge badge-<?= e($jobView['tone']) ?>" id="jobStatus"><?= e($jobView['status']) ?></span>
+          <span class="muted small" id="jobHeart"><?= $jobView['berjalan']
+            ? 'heartbeat ' . (int)$jobView['umur'] . 's lalu' : '' ?></span>
+          <?php if ($jobView['berjalan']): ?>
+            <form method="post" class="inline-form" style="margin-left:auto"
+                  data-confirm="Hentikan pekerjaan ini? Worker akan menutup pekerjaan dengan rapi.">
+              <?= csrf_field() ?><input type="hidden" name="action" value="stop">
+              <input type="hidden" name="id" value="<?= (int)$t['id'] ?>">
+              <button class="btn btn-sm btn-danger" type="submit" id="jobStop"><?= icon('x') ?> Berhenti</button>
+            </form>
+          <?php endif; ?>
+        </div>
+        <div class="job-bar"><i id="jobBar" style="width:<?= (int)$jobView['progress'] ?>%"></i></div>
+        <div class="job-meta muted small" id="jobMeta">
+          <?= (int)$jobView['progress'] ?>% · <span id="jobStep"><?= e($jobView['current_step_label'] !== ''
+            ? $jobView['current_step_label'] : (string)($t['stage'] ?? '')) ?></span>
+          <?= $jobView['retry'] > 0 ? ' · percobaan ulang ' . (int)$jobView['retry'] : '' ?>
+          <?= $jobView['note'] !== '' ? ' · ' . e($jobView['note']) : '' ?>
+        </div>
+        <ul class="job-steps" id="jobSteps">
+          <?php foreach ($jobView['langkah'] as $l): ?>
+            <li class="job-step is-<?= e($l['status']) ?>"><span class="job-ico"><?= e($l['ikon']) ?></span>
+              <?= e($l['nama']) ?></li>
+          <?php endforeach; ?>
+        </ul>
+        <div class="notice small hide" id="jobError"></div>
+      </div>
+
       <div class="notice small" id="stageBox">
         <strong>Sedang dikerjakan:</strong> <span id="stageText"><?= e((string)($t['stage'] ?? '-')) ?></span>
         <span id="stageSpin" class="muted small"></span>
       </div>
+
+      <?php $lampiranChat = ai_attachment_list((int)$t['id']); ?>
+      <?php if ($lampiranChat): ?>
+        <?php /* LAMPIRAN TAMPIL DI PERCAKAPAN (spesifikasi PDF bagian 1): pemilik melihat
+                 berkas yang dikirim beserta status pembacaannya — apakah isinya benar-benar
+                 masuk ke konteks AI (huruf terbaca) atau tidak. */ ?>
+        <div class="mt-2" id="chatAttach">
+          <?php foreach ($lampiranChat as $lf): ?>
+            <div class="notice small" style="margin:6px 0">
+              <?= icon('upload') ?> <strong><?= e((string)$lf['name']) ?></strong>
+              <span class="muted"> · <?= badge(ai_attach_kind((string)$lf['ext']), 'blue') ?>
+                · <?= num(round((int)$lf['size'] / 1024, 1), 1) ?> KB</span>
+              <?php if ((int)$lf['chars'] > 0): ?>
+                <span class="badge badge-green">isi terbaca <?= num((int)$lf['chars']) ?> huruf → masuk konteks AI</span>
+              <?php else: ?>
+                <span class="badge badge-yellow">isi belum terbaca</span>
+                <span class="muted small"><?= e(short_text((string)($lf['note'] ?? ''), 120)) ?></span>
+              <?php endif; ?>
+            </div>
+          <?php endforeach; ?>
+        </div>
+      <?php endif; ?>
 
       <div id="chatThread" class="mt-2 ai-scrollbox" style="max-height:56vh">
         <?php foreach ($urut as $it): ?>
@@ -1089,8 +1190,48 @@ $contoh = [
   var timer = null;
   var n = 0;
 
+  function perbaruiJob() {
+    fetch('ai_developer.php?ajax=job&id=' + ID, { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.ok || !d.job) return;
+        var j = d.job;
+        var st = document.getElementById('jobStatus');
+        if (st) { st.textContent = j.status; st.className = 'badge badge-' + j.tone; }
+        var bar = document.getElementById('jobBar');
+        if (bar) bar.style.width = (j.progress || 0) + '%';
+        var meta = document.getElementById('jobMeta');
+        if (meta) {
+          meta.innerHTML = (j.progress || 0) + '% · ' + aman(j.current_step_label || '')
+            + (j.retry > 0 ? ' · percobaan ulang ' + j.retry + '/' + j.max_retry : '')
+            + (j.note ? ' · ' + aman(j.note) : '');
+        }
+        var hb = document.getElementById('jobHeart');
+        if (hb) hb.textContent = j.berjalan ? ('heartbeat ' + j.umur + 's lalu') : '';
+        var ul = document.getElementById('jobSteps');
+        if (ul) {
+          var h = '';
+          (j.langkah || []).forEach(function (l) {
+            h += '<li class="job-step is-' + aman(l.status) + '"><span class="job-ico">'
+              + aman(l.ikon) + '</span>' + aman(l.nama) + '</li>';
+          });
+          ul.innerHTML = h;
+        }
+        var eb = document.getElementById('jobError');
+        if (eb) {
+          eb.textContent = j.error || '';
+          eb.classList.toggle('hide', !j.error);
+          if (j.error) eb.className = 'notice small alert-error';
+        }
+        /* Tombol Berhenti: tampil hanya saat pekerjaan berjalan. */
+        var sp = document.getElementById('jobStop');
+        if (sp) sp.closest('form').style.display = j.berjalan ? '' : 'none';
+      }).catch(function () { /* jaringan sementara */ });
+  }
+
   function tanya() {
     n++;
+    perbaruiJob();
     fetch('ai_developer.php?ajax=status&id=' + ID, { credentials: 'same-origin' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
@@ -1100,10 +1241,24 @@ $contoh = [
         if (errBox) { errBox.textContent = d.error || ''; errBox.classList.toggle('hide', !d.error); }
         if (testPre && d.test && d.test.ringkas) testPre.textContent = d.test.ringkas;
         gambarPercakapan(d);
-        var aktif = d.berjalan || (d.test && d.test.jalan) || d.menunggu_uji;
+        var aktif = d.berjalan || (d.test && d.test.jalan) || d.menunggu_uji || (d.job && d.job.berjalan);
         if (!aktif) {
           clearInterval(timer); timer = null;
-          if (jalan) location.reload();
+          /* TANPA MUAT ULANG HALAMAN (permintaan pemilik): cukup tarik ulang bagian
+             percakapan + kotak hasil, lalu ganti isinya di tempat. Pemilik tetap
+             dapat menggulir & membaca; posisi gulir tidak hilang. */
+          if (jalan) {
+            fetch(location.pathname + '?ajax=status&id=' + ID, { credentials: 'same-origin' })
+              .then(function () { return fetch(location.pathname + '?id=' + ID, { credentials: 'same-origin' }); })
+              .then(function (r) { return r.text(); })
+              .then(function (html) {
+                var doc = new DOMParser().parseFromString(html, 'text/html');
+                ['aksiBubble', 'chatThread', 'stageText', 'jobPanel'].forEach(function (id) {
+                  var baru = doc.getElementById(id), lama = document.getElementById(id);
+                  if (baru && lama) lama.outerHTML = baru.outerHTML;
+                });
+              }).catch(function () { /* biarkan tampilan lama */ });
+          }
           return;
         }
         jalan = true;

@@ -22,6 +22,13 @@ declare(strict_types=1);
 function backup_dir_ensure(): string
 {
     $custom = trim((string)getenv('NAVEENA_BACKUP_DIR'));
+    /* PENGAMAN (lihat nv_isolated_root): proses uji/CLI yang mengalihkan NAVEENA_DB
+       tidak boleh menulis backup ke folder backup aplikasi terbit (pernah menumpuk
+       400+ berkas uji ≈ 1,3 GB di sana). */
+    if ($custom === '' && function_exists('nv_isolated_root')) {
+        $iso = nv_isolated_root();
+        if ($iso !== '') $custom = $iso . '/backups';
+    }
     $dir = $custom !== '' ? $custom : BACKUP_DIR;
     if (!is_dir($dir)) @mkdir($dir, 0775, true);
     return $dir;
@@ -35,6 +42,18 @@ function backup_dir_ensure(): string
 function backup_gzip_available(): bool
 {
     return function_exists('gzencode') && function_exists('gzdecode');
+}
+
+/**
+ * Apakah KOMPRESI PAKET (DEFLATE di dalam ZIP) tersedia di PHP yang sedang berjalan?
+ *
+ * Dipakai untuk menyatakan keadaan APA ADANYA di halaman Backup: bila zlib tidak
+ * dimuat, paket tetap dibuat tetapi TANPA kompresi (jangan diklaim terkompresi).
+ * Diperiksa lengkap: `gzdeflate` (untuk menulis) dan `gzinflate` (untuk membaca).
+ */
+function backup_zip_deflate_available(): bool
+{
+    return function_exists('gzdeflate') && function_exists('gzinflate');
 }
 
 /** Padatkan dump SQL menjadi gzip. Bila zlib tidak ada, dikembalikan apa adanya. */
@@ -235,7 +254,10 @@ function backup_purge_orphans(): int
 function db_dump(): string
 {
     $pdo = db();
-    $out = "-- " . clinic_name() . " Management System\n-- Backup: " . date('Y-m-d H:i:s') . "\n-- Database: " . basename(DB_PATH) . "\n\n";
+    $out = "-- " . clinic_name() . " Management System\n-- Backup: " . date('Y-m-d H:i:s')
+        . "\n-- Arsitektur: central.sqlite (data global) + satu basis data per cabang (data operasional)"
+        . "\n-- Isi dump: SELURUH data (global + semua cabang), disatukan supaya dapat dipulihkan penuh"
+        . "\n\n";
     $objects = all("SELECT type, name, sql FROM sqlite_master
                     WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY (type='table') DESC, name");
     foreach ($objects as $o) {
@@ -313,8 +335,8 @@ function backup_create(string $note, ?int $userId = null, array $opts = []): arr
     }
 
     $size = (int)filesize($dir . '/' . $file);
-    q('INSERT INTO backups (filename, size, note, created_by) VALUES (?,?,?,?)',
-        [$file, $size, $note, $userId]);
+    q('INSERT INTO backups (filename, size, note, created_by, kind, auto_run) VALUES (?,?,?,?,?,?)',
+        [$file, $size, $note, $userId, 'sql', (string)($opts['auto_run'] ?? '')]);
     return ['ok' => true, 'file' => $file, 'size' => $size, 'raw_size' => $rawSize,
             'ratio' => $rawSize > 0 ? $size / $rawSize : 0, 'compressed' => $compressed, 'error' => ''];
 }
@@ -344,22 +366,66 @@ function backup_schedule_label(string $schedule): string
 function backup_keep_count(): int
 {
     $n = (int)setting('backup_keep', '7');
-    return max(2, min(60, $n > 0 ? $n : 7));
+    return max(1, min(60, $n > 0 ? $n : 7));
 }
 
-/** Buang backup OTOMATIS paling lama (backup manual tidak pernah dihapus). */
+/** Cakupan backup OTOMATIS: 'paket' (semua basis data dalam 1 berkas), 'cabang'
+ *  (satu berkas tiap cabang) atau 'keduanya'. */
+function backup_auto_scope(): string
+{
+    $v = (string)setting('backup_auto_scope', 'keduanya');
+    return in_array($v, ['paket', 'cabang', 'keduanya'], true) ? $v : 'keduanya';
+}
+function backup_auto_scope_label(string $v): string
+{
+    return ['paket' => 'Paket lengkap (satu berkas berisi central + semua cabang)',
+        'cabang' => 'Per cabang (satu berkas tiap cabang)',
+        'keduanya' => 'Keduanya (paket lengkap + satu berkas tiap cabang)'][$v] ?? $v;
+}
+
+/**
+ * Buang backup OTOMATIS paling lama sampai jumlahnya <= setelan.
+ *
+ * WAJIB memangkas per SET (`auto_run`), bukan per baris: satu kali jadwal berjalan
+ * dapat menghasilkan beberapa berkas (paket lengkap + berkas tiap cabang) yang
+ * saling melengkapi — kalau dipangkas per baris, satu set bisa terhapus separuh
+ * sehingga pemulihan menjadi tidak lengkap. Backup MANUAL / snapshot pengaman
+ * (note bukan berawalan "Backup otomatis") TIDAK PERNAH dihapus di sini.
+ */
 function backup_prune_auto(): int
 {
     $keep = backup_keep_count();
-    $auto = all("SELECT id, filename FROM backups WHERE note LIKE 'Backup otomatis%' ORDER BY id DESC");
+    $auto = all("SELECT id, filename, COALESCE(NULLIF(auto_run, ''), 'lama-' || date(created_at)) AS set_key
+                 FROM backups WHERE note LIKE 'Backup otomatis%' ORDER BY id DESC");
     if (count($auto) <= $keep) return 0;
+
+    /* Urutkan set menurut kemunculan TERBARU-nya, lalu sisakan $keep baris terbaru
+       dan buang SELURUH sisa set yang sudah melewati batas. */
+    $urut = [];
+    foreach ($auto as $b) {
+        $k = (string)$b['set_key'];
+        if (!isset($urut[$k])) $urut[$k] = [];
+        $urut[$k][] = $b;
+    }
     $dir = backup_dir_ensure();
     $n = 0;
-    foreach (array_slice($auto, $keep) as $b) {
-        $path = $dir . '/' . basename((string)$b['filename']);
-        if (is_file($path)) @unlink($path);
-        q('DELETE FROM backups WHERE id = ?', [(int)$b['id']]);
-        $n++;
+    $baris = 0;
+    $pertama = true;
+    foreach ($urut as $k => $isi) {
+        /* Set TERBARU selalu disimpan walau satu setnya sendiri sudah melebihi batas
+           — kalau tidak, dengan batas kecil (mis. 2) dan 3 berkas per set, SEMUA
+           backup otomatis bisa terhapus sekaligus (tidak ada cadangan sama sekali). */
+        if ($pertama || $baris + count($isi) <= $keep) {
+            $baris += count($isi);
+            $pertama = false;
+            continue;
+        }
+        foreach ($isi as $b) {
+            $path = $dir . '/' . basename((string)$b['filename']);
+            if (is_file($path)) @unlink($path);
+            q('DELETE FROM backups WHERE id = ?', [(int)$b['id']]);
+            $n++;
+        }
     }
     return $n;
 }
@@ -388,30 +454,54 @@ function backup_auto_run(?int $userId = null): ?array
     $period = backup_period_key($schedule);
     if (setting('backup_last_period') === $period) return null;   // sudah dibuat periode ini
 
-    /* Rapikan lebih dulu: buang backup otomatis yang melebihi batas jumlah,
+    /* Rapikan lebih dulu: buang set backup otomatis yang melebihi batas jumlah,
        lalu bila penyimpanan masih penuh buang yang paling lama sampai lega. */
     backup_prune_auto();
     $info = backup_storage_info();
     if ($info['status'] === 'full') backup_prune_to_fit();
 
-    $res = backup_create('Backup otomatis (' . backup_schedule_label($schedule) . ')', $userId);
-    if (!$res['ok']) {
-        /* Kegagalan dicatat apa adanya agar terlihat di halaman Backup. */
-        set_setting('backup_last_error', $res['error'] . ' (' . date('Y-m-d H:i') . ')');
-        return ['ok' => false, 'error' => $res['error'], 'period' => $period];
+    /* CAKUPAN backup otomatis (permintaan pemilik): per cabang DAN/ATAU paket lengkap.
+       Setiap berkas terkompresi: paket = ZIP, per cabang = .sqlite.gz. */
+    $scope = backup_auto_scope();
+    $label = 'Backup otomatis (' . backup_schedule_label($schedule) . ')';
+    $opsi = ['auto_run' => $period, 'enforce' => false];
+    $hasil = [];
+    $gagal = [];
+
+    if ($scope === 'paket' || $scope === 'keduanya') {
+        $r = backup_create_package($label, $userId, $opsi);
+        $r['ok'] ? $hasil[] = ['jenis' => 'paket', 'file' => $r['file'], 'size' => (int)$r['size'],
+                'raw' => 0, 'database' => count((array)($r['entries'] ?? []))]
+            : $gagal[] = 'paket lengkap: ' . $r['error'];
     }
+    if ($scope === 'cabang' || $scope === 'keduanya') {
+        foreach (db_route_branch_ids() as $bid) {
+            $r = backup_create_branch((int)$bid, $label, $userId, $opsi);
+            $r['ok'] ? $hasil[] = ['jenis' => 'cabang', 'branch_id' => (int)$bid, 'file' => $r['file'],
+                    'size' => (int)$r['size'], 'raw' => (int)$r['raw_size']]
+                : $gagal[] = 'cabang ' . $bid . ': ' . $r['error'];
+        }
+    }
+    if (!$hasil) {
+        $pesan = $gagal ? implode('; ', $gagal) : 'Tidak ada basis data yang dapat dibackup.';
+        set_setting('backup_last_error', $pesan . ' (' . date('Y-m-d H:i') . ')');
+        return ['ok' => false, 'error' => $pesan, 'period' => $period];
+    }
+
+    $totalUkuran = array_sum(array_column($hasil, 'size'));
     set_setting('backup_last_period', $period);
     set_setting('backup_last_at', date('Y-m-d H:i:s'));
-    set_setting('backup_last_file', $res['file']);
-    set_setting('backup_last_error', '');
+    set_setting('backup_last_file', (string)$hasil[0]['file']);
+    set_setting('backup_last_error', $gagal ? ('Sebagian gagal — ' . implode('; ', $gagal)) : '');
     $removed = backup_prune_auto();
     audit('Backup Otomatis', 'Pengaturan', null, null,
-        ['file' => $res['file'], 'ukuran' => $res['size'], 'ukuran_asli' => $res['raw_size'],
-         'terkompres' => $res['compressed'] ? 1 : 0, 'jadwal' => $schedule, 'dibuang' => $removed],
-        'Backup otomatis ' . backup_schedule_label($schedule) . ' dijalankan saat aplikasi dibuka');
-    return ['ok' => true, 'file' => $res['file'], 'size' => $res['size'], 'raw_size' => $res['raw_size'],
-            'compressed' => $res['compressed'],
-            'schedule' => $schedule, 'period' => $period, 'removed' => $removed, 'error' => ''];
+        ['jadwal' => $schedule, 'cakupan' => $scope, 'berkas' => count($hasil),
+         'ukuran' => $totalUkuran, 'dibuang' => $removed],
+        'Backup otomatis ' . backup_schedule_label($schedule) . ' dijalankan saat aplikasi dibuka'
+        . ' (' . count($hasil) . ' berkas, cakupan ' . backup_auto_scope_label($scope) . ')');
+    return ['ok' => true, 'file' => (string)$hasil[0]['file'], 'size' => $totalUkuran, 'raw_size' => 0,
+        'compressed' => true, 'schedule' => $schedule, 'period' => $period, 'scope' => $scope,
+        'berkas' => $hasil, 'gagal' => $gagal, 'removed' => $removed, 'error' => ''];
 }
 
 /**
@@ -498,4 +588,771 @@ function backup_size_text(int $size, int $rawSize = 0): string
              . num(round($pct), 0) . '% lebih kecil)';
     }
     return $txt;
+}
+
+/* ------------------------------------------------------------------ *
+ * PAKET BACKUP CENTRAL + BRANCH (ronde 54)
+ * ------------------------------------------------------------------ *
+ * Permintaan pemilik: SISTEM BACKUP YANG SUDAH ADA di-upgrade agar menangani
+ * central.sqlite + SELURUH basis data cabang, lengkap dengan manifest, checksum,
+ * metadata, riwayat, unduhan dan restore — BUKAN sistem backup kedua.
+ *
+ * Berkas paket: naveena-backup-YYYYMMDD-HHMMSS.zip
+ *   backup/central.sqlite            (basis data utama / central)
+ *   backup/branches/branch_00X.sqlite
+ *   manifest.json                    daftar berkas + ukuran
+ *   checksums.json                   sha256 tiap berkas
+ *   metadata.json                    versi skema, mode arsitektur, waktu, jumlah cabang
+ * ------------------------------------------------------------------ */
+
+/** Daftar basis data yang harus masuk paket backup (central + tiap cabang). */
+function backup_db_inventory(): array
+{
+    $out = [];
+    /* Basis data CENTRAL — SATU-SATUNYA sumber data global/sistem pada arsitektur
+       central + satu berkas per cabang.
+       JEBAKAN YANG PERNAH TERJADI (dan merusak data): di sini dulu dipakai `DB_PATH`,
+       padahal `DB_PATH` sekarang hanya JALUR IDENTITAS pemasangan (menunjuk
+       `naveena_data/data.sqlite` yang dibekukan saat pemisahan). Akibatnya paket
+       backup menyimpan berkas LAMA itu dengan label "central.sqlite", dan saat
+       paket dipulihkan berkas warisan itu MENIMPA central yang sebenarnya —
+       seluruh perubahan data global sesudah pemisahan (jejak audit, setelan, dsb.)
+       hilang. Karena itu central WAJIB diambil dari `db_central_path()`.
+       `DB_PATH` hanya dipakai sebagai cadangan bila central belum ada (pemasangan
+       lama yang belum dipisah). */
+    $centralPath = function_exists('db_central_path') ? db_central_path() : DB_PATH;
+    if (!is_file($centralPath) && is_file(DB_PATH)) $centralPath = DB_PATH;
+    $out[] = ['kind' => 'central', 'branch_id' => null, 'label' => 'central.sqlite',
+        'path' => $centralPath, 'ada' => is_file($centralPath)];
+    /* Basis data per cabang (arsitektur central/branch). */
+    if (function_exists('db_branch_path')) {
+        foreach (branches() as $b) {
+            $p = db_branch_path((int)$b['id']);
+            $out[] = ['kind' => 'branch', 'branch_id' => (int)$b['id'],
+                'label' => 'branches/branch_' . str_pad((string)(int)$b['id'], 3, '0', STR_PAD_LEFT) . '.sqlite',
+                'path' => $p, 'ada' => is_file($p), 'code' => (string)$b['code']];
+        }
+    }
+    return $out;
+}
+
+/* ------------------------------------------------------------------ *
+ * BERKAS MEDIA (foto) — IKUT DIBACKUP
+ * ------------------------------------------------------------------ *
+ * Permintaan pemilik: "Integrasikan file upload foto itu ke semua yang
+ * terintegrasi, seperti bagian backup — dalam bentuk metadata/path juga harus
+ * terbackup seperti file foto rekam medis."
+ *
+ * Foto pasien/dokter/terapis dan lampiran klinis rekam medis disimpan sebagai
+ * BERKAS di folder unggahan (di luar folder aplikasi), sedangkan basis datanya
+ * hanya menyimpan nama/path. Karena itu backup yang hanya memuat basis data akan
+ * kehilangan gambarnya saat dipulihkan di tempat lain.
+ *
+ * Di sini disediakan:
+ *   · `backup_media_inventory()` — daftar SEMUA berkas media + apakah dirujuk
+ *     basis data (metadata/path, ukuran, hash) — selalu ikut ke dalam paket
+ *     sebagai `media.json`, walau berkas gambarnya tidak diikutkan.
+ *   · berkas gambarnya sendiri IKUT ke dalam paket (folder `backup/media/…`)
+ *     selama totalnya tidak melewati batas `backup_media_max_mb`.
+ *   · pemulihan paket menuliskan kembali berkas media ke folder unggahan.
+ * ------------------------------------------------------------------ */
+
+/** Akar folder unggahan yang berlaku (satu sumber dengan aplikasi). */
+function backup_uploads_root(): string
+{
+    return function_exists('local_upload_dir') ? local_upload_dir() : BACKUP_DIR . '/..';
+}
+
+/** Batas total ukuran media yang IKUT ke dalam paket backup (MB). 0 = tanpa media. */
+function backup_media_max_mb(): int
+{
+    $v = (int)setting('backup_media_max_mb', '40');
+    return max(0, min(500, $v));
+}
+
+/**
+ * Ikutkan juga berkas media yang TIDAK dirujuk basis data (sisa berkas lama)?
+ *
+ * Bawaannya TIDAK: foto yang benar-benar dipakai sudah cukup untuk memulihkan
+ * aplikasi, sedangkan berkas sisa (mis. hasil uji/unggahan yang dibatalkan) hanya
+ * membuat paket backup membengkak. Daftar lengkapnya tetap dicatat di `media.json`.
+ */
+function backup_media_include_unused(): bool
+{
+    return setting('backup_media_include_unused', '0') === '1';
+}
+
+/**
+ * Kumpulkan seluruh berkas media: foto orang, lampiran rekam medis, dan gambar
+ * branding (logo/latar kartu/QRIS). Setiap baris menyebut apakah berkas itu
+ * DIRUJUK basis data (dipakai) atau tidak — jadi metadata/path-nya tetap tercatat
+ * pada backup walau berkasnya sendiri tidak diikutkan karena batas ukuran.
+ *
+ * @return array{files:array<int,array<string,mixed>>,total_bytes:int,used_bytes:int,
+ *               jumlah:int,jumlah_tak_terpakai:int}
+ */
+function backup_media_inventory(): array
+{
+    $root = backup_uploads_root();
+    if (!is_dir($root)) return ['files' => [], 'total_bytes' => 0, 'used_bytes' => 0,
+        'jumlah' => 0, 'jumlah_tak_terpakai' => 0];
+
+    /* --- Peta berkas yang DIRUJUK basis data: relatif → keterangan pemiliknya --- */
+    $rujukan = [];
+    $tambah = function (string $sub, $nama, string $oleh) use (&$rujukan) {
+        $nama = basename((string)$nama);
+        if ($nama === '') return;
+        $rel = ($sub !== '' ? $sub . '/' : '') . $nama;
+        if (isset($rujukan[$rel])) return;
+        $rujukan[$rel] = $oleh;
+    };
+    foreach ([['patients', 'patient', 'Pasien'], ['doctors', 'doctor', 'Dokter'],
+              ['therapists', 'therapist', 'Terapis']] as [$tbl, $kind, $label]) {
+        $sub = ['patient' => 'pasien', 'doctor' => 'dokter', 'therapist' => 'terapis'][$kind];
+        try {
+            foreach (all("SELECT id, name, photo_file FROM {$tbl} WHERE photo_file IS NOT NULL AND photo_file <> ''") as $r) {
+                $tambah($sub, $r['photo_file'], $label . ' #' . (int)$r['id'] . ' — ' . (string)$r['name']);
+            }
+        } catch (Throwable $e) { /* tabel/kolom tidak ada */ }
+    }
+    try {
+        foreach (all("SELECT id, local_path, file_url FROM medical_record_photos") as $r) {
+            if ((string)($r['local_path'] ?? '') !== '') $tambah('rekam-medis', basename((string)$r['local_path']), 'Foto rekam medis #' . (int)$r['id']);
+            else {
+                $u = (string)($r['file_url'] ?? '');
+                if ($u !== '' && strpos($u, 'http') !== 0) $tambah('rekam-medis', basename($u), 'Foto rekam medis #' . (int)$r['id']);
+            }
+        }
+    } catch (Throwable $e) { /* tabel belum ada */ }
+    foreach (['logo_file' => 'Logo klinik', 'member_card_bg_file' => 'Latar kartu member',
+              'pay_qris_file' => 'Gambar QRIS'] as $key => $label) {
+        $val = (string)setting($key, '');
+        if ($val !== '') $tambah('', $val, $label);
+    }
+
+    $files = [];
+    $total = 0;
+    $used = 0;
+    $walk = function (string $dir, string $rel = '') use (&$walk, &$files, &$total, &$used, $rujukan) {
+        foreach (scandir($dir) ?: [] as $f) {
+            if ($f === '.' || $f === '..') continue;
+            $abs = $dir . '/' . $f;
+            $relNow = $rel !== '' ? $rel . '/' . $f : $f;
+            if (is_dir($abs)) { $walk($abs, $relNow); continue; }
+            if (!is_file($abs)) continue;
+            $bytes = (int)filesize($abs);
+            /* Berkas CACHE turunan (mis. `.raw` hasil pengecilan PNG dan
+               `logo-….pdf.png`) tidak perlu ikut — dapat dibuat ulang otomatis. */
+            $cache = (bool)preg_match('/\.(raw|c\d+-\d+-\d+\.raw)$/i', $f);
+            $pemilik = $rujukan[$relNow] ?? '';
+            if ($pemilik === '' && $cache) {
+                $dasar = preg_replace('/\.(c\d+-\d+-\d+\.raw|raw)$/i', '', $f);
+                $pemilik = $rujukan[($rel !== '' ? $rel . '/' : '') . $dasar] ?? '';
+            }
+            $terpakai = $pemilik !== '';
+            $total += $bytes;
+            if ($terpakai) $used += $bytes;
+            $files[] = ['rel' => $relNow, 'abs' => $abs, 'bytes' => $bytes,
+                'mtime' => (int)filemtime($abs), 'terpakai' => $terpakai,
+                'rujukan' => $pemilik, 'cache' => $cache];
+        }
+    };
+    $walk($root);
+    usort($files, fn($a, $b) => strcmp($a['rel'], $b['rel']));
+    return ['files' => $files, 'total_bytes' => $total, 'used_bytes' => $used,
+        'jumlah' => count($files),
+        'jumlah_tak_terpakai' => count(array_filter($files, fn($x) => empty($x['terpakai'])))];
+}
+
+/**
+ * Daftar berkas media yang IKUT ke dalam paket (bila batas ukuran mencukupi).
+ *
+ * URUTAN PRIORITAS: berkas yang DIPAKAI (dirujuk basis data) lebih dulu, lalu —
+ * hanya bila diizinkan setelan — berkas yang tidak dirujuk. Berkas CACHE (dapat
+ * dibuat ulang otomatis) selalu dilewati supaya paket tidak membengkak.
+ *
+ * @return array{files:array<int,array>,bytes:int,dilewati:array<int,array>,max_mb:int,unused:bool}
+ */
+function backup_media_selection(): array
+{
+    $inv = backup_media_inventory();
+    $maxBytes = backup_media_max_mb() * 1048576;
+    $ikutUnused = backup_media_include_unused();
+    $urut = $inv['files'];
+    usort($urut, function ($a, $b) {
+        $ta = !empty($a['terpakai']) ? 0 : 1;
+        $tb = !empty($b['terpakai']) ? 0 : 1;
+        if ($ta !== $tb) return $ta - $tb;
+        return strcmp($a['rel'], $b['rel']);
+    });
+    $pilih = [];
+    $dilewati = [];
+    $bytes = 0;
+    foreach ($urut as $f) {
+        $boleh = $maxBytes > 0 && empty($f['cache']) && (!empty($f['terpakai']) || $ikutUnused);
+        if (!$boleh || $bytes + $f['bytes'] > $maxBytes) { $dilewati[] = $f; continue; }
+        $pilih[] = $f;
+        $bytes += $f['bytes'];
+    }
+    return ['files' => $pilih, 'bytes' => $bytes, 'dilewati' => $dilewati,
+        'max_mb' => backup_media_max_mb(), 'unused' => $ikutUnused];
+}
+
+/** Ringkasan media untuk ditampilkan di halaman Backup (tanpa memuat isinya). */
+function backup_media_summary(): array
+{
+    $inv = backup_media_inventory();
+    $sel = backup_media_selection();
+    return [
+        'jumlah' => (int)$inv['jumlah'],
+        'total_bytes' => (int)$inv['total_bytes'],
+        'used_bytes' => (int)$inv['used_bytes'],
+        'tak_terpakai' => (int)$inv['jumlah_tak_terpakai'],
+        'ikut' => count($sel['files']),
+        'ikut_bytes' => (int)$sel['bytes'],
+        'dilewati' => count($sel['dilewati']),
+        'max_mb' => (int)$sel['max_mb'],
+        'ikut_tak_terpakai' => !empty($sel['unused']),
+    ];
+}
+
+/** Tulis berkas ZIP tanpa ekstensi zip (penulis ZIP mandiri). */
+/**
+ * Tulis berkas ZIP **TERKOMPRES** (penulis ZIP mandiri, tanpa ekstensi zip).
+ *
+ * KOMPRESI OTOMATIS (permintaan pemilik: "file paket lengkap masih cukup besar"):
+ * setiap berkas DIMAMPATKAN dengan DEFLATE (`gzdeflate`, metode ZIP 8). Sebelumnya
+ * penulis ini memakai metode STORE (0 = tanpa kompresi), sehingga paket berisi 3
+ * basis data bisa mencapai ~19 MB padahal isinya sangat dapat dimampatkan.
+ *
+ * Aturan yang dijaga:
+ *   • bila hasil mampat TIDAK lebih kecil dari aslinya (mis. berkas yang sudah
+ *     terkompres), entri disimpan apa adanya (STORE) — tidak ada yang membengkak;
+ *   • CRC32 & ukuran asli tetap dicatat sehingga pembaca ZIP biasa (unzip,
+ *     Windows Explorer, 7-Zip) dapat membukanya seperti biasa;
+ *   • penulis PENERJEMAH (`backup_package_read`) membaca KEDUA metode, jadi paket
+ *     lama (versi STORE) tetap dapat dipulihkan.
+ *
+ * @return array{ok:bool,error:string,dimampatkan:int,asli:int,hasil:int}
+ */
+function backup_zip_create(string $zipPath, array $entries): array
+{
+    $fh = @fopen($zipPath, 'wb');
+    if (!$fh) return ['ok' => false, 'error' => 'Gagal membuat berkas paket backup.',
+        'dimampatkan' => 0, 'asli' => 0, 'hasil' => 0];
+    $central = [];
+    $offset = 0;
+    $asli = 0; $hasil = 0; $dimampatkan = 0;
+    /* Batas rasio keamanan ZIP64 dilewati dengan aman: bila keluaran mampat melebihi
+       4 GB (tidak mungkin untuk basis data aplikasi ini) entri disimpan apa adanya. */
+    $maxU = 0xFFFFFFFE;
+    foreach ($entries as $nama => $isi) {
+        $nama = str_replace('\\', '/', (string)$nama);
+        $crc = crc32($isi);
+        $len = strlen($isi);
+        $mtime = getdate();
+        $dosTime = (($mtime['hours'] << 11) | ($mtime['minutes'] << 5) | ($mtime['seconds'] >> 1)) & 0xffff;
+        $dosDate = ((($mtime['year'] - 1980) << 9) | ($mtime['mon'] << 5) | $mtime['mday']) & 0xffff;
+        /* ---- KOMPRESI ---- */
+        $method = 0;
+        $data = $isi;
+        $csize = $len;
+        if ($len > 0 && $len <= $maxU && function_exists('gzdeflate')) {
+            $deflated = @gzdeflate($isi, 6);
+            if ($deflated !== false && $deflated !== '' && strlen($deflated) < $len) {
+                $method = 8;                 // 8 = DEFLATE
+                $data = $deflated;
+                $csize = strlen($deflated);
+                $dimampatkan++;
+            }
+        }
+        $asli += $len; $hasil += $csize;
+        $local = "PK\x03\x04" . pack('v', 20) . pack('v', 0) . pack('v', $method) . pack('v', $dosTime)
+            . pack('v', $dosDate) . pack('V', $crc) . pack('V', $csize) . pack('V', $len)
+            . pack('v', strlen($nama)) . pack('v', 0) . $nama;
+        fwrite($fh, $local);
+        fwrite($fh, $data);
+        $central[] = ['nama' => $nama, 'crc' => $crc, 'csize' => $csize, 'len' => $len,
+            'method' => $method, 'off' => $offset, 'time' => $dosTime, 'date' => $dosDate];
+        $offset += strlen($local) + $csize;
+    }
+    $cdStart = $offset;
+    foreach ($central as $e) {
+        $cd = "PK\x01\x02" . pack('v', 20) . pack('v', 20) . pack('v', 0) . pack('v', $e['method'])
+            . pack('v', $e['time']) . pack('v', $e['date']) . pack('V', $e['crc'])
+            . pack('V', $e['csize']) . pack('V', $e['len']) . pack('v', strlen($e['nama']))
+            . pack('v', 0) . pack('v', 0) . pack('v', 0) . pack('v', 0) . pack('V', 0)
+            . pack('V', $e['off']) . $e['nama'];
+        fwrite($fh, $cd);
+        $offset += strlen($cd);
+    }
+    $end = "PK\x05\x06" . pack('v', 0) . pack('v', 0) . pack('v', count($central))
+        . pack('v', count($central)) . pack('V', $offset - $cdStart) . pack('V', $cdStart) . pack('v', 0);
+    fwrite($fh, $end);
+    fclose($fh);
+    return ['ok' => true, 'error' => '', 'dimampatkan' => $dimampatkan,
+        'asli' => $asli, 'hasil' => $hasil];
+}
+
+/**
+ * Buat PAKET BACKUP lengkap (central + seluruh cabang + manifest + checksum + metadata).
+ * Memakai sistem backup yang sudah ada (folder, kuota, riwayat) — bukan sistem kedua.
+ */
+function backup_create_package(string $note, ?int $userId = null, array $opts = []): array
+{
+    $enforce = $opts['enforce'] ?? true;
+    $info = backup_storage_info();
+    if ($enforce && $info['status'] === 'full') {
+        $notice = backup_storage_notice($info);
+        return ['ok' => false, 'file' => '', 'size' => 0, 'error' => $notice['message'], 'entries' => []];
+    }
+    $inv = backup_db_inventory();
+    $ada = array_values(array_filter($inv, fn($x) => !empty($x['ada'])));
+    if (!$ada) return ['ok' => false, 'file' => '', 'size' => 0, 'error' => 'Tidak ada basis data yang dapat dibackup.', 'entries' => []];
+
+    $entries = [];
+    $manifest = [];
+    $checks = [];
+    foreach ($ada as $db) {
+        /* Basis data WAL: checkpoint dulu supaya isi terbaru ikut terbawa. */
+        if (function_exists('ai_db_checkpoint') && $db['kind'] === 'central') ai_db_checkpoint();
+        $isi = @file_get_contents($db['path']);
+        if ($isi === false) continue;
+        $nama = 'backup/' . $db['label'];
+        $entries[$nama] = $isi;
+        $manifest[] = ['kind' => $db['kind'], 'branch_id' => $db['branch_id'],
+            'file' => $nama, 'bytes' => strlen($isi)];
+        $checks[$nama] = hash('sha256', $isi);
+    }
+    if (!$entries) return ['ok' => false, 'file' => '', 'size' => 0,
+        'error' => 'Basis data tidak dapat dibaca.', 'entries' => []];
+
+    $meta = [
+        'aplikasi' => function_exists('clinic_name') ? clinic_name() : 'Naveena',
+        'kompresi' => 'DEFLATE (ZIP metode 8) — otomatis pada tiap berkas bila hasilnya lebih kecil',
+        'schema_version' => (string)setting('schema_version', SCHEMA_VERSION),
+        'arsitektur' => 'central_branch',
+        'dibuat' => date('Y-m-d H:i:s'),
+        'jumlah_database' => count($manifest),
+        'jumlah_cabang' => count(array_filter($manifest, fn($m) => $m['kind'] === 'branch')),
+        'catatan' => $note,
+        'php' => PHP_VERSION,
+    ];
+
+    /* ---------------- BERKAS MEDIA (foto) IKUT DIBACKUP ----------------
+       Metadata/path SELALU dicatat di `media.json` (walau berkas gambarnya tidak
+       diikutkan karena batas ukuran), dan berkas gambarnya sendiri disalin ke
+       `backup/media/…` supaya pemulihan di tempat lain tetap lengkap. */
+    $mediaSel = backup_media_selection();
+    $mediaMeta = [];
+    foreach ($mediaSel['files'] as $f) {
+        $isi = @file_get_contents($f['abs']);
+        if ($isi === false) continue;
+        $nama = 'backup/media/' . $f['rel'];
+        $entries[$nama] = $isi;
+        $checks[$nama] = hash('sha256', $isi);
+        $mediaMeta[] = ['file' => $nama, 'rel' => $f['rel'], 'bytes' => $f['bytes'],
+            'rujukan' => (string)$f['rujukan']];
+    }
+    $mediaInv = backup_media_inventory();
+    $entries['media.json'] = json_encode([
+        'keterangan' => 'Daftar SELURUH berkas media (foto) beserta rujukan basis datanya. '
+            . 'Berkas yang ada di dalam paket berada di folder backup/media/.',
+        'batas_mb' => backup_media_max_mb(),
+        'jumlah_total' => count($mediaInv['files']),
+        'total_bytes' => $mediaInv['total_bytes'],
+        'ikut_ke_paket' => count($mediaMeta),
+        'tidak_ikut' => array_map(fn($f) => ['rel' => $f['rel'], 'bytes' => $f['bytes'],
+            'terpakai' => !empty($f['terpakai']), 'cache' => !empty($f['cache'])],
+            $mediaSel['dilewati']),
+        'berkas' => array_map(fn($f) => ['rel' => $f['rel'], 'bytes' => $f['bytes'],
+            'terpakai' => !empty($f['terpakai']), 'cache' => !empty($f['cache']),
+            'rujukan' => (string)$f['rujukan'],
+            'sha256' => is_file($f['abs']) ? (string)hash_file('sha256', $f['abs']) : ''],
+            $mediaInv['files']),
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    $meta['media'] = ['jumlah_total' => count($mediaInv['files']),
+        'total_bytes' => $mediaInv['total_bytes'], 'ikut_ke_paket' => count($mediaMeta),
+        'batas_mb' => backup_media_max_mb()];
+
+    $entries['manifest.json'] = json_encode(['files' => $manifest], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    $entries['checksums.json'] = json_encode($checks, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    $entries['metadata.json'] = json_encode($meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+
+    [$dir, $file] = backup_file_path('naveena-backup-', '.zip');
+    $tmp = $dir . '/.' . $file . '.part';
+    $z = backup_zip_create($tmp, $entries);
+    if (!$z['ok']) { @unlink($tmp); return ['ok' => false, 'file' => '', 'size' => 0, 'error' => $z['error'], 'entries' => []]; }
+    /* VERIFIKASI: paket wajib dapat dibaca ulang dan isinya sama sebelum didaftarkan. */
+    $back = backup_package_read($tmp);
+    if (!$back['ok'] || count($back['entries']) < count($entries)) {
+        @unlink($tmp);
+        return ['ok' => false, 'file' => '', 'size' => 0,
+            'error' => 'Paket backup gagal diverifikasi — backup dibatalkan.', 'entries' => []];
+    }
+    if (!@rename($tmp, $dir . '/' . $file)) {
+        @unlink($tmp);
+        return ['ok' => false, 'file' => '', 'size' => 0, 'error' => 'Gagal menyimpan paket backup.', 'entries' => []];
+    }
+    $size = (int)filesize($dir . '/' . $file);
+    $catatanKomp = $z['asli'] > 0
+        ? ' [paket · dimampatkan ' . (int)round((1 - ($z['hasil'] / max(1, $z['asli']))) * 100) . '%]'
+        : ' [paket]';
+    q('INSERT INTO backups (filename, size, note, created_by, kind, auto_run) VALUES (?,?,?,?,?,?)',
+        [$file, $size, ($note !== '' ? $note : 'Paket lengkap basis data') . $catatanKomp, $userId, 'package',
+         (string)($opts['auto_run'] ?? '')]);
+    return ['ok' => true, 'file' => $file, 'size' => $size, 'error' => '', 'entries' => $manifest, 'meta' => $meta,
+        'asli' => (int)$z['asli'], 'hasil' => (int)$z['hasil'], 'dimampatkan' => (int)$z['dimampatkan']];
+}
+
+/**
+ * Baca kembali paket backup (penulis ZIP mandiri → pembacanya juga mandiri).
+ * @return array{ok:bool,entries:array<string,string>,error:string}
+ */
+function backup_package_read(string $path): array
+{
+    $isi = @file_get_contents($path);
+    if ($isi === false || substr($isi, 0, 2) !== 'PK') return ['ok' => false, 'entries' => [], 'error' => 'bukan paket zip yang sah'];
+    $entries = [];
+    $pos = 0; $len = strlen($isi);
+    while ($pos + 30 <= $len) {
+        $sig = substr($isi, $pos, 4);
+        if ($sig === "PK\x03\x04") {
+            $hdr = unpack('vver/vflag/vmethod/vtime/vdate/Vcrc/Vcsize/Vusize/vnlen/velen', substr($isi, $pos + 4, 26));
+            if (!$hdr) break;
+            $nama = substr($isi, $pos + 30, $hdr['nlen']);
+            /* Ukuran data di berkas = `csize` (SETELAH dimampatkan), sedangkan
+               `usize` = ukuran asli. Memakai `usize` pada entri termampat membuat
+               pembacaan entri berikutnya meleset dan isinya rusak — karena itu
+               dibedakan sesuai metode (8 = DEFLATE, 0 = tanpa kompresi). */
+            $mentah = substr($isi, $pos + 30 + $hdr['nlen'] + $hdr['elen'], (int)$hdr['csize']);
+            $data = $mentah;
+            if ((int)$hdr['method'] === 8) {
+                $inflated = function_exists('gzinflate') ? @gzinflate($mentah) : false;
+                if ($inflated === false) {
+                    return ['ok' => false, 'entries' => [], 'error' => 'isi paket tidak dapat dibuka (kompresi rusak)'];
+                }
+                $data = $inflated;
+            }
+            $entries[$nama] = $data;
+            $pos += 30 + $hdr['nlen'] + $hdr['elen'] + (int)$hdr['csize'];
+            continue;
+        }
+        if ($sig === "PK\x01\x02") { $pos += 46; continue; }   // masuk central directory
+        if ($sig === "PK\x05\x06") break;
+        $pos++;
+    }
+    return ['ok' => (bool)$entries, 'entries' => $entries, 'error' => $entries ? '' : 'tidak ada berkas di dalam paket'];
+}
+
+/**
+ * BACKUP SATU CABANG (permintaan pemilik): salinan terkompresi berkas basis data
+ * cabang, sehingga bila satu cabang bermasalah cukup cabang ITU yang dipulihkan.
+ *
+ * Berisikan SELURUH isi basis data cabang (skema + data), bukan dump SQL — jadi
+ * pemulihannya persis seperti paket lengkap, hanya untuk satu berkas.
+ *
+ * @return array{ok:bool,file:string,size:int,raw_size:int,error:string,branch_id:int}
+ */
+function backup_create_branch(int $branchId, string $note = '', ?int $userId = null, array $opts = []): array
+{
+    $enforce = $opts['enforce'] ?? true;
+    $info = storage_info_or_default($enforce);
+    if ($enforce && $info['status'] === 'full') {
+        return ['ok' => false, 'file' => '', 'size' => 0, 'raw_size' => 0,
+            'error' => backup_storage_notice($info)['message'], 'branch_id' => $branchId];
+    }
+    $path = db_branch_path($branchId);
+    if (!is_file($path)) {
+        return ['ok' => false, 'file' => '', 'size' => 0, 'raw_size' => 0,
+            'error' => 'Basis data cabang belum ada.', 'branch_id' => $branchId];
+    }
+    /* Basis data mode WAL: checkpoint dulu supaya perubahan terbaru ikut tersalin. */
+    try {
+        $c = db_open($path);
+        $c->exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch (Throwable $e) { /* tetap lanjut — berkas -wal ikut digabung di bawah */ }
+    $isi = @file_get_contents($path);
+    if ($isi === false) {
+        return ['ok' => false, 'file' => '', 'size' => 0, 'raw_size' => 0,
+            'error' => 'Basis data cabang tidak dapat dibaca.', 'branch_id' => $branchId];
+    }
+    $raw = strlen($isi);
+    $data = backup_compress($isi);
+    $pad = str_pad((string)max(0, $branchId), 3, '0', STR_PAD_LEFT);
+    [$dir, $file] = backup_file_path('naveena-cabang-' . $pad . '-', '.sqlite.gz');
+    $tmp = $dir . '/.' . $file . '.part';
+    if (@file_put_contents($tmp, $data) === false) {
+        return ['ok' => false, 'file' => '', 'size' => 0, 'raw_size' => $raw,
+            'error' => 'Gagal menulis berkas backup cabang.', 'branch_id' => $branchId];
+    }
+    /* VERIFIKASI: berkas wajib dapat dibaca ulang & berupa basis data SQLite yang sehat. */
+    $cek = backup_branch_file_check($tmp);
+    if (!$cek['ok']) {
+        @unlink($tmp);
+        return ['ok' => false, 'file' => '', 'size' => 0, 'raw_size' => $raw,
+            'error' => 'Backup cabang gagal diverifikasi: ' . $cek['error'], 'branch_id' => $branchId];
+    }
+    if (!@rename($tmp, $dir . '/' . $file)) {
+        @unlink($tmp);
+        return ['ok' => false, 'file' => '', 'size' => 0, 'raw_size' => $raw,
+            'error' => 'Gagal menyimpan berkas backup cabang.', 'branch_id' => $branchId];
+    }
+    $size = (int)filesize($dir . '/' . $file);
+    $namaCabang = '';
+    try { $b = one('SELECT name FROM branches WHERE id = ?', [$branchId]); $namaCabang = (string)($b['name'] ?? ''); }
+    catch (Throwable $e) { /* nama opsional */ }
+    q('INSERT INTO backups (filename, size, note, created_by, kind, branch_id, auto_run) VALUES (?,?,?,?,?,?,?)',
+        [$file, $size,
+         ($note !== '' ? $note . ' — ' : '') . 'Basis data cabang ' . ($namaCabang !== '' ? $namaCabang : $branchId)
+            . ' (' . num(round($raw / 1048576, 2), 2) . ' MB → ' . num(round($size / 1048576, 2), 2) . ' MB)',
+         $userId, 'branch', $branchId, (string)($opts['auto_run'] ?? '')]);
+    return ['ok' => true, 'file' => $file, 'size' => $size, 'raw_size' => $raw, 'error' => '',
+        'branch_id' => $branchId];
+}
+
+/** Info penyimpanan backup dengan pengaman (dipakai semua jalur pembuatan backup). */
+function storage_info_or_default(bool $hitung = true): array
+{
+    try { return backup_storage_info(); }
+    catch (Throwable $e) { return ['status' => 'ok', 'pct' => 0, 'bytes' => 0, 'limit' => 0, 'files' => 0]; }
+}
+
+/**
+ * Periksa berkas backup cabang: harus berupa gzip (atau sqlite mentah) yang berisi
+ * basis data SQLite sehat sehingga aman dipakai untuk pemulihan.
+ *
+ * @return array{ok:bool,error:string}
+ */
+function backup_branch_file_check(string $path): array
+{
+    $isi = backup_read_sql($path);          // menangani .gz maupun berkas mentah
+    if (strlen($isi) < 100) return ['ok' => false, 'error' => 'isi berkas terlalu kecil'];
+    if (substr($isi, 0, 16) !== "SQLite format 3\0") return ['ok' => false, 'error' => 'bukan berkas basis data SQLite'];
+    $tmp = $path . '.cek';
+    if (@file_put_contents($tmp, $isi) === false) return ['ok' => false, 'error' => 'tidak dapat menulis berkas pemeriksaan'];
+    try {
+        $p = new PDO('sqlite:' . $tmp, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        $ic = (string)$p->query('PRAGMA integrity_check')->fetchColumn();
+        $p = null;
+        @unlink($tmp);
+        return $ic === 'ok' ? ['ok' => true, 'error' => ''] : ['ok' => false, 'error' => 'integritas: ' . $ic];
+    } catch (Throwable $e) {
+        @unlink($tmp);
+        return ['ok' => false, 'error' => $e->getMessage()];
+    }
+}
+
+/**
+ * PULIHKAN SATU CABANG dari berkas backup cabang.
+ *
+ * Aman: (1) berkas backup diperiksa lebih dulu, (2) kondisi sekarang disalin sebagai
+ * backup cabang baru ('sebelum-restore'), (3) penggantian memakai berkas sementara
+ * lalu `rename()` sehingga tidak ada kondisi setengah jadi.
+ *
+ * @return array{ok:bool,error:string,snapshot:string}
+ */
+function backup_restore_branch(string $file, int $branchId, ?int $userId = null): array
+{
+    $src = backup_dir_ensure() . '/' . basename($file);
+    if (!is_file($src)) return ['ok' => false, 'error' => 'Berkas backup tidak ditemukan di storage.', 'snapshot' => ''];
+    $cek = backup_branch_file_check($src);
+    if (!$cek['ok']) return ['ok' => false, 'error' => 'Berkas backup tidak layak dipulihkan: ' . $cek['error'], 'snapshot' => ''];
+    $isi = backup_read_sql($src);
+    $target = db_branch_path($branchId);
+    if (!is_dir(dirname($target))) @mkdir(dirname($target), 0770, true);
+
+    /* Snapshot pengaman kondisi SEKARANG (kalau ada isinya). */
+    $snap = '';
+    if (is_file($target) && (int)filesize($target) > 100) {
+        $r = backup_create_branch($branchId, 'Snapshot otomatis sebelum restore cabang', $userId, ['enforce' => false]);
+        $snap = $r['ok'] ? (string)$r['file'] : '';
+    }
+    $tmp = dirname($target) . '/.restore-' . $branchId . '-' . getmypid() . '.sqlite';
+    if (@file_put_contents($tmp, $isi) === false) {
+        return ['ok' => false, 'error' => 'Gagal menyiapkan berkas pemulihan.', 'snapshot' => $snap];
+    }
+    foreach (['', '-wal', '-shm'] as $akhiran) {
+        if (is_file($target . $akhiran)) @unlink($target . $akhiran);
+    }
+    if (!@rename($tmp, $target)) {
+        @unlink($tmp);
+        return ['ok' => false, 'error' => 'Gagal mengganti berkas basis data cabang.', 'snapshot' => $snap];
+    }
+    @chmod($target, 0664);
+    /* Pastikan skema cabang terkini (migrasi + FK lintas berkas dibersihkan). */
+    try {
+        $GLOBALS['DB_SCHEMA_BRANCH_ID'] = $branchId;
+        try { db_schema_apply($target, 'branch'); } finally { unset($GLOBALS['DB_SCHEMA_BRANCH_ID']); }
+        db_branch_strip_cross_fk_tables($branchId);
+        db_branch_apply_id_floor($branchId);
+    } catch (Throwable $e) { /* dilaporkan lewat hasil pemulihan */ }
+    return ['ok' => true, 'error' => '', 'snapshot' => $snap];
+}
+
+/**
+ * PULIHKAN SELURUH BASIS DATA dari paket lengkap (zip central + cabang).
+ *
+ * @return array{ok:bool,error:string,restored:array<int,string>,snapshot:string}
+ */
+function backup_restore_package(string $file, ?int $userId = null): array
+{
+    $path = backup_dir_ensure() . '/' . basename($file);
+    if (!is_file($path)) return ['ok' => false, 'error' => 'Berkas paket tidak ditemukan di storage.', 'restored' => [], 'snapshot' => ''];
+    $val = backup_package_validate($path);
+    if (!$val['ok']) return ['ok' => false, 'error' => 'Paket tidak lolos verifikasi: ' . $val['error'], 'restored' => [], 'snapshot' => ''];
+    $read = backup_package_read($path);
+
+    /* Snapshot pengaman: paket lengkap kondisi SEKARANG. */
+    $snap = '';
+    $s = backup_create_package('Snapshot otomatis sebelum restore paket', $userId, ['enforce' => false]);
+    if (!empty($s['ok'])) $snap = (string)$s['file'];
+
+    $dipulihkan = [];
+    $dilewati = [];
+    $mediaKembali = 0;
+    foreach (($read['entries'] ?? []) as $nama => $isi) {
+        /* ---------------- BERKAS MEDIA (foto) ----------------
+           Ditulis kembali ke folder unggahan supaya foto pasien/dokter/terapis dan
+           lampiran rekam medis TIDAK hilang saat data dipulihkan di tempat lain. */
+        if (strpos((string)$nama, 'backup/media/') === 0) {
+            $rel = substr((string)$nama, strlen('backup/media/'));
+            $rel = str_replace('\\', '/', $rel);
+            if ($rel === '' || strpos($rel, '..') !== false) continue;
+            $tujuan = backup_uploads_root() . '/' . $rel;
+            if (!is_dir(dirname($tujuan))) @mkdir(dirname($tujuan), 0775, true);
+            $tmpM = $tujuan . '.part-' . getmypid();
+            if (@file_put_contents($tmpM, $isi) !== false && @rename($tmpM, $tujuan)) {
+                @chmod($tujuan, 0664);
+                $mediaKembali++;
+            } else {
+                @unlink($tmpM);
+            }
+            continue;
+        }
+        if (strpos((string)$nama, 'backup/') !== 0) continue;
+        $label = basename((string)$nama);
+        if ($label === 'central.sqlite') {
+            $target = db_central_path();
+        } elseif (preg_match('/^branch_(\d+)\.sqlite$/', $label, $m)) {
+            $target = db_branch_path((int)$m[1]);
+        } else {
+            continue;
+        }
+        if (strlen($isi) < 100) continue;
+        /* PENGAMAN ISI PAKET: berkas basis data yang akan menggantikan basis data
+           aplikasi WAJIB benar-benar SQLite dan punya tabel inti (settings + users).
+           Tanpa pemeriksaan ini, paket yang keliru (pernah terjadi: berkas warisan
+           `data.sqlite` berlabel "central.sqlite") menimpa basis data sebenarnya dan
+           data global sesudahnya hilang. Lebih baik MENOLAK daripada menimpa. */
+        $cek = backup_db_bytes_looks_valid($isi, $label === 'central.sqlite');
+        if (!$cek['ok']) {
+            $dilewati[] = $label . ': ' . $cek['alasan'];
+            continue;
+        }
+        if (!is_dir(dirname($target))) @mkdir(dirname($target), 0770, true);
+        $tmp = dirname($target) . '/.restore-pkg-' . getmypid() . '-' . $label;
+        if (@file_put_contents($tmp, $isi) === false) continue;
+        foreach (['', '-wal', '-shm'] as $akhiran) {
+            if (is_file($target . $akhiran)) @unlink($target . $akhiran);
+        }
+        if (@rename($tmp, $target)) {
+            @chmod($target, 0664);
+            $dipulihkan[] = $label;
+        }
+    }
+    if ($mediaKembali > 0) $dipulihkan[] = $mediaKembali . ' berkas foto';
+    /* Central ikut dipulihkan: pastikan skema & data contoh sistem siap. */
+    try { db_central_registry_ready(); } catch (Throwable $e) { /* informatif */ }
+    return ['ok' => (bool)$dipulihkan, 'error' => $dipulihkan ? '' : 'Tidak ada basis data yang dipulihkan dari paket.',
+        'restored' => $dipulihkan, 'snapshot' => $snap, 'media' => $mediaKembali,
+        'dilewati' => $dilewati];
+}
+
+/**
+ * Periksa isi berkas basis data SEBELUM dipakai menimpa basis data aplikasi.
+ *
+ * Hanya berkas SQLite yang punya tabel inti yang diterima. Pemeriksaan dilakukan
+ * pada berkas SEMENTARA (tidak menyentuh berkas aplikasi).
+ *
+ * @param bool $wajibInti untuk `central.sqlite`: tabel inti wajib ada DAN berkasnya
+ *                        tidak boleh memuat data operasional (pasien/transaksi),
+ *                        karena pada arsitektur central+branch data itu milik berkas
+ *                        cabang. Berkas yang memuatnya berarti berkas WARISAN
+ *                        (`data.sqlite` sebelum pemisahan) — memulihkannya akan
+ *                        menimpa central dan menghilangkan perubahan terbaru.
+ * @return array{ok:bool,alasan:string}
+ */
+function backup_db_bytes_looks_valid(string $isi, bool $wajibInti = true): array
+{
+    if (substr($isi, 0, 16) !== "SQLite format 3\0") {
+        return ['ok' => false, 'alasan' => 'bukan berkas SQLite yang sah'];
+    }
+    $tmp = sys_get_temp_dir() . '/nv-bkpcek-' . bin2hex(random_bytes(4)) . '.sqlite';
+    if (@file_put_contents($tmp, $isi) === false) return ['ok' => false, 'alasan' => 'berkas sementara gagal dibuat'];
+    try {
+        $p = new PDO('sqlite:' . $tmp);
+        $p->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $ic = (string)$p->query('PRAGMA integrity_check')->fetchColumn();
+        if ($ic !== 'ok') return ['ok' => false, 'alasan' => 'integritas berkas tidak sehat (' . $ic . ')'];
+        $tabel = (int)$p->query("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")->fetchColumn();
+        if ($tabel < 5) return ['ok' => false, 'alasan' => 'berkas hampir kosong (' . $tabel . ' tabel)'];
+        if ($wajibInti) {
+            $inti = (int)$p->query("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('settings','users','roles')")->fetchColumn();
+            if ($inti < 3) return ['ok' => false, 'alasan' => 'tabel inti (settings/users/roles) tidak lengkap'];
+            /* Data operasional TIDAK boleh ada di berkas central. */
+            foreach (['patients', 'orders'] as $t) {
+                $ada = (int)$p->query("SELECT COUNT(*) FROM sqlite_master WHERE name = '{$t}'")->fetchColumn();
+                if (!$ada) continue;
+                $n = (int)$p->query("SELECT COUNT(*) FROM {$t}")->fetchColumn();
+                if ($n > 0) {
+                    return ['ok' => false, 'alasan' => 'berkas ini memuat data ' . $t . ' (' . $n . ' baris) — '
+                        . 'itu berkas WARISAN satu-basis-data, bukan central. Pemulihan dibatalkan supaya '
+                        . 'basis data central yang dipakai sekarang tidak tertimpa.'];
+                }
+            }
+        }
+        return ['ok' => true, 'alasan' => ''];
+    } catch (Throwable $e) {
+        return ['ok' => false, 'alasan' => 'berkas tidak dapat dibaca (' . $e->getMessage() . ')'];
+    } finally {
+        @unlink($tmp);
+    }
+}
+
+/**
+ * Kosongkan SELURUH baris sebuah tabel di SEMUA cabang (dipakai pemulihan dari dump).
+ * `DELETE FROM t` biasa hanya mengenai satu cabang, sehingga pemulihan penuh butuh ini.
+ */
+function backup_clear_table(string $table): int
+{
+    $total = 0;
+    if (db_route_scope_of($table) === 'branch') {
+        foreach (db_route_attached() as $alias) {
+            try { $total += (int)db()->exec('DELETE FROM ' . $alias . '."' . $table . '"'); }
+            catch (Throwable $e) { /* tabel belum ada di berkas itu */ }
+        }
+    } else {
+        try { $total += (int)db()->exec('DELETE FROM "' . $table . '"'); } catch (Throwable $e) { /* - */ }
+    }
+    return $total;
+}
+
+/** Verifikasi paket: manifest + checksum harus cocok. */
+function backup_package_validate(string $path): array
+{
+    $r = backup_package_read($path);
+    if (!$r['ok']) return ['ok' => false, 'error' => $r['error'], 'files' => [], 'meta' => []];
+    $manifest = json_decode((string)($r['entries']['manifest.json'] ?? '{}'), true) ?: [];
+    $checks = json_decode((string)($r['entries']['checksums.json'] ?? '{}'), true) ?: [];
+    $meta = json_decode((string)($r['entries']['metadata.json'] ?? '{}'), true) ?: [];
+    $salah = [];
+    foreach ((array)($manifest['files'] ?? []) as $f) {
+        $nama = (string)($f['file'] ?? '');
+        if ($nama === '' || !isset($r['entries'][$nama])) { $salah[] = $nama . ' (tidak ada di paket)'; continue; }
+        $harap = (string)($checks[$nama] ?? '');
+        if ($harap !== '' && hash('sha256', $r['entries'][$nama]) !== $harap) $salah[] = $nama . ' (checksum tidak cocok)';
+    }
+    return ['ok' => !$salah && !empty($manifest['files']), 'error' => $salah ? implode('; ', $salah) : '',
+        'files' => (array)($manifest['files'] ?? []), 'meta' => $meta];
 }

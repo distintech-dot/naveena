@@ -419,6 +419,141 @@
     }, true);
   })();
 
+  /* ============================================================================
+   PAGINASI TANPA MEMUAT ULANG HALAMAN (permintaan pemilik)
+   ============================================================================
+   Nomor halaman (1, 2, 3, …) pada `.pagination` dimuat lewat fetch lalu HANYA
+   bagian daftar (tabel + kontrol halaman) yang diganti — halaman tidak berkedip
+   dan posisi gulir tetap. Setiap kartu berhalaman punya kunci sendiri
+   (`data-pg`, mis. `page_trx`) sehingga mengklik halaman pada satu kartu TIDAK
+   mengubah kartu lain.
+
+   Bila fetch gagal (mis. jaringan terputus), halaman tetap dibuka seperti biasa
+   sehingga navigasi tidak pernah "mati".
+   ========================================================================== */
+  /**
+   * Wadah tabel MILIK sebuah kontrol halaman.
+   *
+   * PENTING (perbaikan bug nyata): dulu hanya `previousElementSibling` yang
+   * diperiksa, padahal `Naveena.tableScroll()` menyisipkan
+   * `<p class="table-hint">` TEPAT SETELAH wadah tabel. Akibatnya, begitu tabel
+   * cukup lebar untuk digeser (di layar kecil SELALU, di desktop tergantung
+   * panjang kolom), wadah tabel tidak lagi dikenali → nomor halaman berganti
+   * tetapi ISINYA TIDAK — pemilik harus menyegarkan halaman dulu. Sekarang wadah
+   * dicari dengan menelusuri elemen-elemen sebelumnya.
+   */
+  function wrapOfPagination(pag) {
+    let el = pag ? pag.previousElementSibling : null;
+    let n = 0;
+    while (el && n++ < 8) {
+      if (el.classList && el.classList.contains('table-wrap')) return el;
+      el = el.previousElementSibling;
+    }
+    return null;
+  }
+
+  document.addEventListener('click', async function (ev) {
+    const a = ev.target.closest && ev.target.closest('.pagination a.pg');
+    if (!a) return;
+    const href = a.getAttribute('href');
+    const pag = a.closest('.pagination');
+    if (!href || !pag) return;
+    ev.preventDefault();
+
+    /* Pencocokan daftar memakai KUNCI kartu (`data-pg`, mis. `page_trx`) bila ada,
+       baru jatuh ke urutan. */
+    const kunci = pag.getAttribute('data-pg') || '';
+    const semuaPag = Array.prototype.slice.call(document.querySelectorAll('.pagination'));
+    const idx = semuaPag.indexOf(pag);
+    const wrap = wrapOfPagination(pag);
+
+    pag.classList.add('is-loading');
+    try {
+      const res = await fetch(href, { credentials: 'same-origin', headers: { 'X-Requested-With': 'fetch' } });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const html = await res.text();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      /* Cari kontrol halaman sepadan: utamakan KUNCI kartu; bila kuncinya sama
+         dipakai lebih dari satu kartu (mis. dua daftar sama-sama `page`), jatuh ke
+         urutan supaya tidak salah mengambil kontrol milik kartu lain. */
+      let pagBaru = null;
+      if (kunci !== '') {
+        const kandidat = doc.querySelectorAll('.pagination[data-pg="' + kunci.replace(/"/g, '\\"') + '"]');
+        if (kandidat.length === 1) pagBaru = kandidat[0];
+      }
+      if (!pagBaru) pagBaru = doc.querySelectorAll('.pagination')[idx >= 0 ? idx : 0];
+      if (!pagBaru) throw new Error('daftar halaman tidak ditemukan');
+      const wrapBaru = wrapOfPagination(pagBaru);
+      /* Keduanya wajib ada: kalau tabelnya tidak ditemukan, lebih baik membuka
+         halamannya seperti biasa daripada menampilkan nomor yang tidak sesuai isi. */
+      if (!wrap || !wrapBaru) throw new Error('wadah tabel tidak ditemukan');
+      wrap.innerHTML = wrapBaru.innerHTML;
+      pag.innerHTML = pagBaru.innerHTML;
+      pag.classList.remove('is-loading');
+      /* Alamat di bilah peramban ikut berubah supaya tautan dapat dibagikan /
+         disegarkan tanpa kehilangan halaman yang sedang dibuka. */
+      if (window.history && window.history.replaceState) window.history.replaceState(null, '', href);
+      /* Fitur tabel (petunjuk geser & geser-tahan-klik) dipasang ulang untuk isi baru. */
+      window.Naveena.tableScroll();
+      window.Naveena.tableDragScroll();
+      if (wrap) {
+        const atas = wrap.getBoundingClientRect().top + window.pageYOffset - 90;
+        window.scrollTo({ top: Math.max(0, atas), behavior: 'smooth' });
+      }
+    } catch (e) {
+      /* Gagal memuat sebagian → buka halamannya seperti biasa (jangan diam). */
+      pag.classList.remove('is-loading');
+      window.location.href = href;
+    }
+  });
+
+  /* ============================================================================
+   FOTO DIPERBESAR (lightbox) — permintaan pemilik
+   ============================================================================
+   Foto pasien / dokter / terapis / lampiran klinis dapat DIKLIK untuk dilihat
+   lebih besar. Elemen apa pun yang punya atribut `data-zoom="<url gambar>"` akan
+   membuka lapisan gelap berisi gambar ukuran besar (dapat diperbesar lagi dengan
+   klik pada gambar — zoom 1×/2×). Tertutup lewat tombol ×, klik latar, atau Esc.
+   Berlaku otomatis untuk avatar yang fotonya sudah diunggah (lihat person_avatar()).
+   ========================================================================== */
+  (function () {
+    let box = null;
+    const tutup = () => { if (box) { box.remove(); box = null; document.documentElement.style.overflow = ''; } };
+    const buka = (url, alt) => {
+      if (!url) return;
+      tutup();
+      box = document.createElement('div');
+      box.className = 'zoom-box';
+      box.setAttribute('role', 'dialog');
+      box.setAttribute('aria-label', 'Foto diperbesar');
+      const img = document.createElement('img');
+      img.src = url; img.alt = alt || 'Foto';
+      img.className = 'zoom-img';
+      const ket = document.createElement('div');
+      ket.className = 'zoom-cap';
+      ket.textContent = 'Klik gambar untuk memperbesar/mengecilkan · Esc atau klik latar untuk menutup';
+      const x = document.createElement('button');
+      x.type = 'button'; x.className = 'zoom-close'; x.setAttribute('aria-label', 'Tutup');
+      x.innerHTML = '&times;';
+      x.addEventListener('click', (e) => { e.stopPropagation(); tutup(); });
+      img.addEventListener('click', (e) => { e.stopPropagation(); img.classList.toggle('is-big'); });
+      box.addEventListener('click', tutup);
+      box.appendChild(img); box.appendChild(ket); box.appendChild(x);
+      document.body.appendChild(box);
+      document.documentElement.style.overflow = 'hidden';
+    };
+    document.addEventListener('click', function (ev) {
+      const t = ev.target.closest && ev.target.closest('[data-zoom]');
+      if (!t) return;
+      ev.preventDefault();
+      buka(t.getAttribute('data-zoom'), t.getAttribute('alt') || '');
+    });
+    document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') tutup(); });
+    /* Dipakai juga oleh skrip halaman (mis. tombol "Perbesar" pada kartu foto). */
+    window.Naveena = window.Naveena || {};
+    window.Naveena.zoom = buka;
+  })();
+
   document.addEventListener('DOMContentLoaded', function () {
     window.Naveena.tableScroll();
     window.Naveena.tableDragScroll();
@@ -490,10 +625,15 @@
      * tidak pernah muncul — tombol tampak "mati". Sekarang: validasi dulu, baru
      * tampilkan peringatan tahap 1. */
     document.addEventListener('click', (ev) => {
-      const btn = ev.target.closest('form[data-heavy-confirm] button[type=submit]');
+      /* Penting: tombol boleh berada di LUAR form-nya (dipakai atribut `form="…"`,
+         mis. tombol "Kembali ke Default" yang berdampingan dengan tombol simpan pada
+         form lain). Karena itu formnya diambil dari `btn.form` (form terkait), bukan
+         dari leluhur DOM — pola `form[data-heavy-confirm] button` tidak menemukannya
+         dan peringatan 2 tahap akan terlewat. */
+      const btn = ev.target.closest('button[type=submit], input[type=submit]');
       if (!btn) return;
-      const f = btn.form;
-      if (!f) return;
+      const f = btn.form || btn.closest('form');
+      if (!f || !f.dataset || !f.dataset.heavyConfirm) return;
       if (typeof f.checkValidity === 'function' && !f.checkValidity()) return;  // biarkan validasi bawaan tampil
       ev.preventDefault();
       openHeavy(f);
@@ -511,6 +651,23 @@
         return;
       }
       heavyForm = f;
+      /* Jenis tindakan menentukan kalimat peringatan: tindakan yang BUKAN penghapusan
+         (mis. "Kembali ke Default") tidak boleh diberi peringatan menghapus data —
+         peringatan yang salah membuat pemilik ragu memakai tombolnya. */
+      const alertBox = document.getElementById('confirmHeavyAlert');
+      const judul = m.querySelector('.modal-head h3');
+      if (alertBox) {
+        if (f.dataset.heavyKind === 'reset') {
+          alertBox.className = 'alert alert-info mb-2';
+          alertBox.innerHTML = 'Tindakan ini <strong>mengganti teks/pengaturan</strong> ke bawaan — '
+            + 'tidak ada data yang dihapus, dan Anda masih dapat mengubahnya lagi kapan saja.';
+          if (judul) judul.innerHTML = '⚠ Konfirmasi Perubahan Pengaturan';
+        } else {
+          alertBox.className = 'alert alert-error mb-2';
+          alertBox.innerHTML = 'Tindakan ini <strong>menghapus data secara permanen</strong> dan tidak dapat dibatalkan.';
+          if (judul) judul.innerHTML = '⚠ Konfirmasi Tindakan Berbahaya';
+        }
+      }
       document.getElementById('confirmHeavyText').innerHTML = f.dataset.heavyWarning || 'Tindakan ini tidak dapat dibatalkan.';
       document.getElementById('confirmHeavyWord').textContent = f.dataset.heavyConfirm;
       heavyInput.value = '';

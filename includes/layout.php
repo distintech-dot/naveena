@@ -312,7 +312,7 @@ function page_foot(array $opts = []): void
         <div class="modal-head"><h3 style="color:#B3261E">⚠ Konfirmasi Tindakan Berbahaya</h3>
           <button type="button" class="icon-btn" data-heavy-cancel="1">' . icon('x') . '</button></div>
         <div class="modal-body">
-          <div class="alert alert-error mb-2">Tindakan ini <strong>menghapus data secara permanen</strong> dan tidak dapat dibatalkan.</div>
+          <div class="alert alert-error mb-2" id="confirmHeavyAlert">Tindakan ini <strong>menghapus data secara permanen</strong> dan tidak dapat dibatalkan.</div>
           <div id="confirmHeavyText" class="mb-2"></div>
           <div class="field">
             <label>Ketik <code id="confirmHeavyWord"></code> untuk melanjutkan</label>

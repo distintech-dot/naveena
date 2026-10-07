@@ -297,14 +297,19 @@ function photo_url(string $kind, array $row): string
     return 'photo.php?t=' . urlencode($kind) . '&id=' . $id . '&v=' . $v;
 }
 
-/** Tampilkan foto (bila ada) atau inisial nama sebagai cadangan. */
-function person_avatar(string $kind, array $row, int $size = 40): string
+/** Tampilkan foto (bila ada) atau inisial nama sebagai cadangan.
+ *
+ * @param bool $zoom foto dapat DIKLIK untuk diperbesar (lightbox `data-zoom`).
+ */
+function person_avatar(string $kind, array $row, int $size = 40, bool $zoom = true): string
 {
     $src = photo_url($kind, $row);
     $name = (string)($row['name'] ?? '?');
     $st = 'width:' . $size . 'px;height:' . $size . 'px;border-radius:50%;object-fit:cover;flex:0 0 ' . $size . 'px';
     if ($src !== '') {
-        return '<img class="avatar-img" src="' . e($src) . '" alt="' . e($name) . '" style="' . $st . '">';
+        $zoomAttr = $zoom ? ' data-zoom="' . e($src) . '" tabindex="0" role="button"' : '';
+        return '<img class="avatar-img' . ($zoom ? ' zoomable' : '') . '" src="' . e($src) . '" alt="' . e($name)
+            . '" style="' . $st . '"' . $zoomAttr . '>';
     }
     $ini = strtoupper(substr(trim($name) !== '' ? trim($name) : '?', 0, 1));
     return '<span class="avatar" style="' . $st . ';font-size:' . max(11, (int)($size * 0.42)) . 'px">' . e($ini) . '</span>';

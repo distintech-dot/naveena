@@ -458,6 +458,45 @@ function ui_scale_options(): array
  * Blok CSS yang menimpa variabel warna sesuai tema terpilih.
  * Dipakai di semua halaman (termasuk halaman login, struk, dan dokumen cetak).
  */
+/**
+ * WARNA KARTU STATISTIK (gold / pink / coklat) — dapat diatur pemilik.
+ *
+ * Dipakai dashboard, laporan, dan menu Keuangan supaya SATU warna dipakai di semua
+ * tempat. Nilai disimpan sebagai setelan (`stat_color_<nama>`) dan dikirim ke
+ * peramban sebagai variabel CSS oleh theme_css().
+ *
+ * @return array<string,array{from:string,to:string,border:string,ink:string,label:string}>
+ */
+function stat_card_colors(): array
+{
+    $def = [
+        'gold'  => ['from' => '#FFE9A3', 'to' => '#F8CF5C', 'border' => '#E8BC45', 'ink' => '#3A2A00', 'label' => '#6E5200'],
+        'pink'  => ['from' => '#FFDCEA', 'to' => '#F6AFCB', 'border' => '#EE93B6', 'ink' => '#4E0A26', 'label' => '#83194A'],
+        'brown' => ['from' => '#EFD9C0', 'to' => '#DCBA94', 'border' => '#C9A176', 'ink' => '#3B2413', 'label' => '#6E4A28'],
+    ];
+    foreach ($def as $nama => $w) {
+        foreach ($w as $bagian => $hex) {
+            $v = strtoupper(trim((string)setting('stat_color_' . $nama . '_' . $bagian, '')));
+            if ($v !== '' && preg_match('/^#?[0-9A-F]{6}$/', $v)) $def[$nama][$bagian] = '#' . ltrim($v, '#');
+        }
+    }
+    return $def;
+}
+
+/** Aturan CSS kartu statistik berwarna (mengikuti setelan). */
+function stat_card_css(): string
+{
+    $css = '';
+    foreach (stat_card_colors() as $nama => $w) {
+        $css .= '.stat.' . $nama . '{background:linear-gradient(135deg,' . $w['from'] . ',' . $w['to'] . ');'
+            . 'border:1px solid ' . $w['border'] . ';color:' . $w['ink'] . '}';
+        $css .= '.stat.' . $nama . ' .lbl{color:' . $w['label'] . '}';
+        $css .= '.stat.' . $nama . ' .sub{color:' . $w['label'] . '}';
+        $css .= '.stat.' . $nama . ' .val{color:' . $w['ink'] . '}';
+    }
+    return $css;
+}
+
 function theme_css(): string
 {
     $t = theme_current();
@@ -482,6 +521,15 @@ function theme_css(): string
         '--brand-bright' => $t['brandBright'],
     ];
     $css = ':root{';
+    /* Warna kartu statistik dikirim sebagai variabel CSS supaya dapat diatur
+       pemilik tanpa mengubah berkas CSS (lihat stat_card_colors()). */
+    foreach (stat_card_colors() as $nama => $w) {
+        $rules['--stat-' . $nama . '-1'] = $w['from'];
+        $rules['--stat-' . $nama . '-2'] = $w['to'];
+        $rules['--stat-' . $nama . '-line'] = $w['border'];
+        $rules['--stat-' . $nama . '-ink'] = $w['ink'];
+        $rules['--stat-' . $nama . '-label'] = $w['label'];
+    }
     foreach ($rules as $k => $v) $css .= $k . ':' . $v . ';';
     /* Skala tampilan dikirim bersama variabel tema supaya berlaku juga di halaman
        login, struk, dan dokumen cetak (semuanya memakai theme_css()). */
@@ -497,6 +545,8 @@ function theme_css(): string
         . 'radial-gradient(800px 500px at 70% 100%, ' . $t['brand'] . '12, transparent 60%);}';
     $css .= '.sidebar{background:linear-gradient(170deg,' . $t['brandDark'] . ' 0%,' . $t['brand'] . ' 52%,' . $t['brandMid'] . ' 100%);}';
     $css .= '.stat.accent{background:linear-gradient(140deg,' . $t['brand'] . ',' . $t['brandMid'] . ');}';
+    /* Kartu statistik berwarna: nilainya berasal dari setelan pemilik. */
+    $css .= stat_card_css();
     $css .= '.btn-primary{background:linear-gradient(135deg,' . $t['brandMid'] . ',' . $t['brand'] . ');}';
     $css .= '.btn-leaf{background:linear-gradient(135deg,' . $t['accentMid'] . ',' . $t['accentDark'] . ');}';
     $css .= '.stat.leaf{background:linear-gradient(140deg,' . $t['accentDark'] . ',' . $t['accent'] . ');}';

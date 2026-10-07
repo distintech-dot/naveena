@@ -40,6 +40,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pat = one('SELECT * FROM patients WHERE id = ?', [$patient]);
             if (!$pat) throw new RuntimeException('Pasien tidak ditemukan.');
             assert_branch((int)$pat['branch_id']);
+            /* CABANG MENGIKUTI PASIEN (ronde 34 lanjutan): data reservasi hidup di
+               berkas basis data cabang pasiennya, dan induknya (pasien) tidak ada di
+               berkas cabang lain — jadi kolom Cabang TIDAK boleh berbeda dari cabang
+               pasien. Nomor reservasi pun harus memakai kode cabang pasien supaya
+               tidak ada dokumen bertanda cabang lain. */
+            if ((int)$pat['branch_id'] !== $branch) {
+                $branch = (int)$pat['branch_id'];
+                flash('Cabang reservasi disesuaikan menjadi ' . e(branch_name_of($branch))
+                    . ' karena pasien terdaftar di cabang tersebut.', 'warning');
+            }
             assert_branch($branch);
             if ($id > 0) {
                 $old = one('SELECT * FROM appointments WHERE id = ?', [$id]);
@@ -228,11 +238,33 @@ $rows = all("SELECT a.*, p.name AS patient_name, p.phone AS patient_phone, b.nam
                       WHERE at2.appointment_id = a.id) AS treatments_all
              {$base} ORDER BY a.date DESC, a.time DESC LIMIT {$pp} OFFSET " . (($page - 1) * $pp), $params);
 
-/* Calendar month */
+/* Calendar month — dapat dipilih lewat BULAN + TAHUN (permintaan pemilik: ingin
+   melihat bulan di tahun 2024 atau tahun yang lebih jauh dengan mudah).
+   Sumber nilainya tetap `?m=YYYY-MM` supaya tautan lama/tombol bulan lalu-depan
+   tetap bekerja; pemilih di layar mengirim `cal_y` + `cal_m` yang digabung di sini. */
 $calMonth = gp('m', date('Y-m'));
+$calY = (int)gp('cal_y', 0);
+$calM = (int)gp('cal_m', 0);
+if ($calY >= 1900 && $calY <= 2200 && $calM >= 1 && $calM <= 12) {
+    $calMonth = sprintf('%04d-%02d', $calY, $calM);
+}
 if (!preg_match('/^\d{4}-\d{2}$/', $calMonth)) $calMonth = date('Y-m');
+$calYear  = (int)substr($calMonth, 0, 4);
+$calMon   = (int)substr($calMonth, 5, 2);
 $calStart = $calMonth . '-01';
 $calEnd   = date('Y-m-t', strtotime($calStart));
+/* Rentang tahun pada pemilih: mencakup tahun yang PUNYA data reservasi + tahun
+   berjalan, ditambah satu tahun ke depan — jadi tahun lama tetap dapat dipilih. */
+$calYearRows = all('SELECT DISTINCT substr(a.date,1,4) AS y FROM appointments a WHERE 1=1'
+    . ($scope !== null ? ' AND a.branch_id = ' . (int)$scope : '') . ' ORDER BY y');
+$calYears = array_map('intval', array_column($calYearRows, 'y'));
+$calYears[] = (int)date('Y');
+$calYears[] = $calYear;
+$calYearMin = min($calYears);
+$calYearMax = max(max($calYears), (int)date('Y') + 1);
+$calMonthNames = ['01' => 'Januari', '02' => 'Februari', '03' => 'Maret', '04' => 'April',
+    '05' => 'Mei', '06' => 'Juni', '07' => 'Juli', '08' => 'Agustus',
+    '09' => 'September', '10' => 'Oktober', '11' => 'November', '12' => 'Desember'];
 $calWhere = ['a.date BETWEEN ? AND ?'];
 $calParams = [$calStart, $calEnd];
 if ($scope !== null) { $calWhere[] = 'a.branch_id = ?'; $calParams[] = $scope; }
@@ -322,6 +354,27 @@ page_head('Reservasi', 'reservasi');
       <a class="btn btn-sm" href="?view=cal&m=<?= e(date('Y-m', strtotime($calEnd . ' +1 day'))) ?>">Bulan depan ›</a>
     </div>
   </div>
+  <?php /* PEMILIH BULAN + TAHUN (permintaan pemilik): tanpa ini, melihat bulan di
+          tahun 2024 harus menekan "Bulan lalu" puluhan kali. Tiap pilihan langsung
+          dipakai (auto-submit) dan nilai lamanya dipertahankan pada URL `?m=`. */ ?>
+  <form class="filter-bar" method="get">
+    <input type="hidden" name="view" value="cal">
+    <div class="field"><label>Bulan</label>
+      <select class="input input-sm" name="cal_m" data-autosubmit>
+        <?php foreach ($calMonthNames as $mk => $mv): ?>
+          <option value="<?= (int)$mk ?>"<?= (int)$mk === $calMon ? ' selected' : '' ?>><?= e($mv) ?></option>
+        <?php endforeach; ?>
+      </select></div>
+    <div class="field"><label>Tahun</label>
+      <select class="input input-sm" name="cal_y" data-autosubmit>
+        <?php for ($y = $calYearMin; $y <= $calYearMax; $y++): ?>
+          <option value="<?= $y ?>"<?= $y === $calYear ? ' selected' : '' ?>><?= $y ?></option>
+        <?php endfor; ?>
+      </select></div>
+    <button class="btn btn-sm btn-primary" type="submit">Tampilkan</button>
+    <span class="muted">Menampilkan <strong><?= e($calMonthNames[sprintf('%02d', $calMon)]) ?> <?= $calYear ?></strong>
+      · <a href="?view=cal&m=<?= e(date('Y-m')) ?>">kembali ke bulan ini</a></span>
+  </form>
   <div class="card-body">
     <?php if (!$calRows): ?><p class="muted">Tidak ada reservasi pada bulan ini.</p><?php endif; ?>
     <div class="cal">
@@ -336,8 +389,11 @@ page_head('Reservasi', 'reservasi');
           $cls = 'day' . ($dk === date('Y-m-d') ? ' today' : '');
           echo '<div class="' . $cls . '"><span class="dnum">' . $d . '</span>';
           foreach ($calByDay[$dk] ?? [] as $ev) {
-              $st = strtolower($ev['status']);
-              $cls2 = 'ev' . (in_array($ev['status'], ['Selesai', 'Hadir'], true) ? ' done' : '') . (in_array($ev['status'], ['Cancel', 'No Show'], true) ? ' cancel' : '');
+              /* Warna kartu di kalender MENGIKUTI status reservasinya (sama dengan
+                 badge status pada daftar) supaya mudah dibaca sekali lihat. */
+              $stKey = ['Menunggu' => 'st-menunggu', 'Confirmed' => 'st-confirmed', 'Hadir' => 'st-hadir',
+                        'Selesai' => 'st-selesai', 'Cancel' => 'st-cancel', 'No Show' => 'st-noshow'][$ev['status']] ?? 'st-menunggu';
+              $cls2 = 'ev ' . $stKey;
               echo '<a class="' . $cls2 . '" title="' . e($ev['appointment_number'] . ' · ' . $ev['patient_name'] . ' · ' . $ev['status']) . '" href="reservasi.php?view=list&q=' . urlencode($ev['appointment_number']) . '">' . e(substr($ev['time'], 0, 5) . ' ' . $ev['patient_name']) . '</a>';
           }
           echo '</div>';
@@ -373,6 +429,7 @@ page_head('Reservasi', 'reservasi');
           <option value="<?= (int)$t['id'] ?>"<?= $therFilter === (int)$t['id'] ? ' selected' : '' ?>><?= e($t['name']) ?></option>
         <?php endforeach; ?>
       </select></div>
+    <?= branch_filter_field() ?>
     <button class="btn btn-sm btn-primary" type="submit">Filter</button>
     <a class="btn btn-sm" href="reservasi.php">Reset</a>
     <?= per_page_inline() ?>

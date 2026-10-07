@@ -24,6 +24,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $old = one('SELECT * FROM suppliers WHERE id = ?', [$id]);
                 if (!$old) throw new RuntimeException('Supplier tidak ditemukan.');
                 if ($old['branch_id']) assert_branch((int)$old['branch_id']);
+                if ($id > 0) {
+                    $lamaS = one('SELECT branch_id FROM suppliers WHERE id = ?', [$id]);
+                    $lb = (int)($lamaS['branch_id'] ?? 0);
+                    /* Supplier BERSAMA (branch_id NULL) boleh diberi cabang; supplier
+                       milik cabang lain tidak boleh dipindah (lihat helper-nya). */
+                    if ($lb > 0) assert_branch_unchanged('suppliers', $id, (int)$branch);
+                }
                 q('UPDATE suppliers SET name=?, phone=?, email=?, address=?, branch_id=?, status=?, updated_at=datetime("now","localtime") WHERE id=?',
                     [$name, $phone, $email, $address, $branch ?: null, $status, $id]);
                 audit('Edit Supplier', 'Master Data', $id, $old, ['name' => $name], 'Perubahan supplier');
@@ -41,8 +48,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $s = one('SELECT * FROM suppliers WHERE id = ?', [$id]);
             if (!$s) throw new RuntimeException('Supplier tidak ditemukan.');
             if ($s['branch_id']) assert_branch((int)$s['branch_id']);
-            $used = (int)scalar('SELECT COUNT(*) FROM skincare_products WHERE supplier_name = ?', [$s['name']])
-                  + (int)scalar('SELECT COUNT(*) FROM treatment_materials WHERE supplier_name = ?', [$s['name']]);
+            /* PEMBATASAN CABANG (audit isolasi ronde 56): pemakaian supplier dihitung pada
+               cabang supplier itu; supplier bersama (tanpa cabang) dihitung seluruh cabang. */
+            $supBranch = (int)($s['branch_id'] ?? 0);
+            [$supSql, $supParams] = $supBranch > 0 ? [' AND branch_id = ?', [$supBranch]] : bscope('branch_id');
+            $used = (int)scalar('SELECT COUNT(*) FROM skincare_products WHERE supplier_name = ?' . $supSql,
+                        array_merge([$s['name']], $supParams))
+                  + (int)scalar('SELECT COUNT(*) FROM treatment_materials WHERE supplier_name = ?' . $supSql,
+                        array_merge([$s['name']], $supParams));
             if ($used > 0) throw new RuntimeException('Supplier ini masih dipakai pada ' . $used . ' produk/bahan. Nonaktifkan saja agar histori tetap utuh.');
             q('DELETE FROM suppliers WHERE id = ?', [$id]);
             audit('Hapus Supplier', 'Master Data', $id, $s, null, 'Supplier belum dipakai');
@@ -70,10 +83,14 @@ $params = [];
 if ($scope !== null) { $where[] = '(s.branch_id = ? OR s.branch_id IS NULL)'; $params[] = $scope; }
 if ($q !== '') { $where[] = '(s.name LIKE ? OR s.phone LIKE ? OR s.email LIKE ?)'; $t = '%' . $q . '%'; array_push($params, $t, $t, $t); }
 $w = implode(' AND ', $where);
+/* Paginasi (maksimal per halaman mengikuti Pengaturan; bawaan 25). */
+$page = page_no(); $pp = per_page();
+$total = (int)scalar("SELECT COUNT(*) FROM suppliers s WHERE {$w}", $params);
 $rows = all("SELECT s.*, b.name AS branch_name,
                     (SELECT COUNT(*) FROM skincare_products p WHERE p.supplier_name = s.name) produk,
                     (SELECT COUNT(*) FROM treatment_materials m WHERE m.supplier_name = s.name) bahan
-             FROM suppliers s LEFT JOIN branches b ON b.id = s.branch_id WHERE {$w} ORDER BY s.name", $params);
+             FROM suppliers s LEFT JOIN branches b ON b.id = s.branch_id WHERE {$w}
+             ORDER BY s.name LIMIT {$pp} OFFSET " . (($page - 1) * $pp), $params);
 $edit = gp('action') === 'edit' ? one('SELECT * FROM suppliers WHERE id = ?', [(int)gp('id')]) : null;
 
 page_head('Supplier', 'suppliers');
@@ -98,6 +115,7 @@ page_head('Supplier', 'suppliers');
   <form class="filter-bar" method="get">
     <div class="field searchbox"><label>Cari</label><span><?= icon('search') ?></span>
       <input class="input input-sm" name="q" value="<?= e($q) ?>" placeholder="Nama / telepon / email supplier"></div>
+    <?= branch_filter_field() ?>
     <button class="btn btn-sm btn-primary" type="submit">Filter</button>
     <a class="btn btn-sm" href="suppliers.php">Reset</a>
   </form>
@@ -131,6 +149,7 @@ page_head('Supplier', 'suppliers');
     </table>
     <?php endif; ?>
   </div>
+  <?= pagination($total, $pp, $page) ?>
 </div>
 
 <div class="modal<?= $edit ? ' open' : '' ?>" id="supModal">

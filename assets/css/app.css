@@ -235,6 +235,26 @@ p{margin:.35rem 0}
 .stat .lbl{font-size:.76rem;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-2);font-weight:650}
 .stat .val{font-size:1.5rem;font-weight:750;letter-spacing:-.02em}
 .stat .sub{font-size:.76rem;color:var(--ink-2)}
+/* Kartu statistik berwarna (gold / pink / coklat) — warnanya SEDIKIT LEBIH KUAT
+   supaya terlihat jelas, tetapi label & angka tetap gelap agar terbaca mudah.
+   Nilai warnanya dikirim sebagai variabel CSS oleh theme_css() (dapat diatur
+   pemilik di Pengaturan Sistem → Warna Grafik & Kartu). Nilai di bawah adalah
+   cadangan bila variabelnya belum tersedia. */
+.stat.gold{background:linear-gradient(135deg,var(--stat-gold-1,#FFE9A3),var(--stat-gold-2,#F8CF5C));
+  border:1px solid var(--stat-gold-line,#E8BC45);color:var(--stat-gold-ink,#3A2A00)}
+.stat.gold .lbl,.stat.gold .sub{color:var(--stat-gold-label,#6E5200)}
+.stat.gold .val{color:var(--stat-gold-ink,#3A2A00)}
+.stat.pink{background:linear-gradient(135deg,var(--stat-pink-1,#FFDCEA),var(--stat-pink-2,#F6AFCB));
+  border:1px solid var(--stat-pink-line,#EE93B6);color:var(--stat-pink-ink,#4E0A26)}
+.stat.pink .lbl,.stat.pink .sub{color:var(--stat-pink-label,#83194A)}
+.stat.pink .val{color:var(--stat-pink-ink,#4E0A26)}
+.stat.brown{background:linear-gradient(135deg,var(--stat-brown-1,#EFD9C0),var(--stat-brown-2,#DCBA94));
+  border:1px solid var(--stat-brown-line,#C9A176);color:var(--stat-brown-ink,#3B2413)}
+.stat.brown .lbl,.stat.brown .sub{color:var(--stat-brown-label,#6E4A28)}
+.stat.brown .val{color:var(--stat-brown-ink,#3B2413)}
+/* Kotak keterangan di dalam kartu berwarna: tetap terang agar isinya terbaca. */
+.stat.gold .notice,.stat.pink .notice,.stat.brown .notice{background:rgba(255,255,255,.72);
+  border-color:rgba(0,0,0,.12);color:inherit}
 .stat.accent{background:var(--stat-grad);border:0;color:#fff}
 .stat.accent .lbl,.stat.accent .sub{color:rgba(255,255,255,.85)}
 .stat.leaf{background:var(--stat-leaf-grad);border:0;color:#fff}
@@ -375,6 +395,11 @@ table.tbl tbody tr.o-over .qty-hint,table.tbl tbody tr.o-over .o-stock-warn{colo
 .alert-error{background:var(--danger-bg);color:var(--danger);border-color:#F5C9C6}
 .alert-warning{background:var(--warn-bg);color:var(--warn);border-color:#F5E0AE}
 .alert-info{background:var(--info-bg);color:var(--info);border-color:#C4DCF5}
+/* Formulir kecil di dalam kepala kartu (mis. pemilih periode riwayat pada Detail
+   Pasien) — hanya pemilih, bukan filter penuh, jadi tidak mengambil ruang lebar. */
+.inline-filter{display:inline-flex;align-items:center;gap:6px;margin:0}
+.inline-filter select.input-sm{padding:4px 8px;font-size:.78rem;height:auto;min-height:32px}
+
 .notice{background:var(--brand-tint2);border:1px dashed var(--pink-soft);color:var(--ink-2);padding:12px 14px;border-radius:12px;font-size:.83rem}
 
 /* ---------- Pagination ---------- */
@@ -385,6 +410,11 @@ table.tbl tbody tr.o-over .qty-hint,table.tbl tbody tr.o-over .o-stock-warn{colo
 .pg:hover{border-color:var(--pink);color:var(--magenta);text-decoration:none}
 .pg.active{background:var(--btn-grad);border-color:transparent;color:#fff}
 .pg.disabled{opacity:.45}
+/* Saat nomor halaman sedang dimuat tanpa memuat ulang halaman: beri penanda halus
+   supaya pengguna tahu permintaannya sedang diproses (bukan tombol mati). */
+.pagination.is-loading{opacity:.55;pointer-events:none}
+.pagination.is-loading .pg-links::after{content:'Memuat…';font-size:.75rem;color:var(--ink-2);
+  align-self:center;padding-left:8px}
 
 /* ---------- Modal ---------- */
 .modal{position:fixed;inset:0;z-index:80;display:none;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto;background:rgba(43,27,39,.5)}
@@ -521,8 +551,17 @@ table.tbl tbody tr.o-over .qty-hint,table.tbl tbody tr.o-over .o-stock-warn{colo
 .cal .day.today{border-color:var(--pink);box-shadow:0 0 0 2px rgba(233,30,99,.12)}
 .cal .day .dnum{font-weight:700;color:var(--ink-2);display:block;margin-bottom:4px}
 .cal .ev{display:block;background:var(--pink-soft);color:var(--magenta-dark);border-radius:6px;padding:2px 5px;margin-bottom:3px;font-size:.7rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Data reservasi pada kalender memakai WARNA YANG SAMA dengan badge statusnya di
+   daftar reservasi (permintaan pemilik): Menunggu=kuning, Confirmed=biru,
+   Hadir=pink, Selesai=hijau, Cancel=merah, No Show=abu. */
+.cal .ev.st-menunggu{background:var(--warn-bg);color:var(--warn)}
+.cal .ev.st-confirmed{background:var(--info-bg);color:var(--info)}
+.cal .ev.st-hadir{background:var(--pink-soft);color:var(--magenta-dark)}
+.cal .ev.st-selesai{background:var(--ok-bg);color:var(--ok)}
+.cal .ev.st-cancel{background:var(--danger-bg);color:var(--danger)}
+.cal .ev.st-noshow{background:var(--brand-chip);color:#6B5A65}
 .cal .ev.done{background:var(--ok-bg);color:var(--ok)}
-.cal .ev.cancel{background:#EFE9ED;color:#8B7B85}
+.cal .ev.cancel{background:var(--danger-bg);color:var(--danger)}
 .alert-list li{display:flex;justify-content:space-between;gap:10px;font-size:.85rem;padding:9px 0;border-bottom:1px solid var(--brand-bg3)}
 .alert-list li:last-child{border-bottom:0}
 .strength{font-size:.72rem;font-weight:700}
@@ -605,10 +644,15 @@ table.tbl tbody tr.o-over .qty-hint,table.tbl tbody tr.o-over .o-stock-warn{colo
 
 /* Kartu digital: rasio kartu ATM 85,6 × 54 mm (1.586 : 1), DUA SISI.
    Semua teks memakai overflow-wrap + clamp ukuran huruf supaya tidak pernah
-   keluar dari area kartu (permintaan pemilik klinik). */
-.mcard-set{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));align-items:start}
-.mcard{position:relative;aspect-ratio:1.586/1;max-width:520px;border-radius:16px;overflow:hidden;
-  background:#fff;border:1px solid var(--line);box-shadow:var(--shadow)}
+   keluar dari area kartu (permintaan pemilik klinik).
+   PEMUSATAN (permintaan pemilik): kedua kartu diletakkan di TENGAH kartu induk —
+   `justify-items:center` + lebar kartu dibatasi supaya di PC/tablet (2 kartu
+   berjajar) maupun di HP (1 kartu per baris) posisinya selalu simetris, bukan
+   menempel ke kiri. */
+.mcard-set{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));
+  align-items:start;justify-items:center;justify-content:center}
+.mcard{position:relative;aspect-ratio:1.586/1;width:100%;max-width:520px;border-radius:16px;overflow:hidden;
+  background:#fff;border:1px solid var(--line);box-shadow:var(--shadow);margin-inline:auto}
 .mcard.has-bg{background-image:var(--mcard-bg);background-size:100% 100%;background-position:center}
 /* Sisi depan: pita warna di kiri (berisi tulisan MEMBER vertikal) + isi kartu.
    Tanpa background unggahan, pita warna ini yang dipakai; kalau ada background
@@ -747,6 +791,18 @@ table.tbl tbody tr.o-over .qty-hint,table.tbl tbody tr.o-over .o-stock-warn{colo
 
 /* ---------- Foto orang (avatar) & keterangan foto ---------- */
 .avatar-img{display:inline-block;vertical-align:middle;background:#F2EAF0}
+/* Foto yang dapat diklik untuk diperbesar (lightbox di app.js). */
+[data-zoom]{cursor:zoom-in}
+[data-zoom]:focus-visible{outline:2px solid var(--brand,#C2185B);outline-offset:2px}
+.zoom-box{position:fixed;inset:0;z-index:9999;background:rgba(18,8,20,.86);display:flex;
+  flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;cursor:zoom-out}
+.zoom-img{max-width:min(92vw,1100px);max-height:80vh;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.5);
+  background:#fff;cursor:zoom-in;transition:transform .15s ease}
+.zoom-img.is-big{max-width:none;max-height:none;width:auto;height:auto;transform:scale(1.6);cursor:zoom-out}
+.zoom-cap{color:#fff;font-size:.82rem;opacity:.85;text-align:center;max-width:90vw}
+.zoom-close{position:absolute;top:14px;right:18px;width:44px;height:44px;border-radius:50%;border:0;
+  background:rgba(255,255,255,.16);color:#fff;font-size:26px;line-height:1;cursor:pointer}
+.zoom-close:hover{background:rgba(255,255,255,.3)}
 .avatar{display:inline-grid;place-items:center;vertical-align:middle;background:var(--brand-chip);color:var(--magenta);
   font-weight:700}
 .person-cell{display:flex;align-items:center;gap:10px;min-width:0}
@@ -1071,3 +1127,22 @@ textarea.auto-grow{min-height:118px;max-height:56vh;overflow-y:auto;resize:verti
   padding:12px 14px;margin:0 0 14px}
 .card-actions-bar .btn{flex:0 0 auto}
 @media (max-width:640px){.card-actions-bar .btn{width:100%;justify-content:center}}
+
+/* ---------- PANEL JOB AI DEVELOPER (ronde 53) ----------
+   Proses kerja tampil langsung di kartu chat: job_id, status, progres NYATA,
+   checklist langkah, heartbeat, dan tombol Berhenti. Semua diperbarui lewat AJAX
+   ringan sehingga halaman tidak perlu dimuat ulang (tidak ada freeze). */
+.job-panel{background:var(--brand-tint);border:1px solid var(--line);border-radius:12px;
+  padding:12px 14px;margin:0 0 12px}
+.job-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.job-id{font-weight:600;font-size:.86rem}
+.job-bar{height:6px;background:#fff;border:1px solid var(--line);border-radius:6px;margin:10px 0 6px;overflow:hidden}
+.job-bar>i{display:block;height:100%;background:var(--btn-grad);transition:width .4s ease}
+.job-meta{margin-bottom:8px}
+.job-steps{list-style:none;margin:0;padding:0;display:grid;gap:4px}
+.job-step{display:flex;gap:8px;align-items:baseline;font-size:.84rem;color:var(--muted)}
+.job-step .job-ico{width:16px;text-align:center;flex:0 0 16px}
+.job-step.is-done{color:#2E7D32}
+.job-step.is-running{color:var(--ink);font-weight:600}
+.job-step.is-failed{color:#C62828}
+@media (max-width:640px){ .job-steps{grid-template-columns:1fr} }

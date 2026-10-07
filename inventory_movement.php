@@ -17,7 +17,7 @@ $w = implode(' AND ', $where);
 $page = page_no(); $pp = per_page();
 $total = (int)scalar("SELECT COUNT(*) FROM inventory_movements m WHERE {$w}", $params);
 $rows = all("SELECT m.*, b.name AS branch_name FROM inventory_movements m JOIN branches b ON b.id=m.branch_id
-             WHERE {$w} ORDER BY m.id DESC LIMIT {$pp} OFFSET " . (($page - 1) * $pp), $params);
+             WHERE {$w} ORDER BY m.created_at DESC, m.id DESC LIMIT {$pp} OFFSET " . (($page - 1) * $pp), $params);
 $alerts = stock_alerts(60);
 
 /* Ringkasan stok per cabang */

@@ -238,7 +238,10 @@ function member_rollover_run(?int $userId = null): array
     $pdo = db();
     $pdo->exec('BEGIN IMMEDIATE');
     try {
-        foreach (all('SELECT id, member_level FROM patients WHERE member_card = 1') as $row) {
+        /* SENGAJA LINTAS CABANG: reset periode kartu member berlaku untuk SEMUA cabang
+           (dijaga penanda periode) — penanda `cross-branch` dipakai alat audit isolasi.
+           Saat pengalihan koneksi central/branch, operasi ini harus disisir per cabang. */
+        foreach (all('/* cross-branch */ SELECT id, member_level FROM patients WHERE member_card = 1') as $row) {
             $out['anggota']++;
             $from = (string)($row['member_level'] ?? '');
             $idx = array_search($from, $keys, true);

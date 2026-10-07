@@ -350,28 +350,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ? 'Mode pemeliharaan AKTIF. Kasir & Admin/Dokter kini hanya bisa melihat data; Anda (Super Admin) tetap bebas.'
                 : 'Mode pemeliharaan dimatikan — semua level dapat kembali mengelola data.');
         }
-        if ($act === 'backup_cfg') {
-            /* Diatur di panel Backup Database — khusus pemegang `backup.manage`
-               (Super Admin). Direktur/Owner tidak boleh mengubahnya. */
-            if (!has_perm('backup.manage')) {
-                deny('Pengaturan Backup Database hanya dapat diubah oleh Super Admin.');
-            }
-            set_setting('backup_active', ($_POST['backup_active'] ?? '') === '1' ? '1' : '0');
-            set_setting('backup_schedule', (string)($_POST['backup_schedule'] ?? 'harian'));
-            $keep = (int)($_POST['backup_keep'] ?? 7);
-            set_setting('backup_keep', (string)max(2, min(60, $keep > 0 ? $keep : 7)));
-            /* Batas total ukuran folder backup (MB). Bila tercapai, backup baru
-               ditolak dengan pesan yang meminta menghapus backup lama dulu. */
-            require_once __DIR__ . '/includes/backup_lib.php';
-            $maxMb = (int)($_POST['backup_max_mb'] ?? 500);
-            set_setting('backup_max_mb', (string)max(50, min(20000, $maxMb > 0 ? $maxMb : 500)));
-            audit('Ubah Pengaturan Backup', 'Pengaturan', null, null,
-                ['aktif' => setting('backup_active'), 'batas_mb' => setting('backup_max_mb')],
-                'Perubahan konfigurasi backup');
-            flash('Pengaturan backup disimpan. Backup otomatis dijalankan saat aplikasi dibuka '
-                . '(server ini tidak menyediakan cron), sekali per periode jadwal'
-                . (setting('backup_active') === '1' ? '.' : ' — saat ini NONAKTIF.'));
-        }
         if ($act === 'satu_sehat' || $act === 'satu_sehat_test' || $act === 'icd_reload') {
             /* Kredensial integrasi (Satu Sehat/Kemenkes) & pemuatan ulang kamus ICD
                adalah tindakan tingkat sistem — khusus Super Admin. */
@@ -1150,63 +1128,6 @@ $ugc = is_super() ? upload_gc_scan(true) : null;   // dengan daftar contoh berka
     </div>
     <p class="muted mt-2 mb-0">Sumber kamus: <?= e(setting('icd_source_note')) ?>.</p>
   </div>
-</div>
-
-<div class="card" id="backup">
-  <div class="card-head"><h3>Backup Database</h3>
-    <span><?= badge('Khusus Super Admin', 'pink') ?></span>
-  </div>
-  <form method="post">
-    <?= csrf_field() ?><input type="hidden" name="action" value="backup_cfg">
-    <input type="hidden" name="_anchor" value="backup">
-    <div class="card-body">
-      <div class="form-grid g2">
-        <div class="field"><label>Backup Otomatis</label>
-          <select class="input" name="backup_active">
-            <option value="0"<?= setting('backup_active') === '0' ? ' selected' : '' ?>>Nonaktif</option>
-            <option value="1"<?= setting('backup_active') === '1' ? ' selected' : '' ?>>Aktif</option>
-          </select></div>
-        <div class="field"><label>Jadwal Backup</label>
-          <select class="input" name="backup_schedule">
-            <?php foreach (['harian' => 'Harian', 'mingguan' => 'Mingguan', 'bulanan' => 'Bulanan'] as $k => $v): ?>
-              <option value="<?= $k ?>"<?= setting('backup_schedule') === $k ? ' selected' : '' ?>><?= e($v) ?></option>
-            <?php endforeach; ?>
-          </select></div>
-        <div class="field"><label>Jumlah Backup Otomatis yang Disimpan</label>
-          <input class="input" type="text" inputmode="numeric" name="backup_keep"
-                 value="<?= e(setting('backup_keep', '7')) ?>">
-          <span class="hint">2–60 berkas. Backup yang lebih lama dibuang otomatis; backup manual tidak dihapus.</span></div>
-        <div class="field"><label>Batas Ukuran Folder Backup (MB)</label>
-          <input class="input" type="text" inputmode="numeric" name="backup_max_mb"
-                 value="<?= e(setting('backup_max_mb', '500')) ?>">
-          <span class="hint">50–20.000 MB. Dipakai untuk mengingatkan saat penyimpanan mendekati penuh:
-            pada 80% muncul peringatan, pada 100% backup baru ditolak sampai backup lama dihapus.
-            Ruang penyimpanan aplikasi pada paket standar 1 GB (10 GB bila berlangganan Pro), dan backup
-            ikut memakai ruang tersebut — jadi atur batas ini dengan menyisakan ruang untuk data aplikasi.
-            Halaman <a href="backup.php">Backup Database</a> menampilkan pemakaian terkini.</span></div>
-      </div>
-      <div class="notice mt-2">
-        <strong>Server ini tidak menyediakan cron</strong>, jadi backup otomatis dijalankan
-        <strong>saat aplikasi dibuka</strong> (dicek setiap ada yang login) dan hanya sekali per periode jadwal —
-        sama seperti pengiriman laporan email otomatis. Backup manual selalu tersedia di halaman
-        <a href="backup.php">Backup Database</a>.
-        <br><br>
-        <strong>Kompresi otomatis:</strong> semua backup (manual maupun otomatis) disimpan terkompres
-        (<code>.sql.gz</code>) sehingga jauh lebih kecil, tetap dapat direstore tanpa error, dan tetap
-        dapat diunduh dari halaman Backup.
-        <?php if (setting('backup_active') === '1' && setting('backup_last_at') !== ''): ?>
-          <div class="small mt-1">Terakhir dijalankan: <strong><?= e(tgl(setting('backup_last_at'), true)) ?></strong>
-            <?= setting('backup_last_file') !== '' ? '· <code>' . e(setting('backup_last_file')) . '</code>' : '' ?></div>
-        <?php elseif (setting('backup_active') === '1'): ?>
-          <div class="small mt-1">Belum pernah berjalan — akan dijalankan otomatis pada login berikutnya.</div>
-        <?php endif; ?>
-        <?php if (setting('backup_last_error') !== ''): ?>
-          <div class="small mt-1" style="color:var(--danger,#c62828)">Gagal terakhir: <?= e(setting('backup_last_error')) ?></div>
-        <?php endif; ?>
-      </div>
-    </div>
-    <div class="modal-foot" style="border-radius:0 0 var(--radius) var(--radius)"><button class="btn btn-primary" type="submit">Simpan Pengaturan Backup</button></div>
-  </form>
 </div>
 
 <div class="card" id="pemeliharaan">

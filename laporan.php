@@ -61,8 +61,11 @@ page_head('Laporan Lengkap', 'laporan');
       $activeFilters = [];
       if (gp('cashier') !== '') { $c = one('SELECT name FROM users WHERE id = ?', [(int)gp('cashier')]); $activeFilters[] = 'kasir ' . ($c['name'] ?? gp('cashier')); }
       if (gp('method') !== '') $activeFilters[] = 'metode ' . gp('method');
-      if (gp('treatment') !== '') { $t = one('SELECT name FROM treatments WHERE id = ?', [(int)gp('treatment')]); $activeFilters[] = 'treatment ' . ($t['name'] ?? gp('treatment')); }
-      if (gp('skincare') !== '') { $t = one('SELECT name FROM skincare_products WHERE id = ?', [(int)gp('skincare')]); $activeFilters[] = 'skincare ' . ($t['name'] ?? gp('skincare')); }
+      /* PEMBATASAN CABANG (audit isolasi ronde 56): nama pada label filter diambil dari
+         cabang yang sedang dilihat — id cabang lain tidak dapat ditampilkan di sini. */
+      [$lsSql, $lsParams] = bscope('branch_id');
+      if (gp('treatment') !== '') { $t = one('SELECT name FROM treatments WHERE id = ?' . $lsSql, array_merge([(int)gp('treatment')], $lsParams)); $activeFilters[] = 'treatment ' . ($t['name'] ?? gp('treatment')); }
+      if (gp('skincare') !== '') { $t = one('SELECT name FROM skincare_products WHERE id = ?' . $lsSql, array_merge([(int)gp('skincare')], $lsParams)); $activeFilters[] = 'skincare ' . ($t['name'] ?? gp('skincare')); }
       if ($activeFilters) echo ' · filter: <strong>' . e(implode(', ', $activeFilters)) . '</strong>';
       ?>
     </p>
@@ -132,9 +135,9 @@ page_head('Laporan Lengkap', 'laporan');
 <div class="grid g3">
   <div class="stat accent"><span class="lbl">Total Pendapatan</span><span class="val"><?= money($tot['total']) ?></span>
     <span class="sub"><?= num($tot['trx']) ?> transaksi · rata-rata <?= money($tot['avg']) ?></span></div>
-  <div class="stat"><span class="lbl">Pendapatan Treatment</span><span class="val"><?= money($tot['tr']) ?></span>
+  <div class="stat gold"><span class="lbl">Pendapatan Treatment</span><span class="val"><?= money($tot['tr']) ?></span>
     <span class="sub"><?= num($tot['tr_q']) ?> treatment · <?= num($tot['total'] > 0 ? $tot['tr'] / $tot['total'] * 100 : 0, 1) ?>% dari total</span></div>
-  <div class="stat leaf"><span class="lbl">Penjualan Skincare</span><span class="val"><?= money($tot['sk']) ?></span>
+  <div class="stat pink"><span class="lbl">Penjualan Skincare</span><span class="val"><?= money($tot['sk']) ?></span>
     <span class="sub"><?= num($tot['sk_q']) ?> produk · <?= num($tot['total'] > 0 ? $tot['sk'] / $tot['total'] * 100 : 0, 1) ?>% dari total</span></div>
   <?php if ((float)($tot['pkg'] ?? 0) > 0): ?>
   <div class="stat"><span class="lbl">Pendapatan Paket</span><span class="val"><?= money($tot['pkg']) ?></span>
@@ -163,7 +166,7 @@ page_head('Laporan Lengkap', 'laporan');
       <div class="stat"><span class="lbl">Total HPP</span><span class="val"><?= money($fin['hpp_total']) ?></span>
         <span class="sub">Treatment <?= money($fin['hpp_treatment']) ?> · Produk <?= money($fin['hpp_produk']) ?></span></div>
       <?php if ($fin['mode'] === 'lengkap'): ?>
-        <div class="stat"><span class="lbl">Laba Kotor</span><span class="val"><?= money($fin['laba_kotor']) ?></span>
+        <div class="stat brown"><span class="lbl">Laba Kotor</span><span class="val"><?= money($fin['laba_kotor']) ?></span>
           <span class="sub">Omzet − HPP</span></div>
         <div class="stat"><span class="lbl">Biaya Operasional</span><span class="val"><?= money($fin['biaya_total']) ?></span>
           <span class="sub"><?= num(count($fin['biaya_rows'])) ?> pos biaya</span></div>

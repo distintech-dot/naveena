@@ -26,7 +26,10 @@ const PATIENT_LAMA_MIN_VISITS = 3;
 function patient_visit_days(int $patientId): int
 {
     if ($patientId <= 0) return 0;
-    return (int)scalar(
+    /* CAKUPAN CABANG EKSPLISIT: seluruh query pasien berjalan pada basis data CABANG milik
+       pasien itu (mode `legacy` = koneksi utama, jadi perilakunya tidak berubah). */
+    $c = db_conn_for_record('patients', $patientId);
+    return (int)scalar_on($c,
         "SELECT COUNT(*) FROM (
             SELECT date(o.created_at) AS d FROM orders o
              WHERE o.patient_id = ? AND o.status <> 'void' AND o.created_at IS NOT NULL
@@ -40,7 +43,8 @@ function patient_visit_days(int $patientId): int
 function patient_visit_dates(int $patientId): array
 {
     if ($patientId <= 0) return [];
-    $rows = all(
+    $c = db_conn_for_record('patients', $patientId);
+    $rows = all_on($c,
         "SELECT d FROM (
             SELECT date(o.created_at) AS d FROM orders o
              WHERE o.patient_id = ? AND o.status <> 'void' AND o.created_at IS NOT NULL
@@ -60,12 +64,13 @@ function patient_visit_dates(int $patientId): array
 function patient_sync_type(int $patientId, ?int $actorId = null): bool
 {
     if ($patientId <= 0) return false;
-    $p = one('SELECT id, name, patient_type FROM patients WHERE id = ?', [$patientId]);
+    $c = db_conn_for_record('patients', $patientId);
+    $p = one_on($c, 'SELECT id, name, patient_type FROM patients WHERE id = ?', [$patientId]);
     if (!$p) return false;
     if ((string)$p['patient_type'] === 'Lama') return false;        // sudah benar
     $days = patient_visit_days($patientId);
     if ($days < PATIENT_LAMA_MIN_VISITS) return false;
-    q('UPDATE patients SET patient_type = "Lama", updated_at = datetime("now","localtime") WHERE id = ?', [$patientId]);
+    q_on($c, 'UPDATE patients SET patient_type = "Lama", updated_at = datetime("now","localtime") WHERE id = ?', [$patientId]);
     audit('Status Pasien Otomatis', 'Pasien', $patientId,
         ['status' => $p['patient_type'] ?: 'Baru'],
         ['status' => 'Lama', 'hari_kunjungan' => $days],

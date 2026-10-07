@@ -180,7 +180,10 @@ $sellItems = array_values(array_filter($items, fn($i) => !in_array((string)($i['
 $trItems = array_filter($sellItems, fn($i) => $i['item_type'] === 'treatment');
 $skItems = array_filter($sellItems, fn($i) => $i['item_type'] === 'skincare');
 $pkItems = array_filter($sellItems, fn($i) => $i['item_type'] === 'package');
-$movements = all('SELECT * FROM inventory_movements WHERE ref_type = "order" AND ref_id = ? ORDER BY id', [$id]);
+/* PEMBATASAN CABANG (audit isolasi ronde 56): pergerakan stok yang ditampilkan hanya
+   milik cabang transaksi ini. */
+$movements = all('SELECT * FROM inventory_movements WHERE ref_type = "order" AND ref_id = ? AND branch_id = ? ORDER BY id',
+    [$id, (int)$o['branch_id']]);
 
 page_head('Detail Transaksi ' . $o['invoice_number'], 'order');
 ?>

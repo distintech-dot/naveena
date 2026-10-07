@@ -42,7 +42,7 @@ $rows = all("SELECT o.*, p.name AS patient_name, p.patient_number, p.email AS pa
                     (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id=o.id
                       AND oi.item_type IN ('treatment','skincare','package')) items,
                     (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type = 'material') materials
-             {$base} ORDER BY o.id DESC LIMIT {$pp} OFFSET " . (($page - 1) * $pp), $params);
+             {$base} ORDER BY o.created_at DESC, o.id DESC LIMIT {$pp} OFFSET " . (($page - 1) * $pp), $params);
 
 $cashiers = all('SELECT DISTINCT u.id, u.name FROM users u JOIN orders o ON o.user_id = u.id WHERE 1=1 '
     . ($scope !== null ? ' AND o.branch_id = ' . (int)$scope : '') . ' ORDER BY u.name');

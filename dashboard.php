@@ -114,26 +114,30 @@ if (has_perm('finance.view') && is_owner_level()) {
 }
 
 /* ---------------- Top 5 in period ---------------- */
-function top_items(string $type, string $ps, string $pe, array $b): array
+function top_items(string $type, string $ps, string $pe, ?int $scope): array
 {
     $cat = $type === 'skincare' ? 'p.category' : 't.category';
     $join = $type === 'skincare' ? 'LEFT JOIN skincare_products p ON p.id = oi.skincare_id' : 'LEFT JOIN treatments t ON t.id = oi.treatment_id';
+    /* PEMBATASAN CABANG eksplisit (audit isolasi ronde 56): $scope = null hanya untuk
+       level owner (cakupan semua cabang); akun cabang selalu dibatasi cabangnya. */
+    $bSql = $scope === null ? '' : ' AND o.branch_id = ?';
+    $bParam = $scope === null ? [] : [$scope];
     return all("SELECT oi.item_name AS name, COALESCE({$cat},'-') AS category,
                        COALESCE(SUM(oi.quantity),0) q, COALESCE(SUM(oi.subtotal),0) s
                 FROM order_items oi
                 JOIN orders o ON o.id = oi.order_id
                 {$join}
-                WHERE o.status='paid' AND oi.item_type = ? AND date(o.created_at) BETWEEN ? AND ? {$b[0]}
+                WHERE o.status='paid' AND oi.item_type = ? AND date(o.created_at) BETWEEN ? AND ? {$bSql}
                 GROUP BY oi.item_name ORDER BY s DESC LIMIT 5",
-        array_merge([$type, $ps, $pe], $b[1]));
+        array_merge([$type, $ps, $pe], $bParam));
 }
-$topSk = top_items('skincare', $ps, $pe, $bo);
-$topTr = top_items('treatment', $ps, $pe, $bo);
+$topSk = top_items('skincare', $ps, $pe, $scope);
+$topTr = top_items('treatment', $ps, $pe, $scope);
 
 /* ---------------- Recent & alerts ---------------- */
 $recent = all("SELECT o.*, p.name AS patient_name, b.name AS branch_name
                FROM orders o JOIN patients p ON p.id=o.patient_id JOIN branches b ON b.id=o.branch_id
-               WHERE 1=1 {$bo[0]} ORDER BY o.id DESC LIMIT 8", $bo[1]);
+               WHERE 1=1 {$bo[0]} ORDER BY o.created_at DESC, o.id DESC LIMIT 8", $bo[1]);
 $alerts = stock_alerts(6);
 
 page_head('Dashboard', 'dashboard');
@@ -258,7 +262,7 @@ if (!empty($_SESSION['member_rollover_result'])) {
     <span class="sub">Treatment <?= money($fin['hpp_treatment']) ?> · Produk <?= money($fin['hpp_produk']) ?></span>
   </div>
   <?php if ($fin['mode'] === 'lengkap'): ?>
-    <div class="stat">
+    <div class="stat brown">
       <span class="lbl">Laba Kotor</span>
       <span class="val"><?= money($fin['laba_kotor']) ?></span>
       <span class="sub">Omzet − HPP</span>
@@ -279,17 +283,17 @@ if (!empty($_SESSION['member_rollover_result'])) {
 <?php endif; ?>
 
 <div class="grid g2 mt-2">
-  <div class="stat">
+  <div class="stat gold">
     <span class="lbl">Penjualan Treatment — Hari Ini</span>
     <span class="val"><?= money((float)$kpiTreatment['s']) ?></span>
     <span class="sub"><?= num((float)$kpiTreatment['q']) ?> treatment terjual</span>
     <div class="notice mt-1">Bulan ini: <strong><?= money((float)$kpiTreatmentM['s']) ?></strong> · <?= num((float)$kpiTreatmentM['q']) ?> treatment terjual</div>
   </div>
-  <div class="stat leaf">
+  <div class="stat pink">
     <span class="lbl">Penjualan Skincare — Hari Ini</span>
     <span class="val"><?= money((float)$kpiSkincare['s']) ?></span>
     <span class="sub"><?= num((float)$kpiSkincare['q']) ?> produk terjual</span>
-    <div class="notice mt-1" style="background:rgba(255,255,255,.22);border-color:rgba(255,255,255,.5);color:#fff">Bulan ini: <strong><?= money((float)$kpiSkincareM['s']) ?></strong> · <?= num((float)$kpiSkincareM['q']) ?> produk terjual</div>
+    <div class="notice mt-1">Bulan ini: <strong><?= money((float)$kpiSkincareM['s']) ?></strong> · <?= num((float)$kpiSkincareM['q']) ?> produk terjual</div>
   </div>
 </div>
 

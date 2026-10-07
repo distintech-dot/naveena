@@ -118,6 +118,7 @@ page_head('Audit Log', 'audit');
       </select></div>
     <div class="field"><label>Dari</label><input class="input input-sm" type="date" name="from" value="<?= e(gp('from')) ?>"></div>
     <div class="field"><label>Sampai</label><input class="input input-sm" type="date" name="to" value="<?= e(gp('to')) ?>"></div>
+    <?= branch_filter_field() ?>
     <button class="btn btn-sm btn-primary" type="submit">Filter</button>
     <a class="btn btn-sm" href="audit_log.php">Reset</a>
     <?= per_page_inline() ?>

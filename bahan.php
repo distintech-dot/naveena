@@ -30,6 +30,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $old = one('SELECT * FROM treatment_materials WHERE id = ?', [$id]);
                 if (!$old) throw new RuntimeException('Bahan tidak ditemukan.');
                 assert_branch((int)$old['branch_id']);
+                assert_branch_unchanged('treatment_materials', $id, (int)$branch);
                 q('UPDATE treatment_materials SET code=?, name=?, category=?, price=?, minimum_stock=?, unit=?, supplier_name=?, branch_id=?, status=?, updated_at=datetime("now","localtime") WHERE id=?',
                     [$code, $name, $cat, $price, $min, $unit, $sup, $branch, $status, $id]);
                 q('UPDATE inventory SET minimum_stock=?, status=?, branch_id=? WHERE item_type="material" AND item_id=?', [$min, $status, $branch, $id]);
@@ -144,7 +145,9 @@ $rows = all("SELECT m.*, b.name AS branch_name,
                       WHERE oi.material_id = m.id AND o.status='paid') used_trx
              FROM treatment_materials m JOIN branches b ON b.id=m.branch_id
              WHERE {$w} ORDER BY (m.stock <= m.minimum_stock) DESC, m.name LIMIT {$pp} OFFSET " . (($page - 1) * $pp), $params);
-$suppliers = all('SELECT DISTINCT name FROM suppliers WHERE status="active" ORDER BY name');
+/* PEMBATASAN CABANG (audit isolasi ronde 56): pilihan supplier mengikuti cabang akun. */
+[$supSql, $supParams] = bscope('branch_id');
+$suppliers = all('SELECT DISTINCT name FROM suppliers WHERE status="active"' . $supSql . ' ORDER BY name', $supParams);
 $edit = gp('action') === 'edit' ? one('SELECT * FROM treatment_materials WHERE id = ?', [(int)gp('id')]) : null;
 if ($edit) assert_branch((int)$edit['branch_id']);
 $stockItem = gp('action') === 'stock' ? one('SELECT * FROM treatment_materials WHERE id = ?', [(int)gp('id')]) : null;
@@ -187,6 +190,7 @@ page_head('Bahan Treatment', 'bahan');
         <option value="">Semua</option>
         <option value="1"<?= gp('alert') === '1' ? ' selected' : '' ?>>Hanya stok menipis/habis</option>
       </select></div>
+    <?= branch_filter_field() ?>
     <button class="btn btn-sm btn-primary" type="submit">Filter</button>
     <a class="btn btn-sm" href="bahan.php">Reset</a>
     <?= per_page_inline() ?>

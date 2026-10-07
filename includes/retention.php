@@ -382,7 +382,8 @@ function retention_purge(string $menu, string $period, ?int $branchId = null, ?i
             $cntSql = preg_replace('/^DELETE FROM\s+(\w+)/i', 'SELECT COUNT(*) FROM $1', $sql, 1);
             $n = (int)scalar($cntSql);
             if ($n <= 0) continue;
-            $pdo->exec($sql);
+            /* WAJIB lewat q() — lihat catatan pada purge.php. */
+            q($sql);
             $detail[$st['label']] = $n;
         }
         /* Langkah terakhir = tabel utama menu (urutan anak → induk). */

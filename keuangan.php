@@ -471,7 +471,7 @@ page_head('Keuangan — ' . finance_mode_label($mode), 'keuangan');
     <span class="sub">Treatment <?= money($sum['hpp_treatment']) ?> · Produk <?= money($sum['hpp_produk']) ?>
       <?= $sum['hpp_paket'] > 0 ? '· Paket ' . money($sum['hpp_paket']) : '' ?></span></div>
   <?php if ($withCosts): ?>
-    <div class="stat"><span class="lbl">Laba Kotor</span><span class="val"><?= money($sum['laba_kotor']) ?></span>
+    <div class="stat brown"><span class="lbl">Laba Kotor</span><span class="val"><?= money($sum['laba_kotor']) ?></span>
       <span class="sub">Omzet − HPP</span></div>
     <div class="stat"><span class="lbl">Total Biaya Operasional</span><span class="val"><?= money($sum['biaya_total']) ?></span>
       <span class="sub"><?= num(count($costs['rows'])) ?> pos biaya · <?= num((int)$costs['days']) ?> hari</span></div>
@@ -485,9 +485,9 @@ page_head('Keuangan — ' . finance_mode_label($mode), 'keuangan');
 <div class="grid g4 mb-3">
   <div class="stat leaf"><span class="lbl">LABA BERSIH</span><span class="val"><?= money($sum['laba_bersih']) ?></span>
     <span class="sub"><?= $sum['margin'] !== null ? 'margin ' . num($sum['margin'], 1) . '% dari omzet' : 'belum ada omzet' ?></span></div>
-  <div class="stat"><span class="lbl">Pendapatan Treatment</span><span class="val"><?= money($sum['pendapatan_treatment']) ?></span>
+  <div class="stat gold"><span class="lbl">Pendapatan Treatment</span><span class="val"><?= money($sum['pendapatan_treatment']) ?></span>
     <span class="sub"><?= qty_text($sum['qty_treatment']) ?> item</span></div>
-  <div class="stat"><span class="lbl">Pendapatan Skincare</span><span class="val"><?= money($sum['pendapatan_skincare']) ?></span>
+  <div class="stat pink"><span class="lbl">Pendapatan Skincare</span><span class="val"><?= money($sum['pendapatan_skincare']) ?></span>
     <span class="sub"><?= qty_text($sum['qty_skincare']) ?> item</span></div>
   <div class="stat"><span class="lbl">Pendapatan Paket</span><span class="val"><?= money($sum['pendapatan_paket']) ?></span>
     <span class="sub"><?= qty_text($sum['qty_paket']) ?> paket</span></div>

@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/layout.php';
+require_once __DIR__ . '/includes/patient_form.php';
 require_perm('patient.view');
 $user = current_user();
 
@@ -35,18 +36,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // duplicate detection
             if ($id === 0) {
                 $dup = [];
-                if ($nik !== '') $dup = all('SELECT * FROM patients WHERE nik = ? AND status = "active"', [$nik]);
-                if (!$dup && $phone !== '') $dup = all('SELECT * FROM patients WHERE phone = ? AND status = "active"', [$phone]);
+                /* SENGAJA LINTAS CABANG: pendaftaran ganda dicegah pada SELURUH klinik —
+                   satu pasien tidak boleh punya dua kartu di cabang berbeda. Penanda
+                   `cross-branch` pada SQL dipakai alat audit isolasi (db_audit.php).
+                   Operasi ini harus disisir per cabang saat pengalihan koneksi central/branch. */
+                if ($nik !== '') $dup = all('/* cross-branch */ SELECT * FROM patients WHERE nik = ? AND status = "active"', [$nik]);
+                if (!$dup && $phone !== '') $dup = all('/* cross-branch */ SELECT * FROM patients WHERE phone = ? AND status = "active"', [$phone]);
                 if ($dup) {
                     $list = implode(', ', array_map(fn($d) => $d['name'] . ' (' . $d['patient_number'] . ')', $dup));
                     throw new RuntimeException('Potensi duplikasi data: ' . $list . '. Periksa kembali NIK/nomor telepon, atau ubah data pasien yang sudah ada.');
                 }
             }
             $db = db();
+            $savedId = $id;
             if ($id > 0) {
                 $old = one('SELECT * FROM patients WHERE id = ?', [$id]);
                 if (!$old) throw new RuntimeException('Data pasien tidak ditemukan.');
                 assert_branch((int)$old['branch_id']);
+                assert_branch_unchanged('patients', $id, (int)$branch);
                 q('UPDATE patients SET name=?, gender=?, nik=?, address=?, phone=?, email=?, patient_type=?, birth_date=?, branch_id=?, updated_at=datetime("now","localtime") WHERE id=?',
                     [$name, $gender, $nik, $address, $phone, $email, $type, $birth ?: null, $branch, $id]);
                 audit('Edit Pasien', 'Pasien', $id, $old, ['name' => $name, 'phone' => $phone, 'nik' => $nik], 'Perubahan data pasien');
@@ -58,10 +65,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,datetime("now","localtime"))',
                     [$pnum, $mnum, $name, $gender, $nik, $address, $phone, $email, $type, $birth ?: null, $branch, $user['id']]);
                 $newId = (int)$db->lastInsertId();
+                $savedId = $newId;
                 audit('Tambah Pasien', 'Pasien', $newId, null, ['name' => $name, 'patient_number' => $pnum, 'member' => $mnum], 'Registrasi pasien baru');
                 flash('Pasien baru terdaftar dengan nomor ' . $pnum . '.');
             }
-            header('Location: pasien.php');
+            /* FOTO PROFIL dari formulir Tambah/Edit (permintaan pemilik).
+               Berkasnya opsional: bila tidak diunggah, foto lama tidak diubah.
+               Kegagalan unggah TIDAK membatalkan data pasien yang sudah tersimpan —
+               dilaporkan lewat pesan, jadi petugas tidak kehilangan datanya. */
+            if (!empty($_FILES['photo']['name'])) {
+                try {
+                    $res = photo_save_person('patient', $savedId, $_FILES['photo']);
+                    flash('Foto pasien tersimpan — ' . img_result_text($res) . '.');
+                } catch (Throwable $ex) {
+                    flash('Data pasien tersimpan, tetapi foto gagal diunggah: ' . $ex->getMessage(), 'warning');
+                }
+            }
+            header('Location: ' . patient_form_back_url());
             exit;
         }
 
@@ -70,7 +90,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $id = (int)$_POST['id'];
             $res = photo_save_person('patient', $id, $_FILES['photo'] ?? []);
             flash('Foto pasien tersimpan — ' . img_result_text($res) . '.');
-            header('Location: pasien.php');
+            header('Location: ' . patient_form_back_url());
             exit;
         }
         if ($act === 'member_grant' || $act === 'member_revoke') {
@@ -106,7 +126,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             q('UPDATE patients SET photo_file = NULL, photo_updated_at = datetime("now","localtime") WHERE id = ?', [$id]);
             audit('Hapus Foto Pasien', 'Pasien', $id, null, null, 'Foto pasien dihapus');
             flash('Foto pasien dihapus.');
-            header('Location: pasien.php');
+            header('Location: ' . patient_form_back_url());
             exit;
         }
         if ($act === 'delete_hard') {
@@ -189,7 +209,7 @@ $rows  = all("SELECT p.*, b.name AS branch_name,
                      (SELECT COUNT(*) FROM orders o WHERE o.patient_id = p.id AND o.status='paid') AS visits,
                      (SELECT COALESCE(SUM(o.total),0) FROM orders o WHERE o.patient_id = p.id AND o.status='paid') AS spent
               FROM patients p JOIN branches b ON b.id = p.branch_id
-              WHERE {$w} ORDER BY p.id DESC LIMIT {$pp} OFFSET " . (($page - 1) * $pp), $params);
+              WHERE {$w} ORDER BY p.created_at DESC, p.id DESC LIMIT {$pp} OFFSET " . (($page - 1) * $pp), $params);
 
 /* Jumlah data terkait per pasien (untuk peringatan sebelum hapus permanen) */
 $linked = [];
@@ -301,7 +321,7 @@ page_head('Data Pasien', 'pasien');
               <?php if (has_perm('patient.manage')): ?>
                 <button class="btn btn-sm" type="button" data-modal-open="photoModal"
                         onclick="photoTarget(<?= (int)$r['id'] ?>, '<?= e(addslashes($r['name'])) ?>', '<?= e(photo_url('patient', $r)) ?>')">Foto</button>
-                <a class="btn btn-sm" href="pasien.php?action=edit&id=<?= (int)$r['id'] ?>">Edit</a>
+                <a class="btn btn-sm" href="pasien.php?action=edit&id=<?= (int)$r['id'] ?>&amp;back=<?= urlencode('pasien.php?' . qs([], ['action', 'id', 'back'])) ?>">Edit</a>
                 <?php if (member_card_enabled() && (int)($r['member_card'] ?? 0) !== 1): ?>
                   <form method="post" data-confirm="Aktifkan kartu member untuk pasien ini?">
                     <?= csrf_field() ?><input type="hidden" name="action" value="member_grant"><input type="hidden" name="id" value="<?= (int)$r['id'] ?>">
@@ -340,57 +360,8 @@ page_head('Data Pasien', 'pasien');
   <?= pagination($total, $pp, $page) ?>
 </div>
 
-<div class="modal<?= $openModal ? ' open' : '' ?>" id="patientModal">
-  <div class="modal-box">
-    <form method="post">
-      <?= csrf_field() ?>
-      <input type="hidden" name="action" value="save">
-      <input type="hidden" name="id" id="p_id" value="<?= (int)($edit['id'] ?? 0) ?>">
-      <div class="modal-head"><h3 id="p_title"><?= $edit ? 'Edit Data Pasien' : 'Tambah Pasien Baru' ?></h3>
-        <button type="button" class="icon-btn" data-modal-close="patientModal"><?= icon('x') ?></button></div>
-      <div class="modal-body">
-        <div class="form-grid g2">
-          <div class="field"><label>Nama Lengkap <span class="req">*</span></label>
-            <input class="input" name="name" id="p_name" value="<?= e($edit['name'] ?? '') ?>" required></div>
-          <div class="field"><label>Jenis Kelamin <span class="req">*</span></label>
-            <select class="input" name="gender" id="p_gender">
-              <?php foreach (['Perempuan', 'Laki-laki'] as $g): ?>
-                <option value="<?= $g ?>"<?= ($edit['gender'] ?? '') === $g ? ' selected' : '' ?>><?= $g ?></option>
-              <?php endforeach; ?>
-            </select></div>
-          <div class="field"><label>NIK</label>
-            <input class="input" name="nik" id="p_nik" value="<?= e($edit['nik'] ?? '') ?>" inputmode="numeric" placeholder="16 digit"></div>
-          <div class="field"><label>Nomor Telepon / WhatsApp</label>
-            <input class="input" name="phone" id="p_phone" value="<?= e($edit['phone'] ?? '') ?>" placeholder="08xxxxxxxxxx"></div>
-          <div class="field"><label>Email <span class="muted small">(opsional)</span></label>
-            <input class="input" type="email" name="email" id="p_email" value="<?= e($edit['email'] ?? '') ?>"
-                   placeholder="nama@email.com" autocomplete="email">
-            <span class="hint">Dipakai untuk mengirim struk transaksi &amp; pengingat ke email pasien.</span></div>
-          <div class="field"><label>Tanggal Lahir</label>
-            <input class="input" type="date" name="birth_date" id="p_birth" value="<?= e($edit['birth_date'] ?? '') ?>"></div>
-          <div class="field"><label>Status Pasien</label>
-            <select class="input" name="patient_type" id="p_type">
-              <?php foreach (['Baru', 'Lama'] as $t): ?>
-                <option value="<?= $t ?>"<?= ($edit['patient_type'] ?? '') === $t ? ' selected' : '' ?>><?= $t ?></option>
-              <?php endforeach; ?>
-            </select>
-              <span class="hint"><?= e(patient_type_rule_text()) ?></span></div>
-          <?php if (is_owner_level()): ?>
-          <div class="field"><label>Cabang <span class="req">*</span></label>
-            <select class="input" name="branch_id" id="p_branch"><?= opt_branches($edit['branch_id'] ?? scope_branch()) ?></select></div>
-          <?php endif; ?>
-        </div>
-        <div class="field mt-2"><label>Alamat</label>
-          <textarea class="input" name="address" id="p_address"><?= e($edit['address'] ?? '') ?></textarea></div>
-        <div class="notice mt-2">Nomor pasien dan nomor member dibuat otomatis oleh sistem saat data disimpan.</div>
-      </div>
-      <div class="modal-foot">
-        <button type="button" class="btn" data-modal-close="patientModal">Batal</button>
-        <button class="btn btn-primary" type="submit">Simpan Data Pasien</button>
-      </div>
-    </form>
-  </div>
-</div>
+<?php patient_form_modal($edit, gp('back', ''), (bool)$openModal); ?>
+
 <div class="modal" id="photoModal">
   <div class="modal-box sheet">
     <div class="modal-head"><h3>Foto Pasien — <span id="photoName"></span></h3>
@@ -401,6 +372,7 @@ page_head('Data Pasien', 'pasien');
         <div class="grow">
           <form method="post" enctype="multipart/form-data">
             <?= csrf_field() ?><input type="hidden" name="action" value="photo">
+            <input type="hidden" name="back" value="<?= e(gp('back', '')) ?>">
             <input type="hidden" name="id" id="photoId" value="0">
             <div class="field"><label>Unggah Foto</label>
               <input class="input" type="file" name="photo" accept="image/*" required>
@@ -411,6 +383,7 @@ page_head('Data Pasien', 'pasien');
           <form method="post" class="mt-1" id="photoDeleteForm" style="display:none"
                 data-confirm="Hapus foto pasien ini?">
             <?= csrf_field() ?><input type="hidden" name="action" value="photo_delete">
+            <input type="hidden" name="back" value="<?= e(gp('back', '')) ?>">
             <input type="hidden" name="id" id="photoDeleteId" value="0">
             <button class="btn btn-sm btn-danger" type="submit">Hapus Foto</button>
           </form>
@@ -429,13 +402,8 @@ function photoTarget(id, name, url) {
   var w = document.getElementById('photoPreviewWrap');
   var img = document.getElementById('photoPreview');
   var del = document.getElementById('photoDeleteForm');
-  if (url) { img.src = url; w.style.display = 'block'; del.style.display = 'block'; }
-  else { img.src = ''; w.style.display = 'none'; del.style.display = 'none'; }
-}
-function resetPatientForm() {
-  var f = { p_id: 0, p_name: '', p_nik: '', p_phone: '', p_email: '', p_address: '', p_birth: '' };
-  Object.keys(f).forEach(function (k) { var el = document.getElementById(k); if (el) el.value = f[k]; });
-  document.getElementById('p_title').textContent = 'Tambah Pasien Baru';
+  if (url) { img.src = url; img.setAttribute('data-zoom', url); w.style.display = 'block'; del.style.display = 'block'; }
+  else { img.src = ''; img.removeAttribute('data-zoom'); w.style.display = 'none'; del.style.display = 'none'; }
 }
 </script>
 <?php page_foot(); ?>

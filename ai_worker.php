@@ -34,6 +34,11 @@ if ($id <= 0 || !in_array($mode, ['plan', 'test'], true)) {
 $task = ai_task($id);
 if (!$task) { fwrite(STDERR, "Tugas #$id tidak ditemukan.\n"); exit(1); }
 
+/* JOB ENGINE (ronde 53): pekerjaan didaftarkan sebagai JOB dengan identitas, heartbeat
+   dan checkpoint supaya dapat dipantau, dilanjutkan, atau dihentikan. */
+ai_job_begin($id, $mode === 'test' ? 'test' : 'pipeline');
+ai_job_beat($id, '', 'running', ['status' => $mode === 'test' ? 'TESTING' : 'DISCOVERING']);
+
 /* SATU pekerja per tugas per mode (ronde 49). Tanpa ini, dua suite berjalan pada
    salinan yang sama; yang satu selesai lebih dulu membersihkan berkas salinan
    sehingga yang lain berhenti di tengah dan dilaporkan gagal. */
@@ -55,7 +60,48 @@ register_shutdown_function(function () use ($id, $mode, &$kunciPekerja) {
 $setStage = function (string $s, string $kind = 'work', string $detail = '') use ($id): void {
     ai_task_update($id, ['stage' => $s, 'error' => '']);
     ai_step($id, $kind, $s, $detail);
+    /* JOB ENGINE (ronde 53): setiap tahap menjadi HEARTBEAT + kemajuan NYATA pada job,
+       sehingga UI dapat menampilkan proses tanpa memuat ulang halaman. */
+    $langkah = ai_job_step_for_stage($s);
+    ai_job_beat($id, $langkah, 'running', ['note' => $s]);
+    /* Tombol BERHENTI pemilik: diperiksa di setiap tahap supaya worker benar-benar
+       berhenti (bukan hanya status di layar). */
+    if (ai_job_cancelled($id)) {
+        ai_task_update($id, ['status' => 'cancelled', 'stage' => 'Dihentikan oleh pemilik',
+            'workflow' => 'REJECTED', 'error' => '']);
+        ai_msg($id, 'ai', '⏹ **Pekerjaan dihentikan atas permintaan Anda.** Tidak ada penerapan '
+            . 'yang dijalankan. Tulis perintah baru di kotak chat bila ingin memulai lagi.');
+        ai_step($id, 'warn', 'Pekerjaan dihentikan oleh pemilik');
+        ai_job_finish($id, 'CANCELLED', 'Dihentikan oleh pemilik');
+        ai_trace($id, 'job-cancelled', ['tahap' => $s]);
+        exit(0);
+    }
 };
+
+/**
+ * Petakan teks tahap → kunci langkah baku job (ai_job_steps_template()).
+ * Dipakai untuk menghitung progres NYATA dari pekerjaan yang benar-benar selesai.
+ */
+function ai_job_step_for_stage(string $s): string
+{
+    $t = strtolower($s);
+    $peta = [
+        'discovery' => ['membaca daftar berkas', 'memilih berkas', 'menyusuri berkas', 'membaca isi'],
+        'audit' => ['standar audit', 'bukti audit', 'pembacaan', 'audit'],
+        'dependency' => ['dampak', 'dependency', 'menelusuri bagian lain'],
+        'plan' => ['menyusun usulan', 'rencana', 'arsitek', 'jawab', 'menjawab', 'memeriksa kode'],
+        'implement' => ['menerapkan', 'menyiapkan pratinjau', 'perbaikan'],
+        'test' => ['uji', 'staging', 'menjalankan suite'],
+        'regression' => ['regresi', 'regression'],
+        'final_audit' => ['pemeriksaan akhir', 'final'],
+    ];
+    foreach ($peta as $kunci => $kata) {
+        foreach ($kata as $k) {
+            if (strpos($t, $k) !== false) return $kunci;
+        }
+    }
+    return '';
+}
 
 if ($mode === 'plan') {
     ai_step($id, 'info', 'Permintaan diterima — AI mulai bekerja',
@@ -357,6 +403,9 @@ if ($mode === 'plan') {
         ai_task_update($id, ['impact_note' => $impactTeks]);
         ai_trace($id, 'dampak', ['terkait' => $impactTerkait, 'simbol' => $impact['simbol'] ?? [],
             'tidak_ditemukan' => $impact['tidak_ada'] ?? []]);
+        ai_job_beat($id, 'dependency', 'done', ['note' => count($impactTerkait) . ' berkas terkait']);
+        ai_job_checkpoint($id, ['next_mode' => 'plan', 'tahap' => 'dependency',
+            'terkait' => array_slice(array_keys($impactTerkait), 0, 15)]);
     }
     /* Hemat token SETELAH berkas terkait ikut masuk (anggarannya tetap dijaga). */
     /* Pangkas konteks kedua: yang WAJIB ikut hanya BERKAS SASARAN (berkas pendukung
@@ -419,6 +468,12 @@ if ($mode === 'plan') {
     }
     ai_trace($id, 'standar-audit', ['areas' => $auditArea['areas'], 'wajib' => $auditArea['wajib'],
         'lampiran_gagal' => $lampiranGagal, 'gagal_baca' => $gagalBacaDetail]);
+    /* Langkah job: discovery + audit selesai → checkpoint (titik resume). */
+    ai_job_beat($id, 'discovery', 'done', ['files_found' => count($pilih), 'files_read' => count($isi)]);
+    ai_job_beat($id, 'audit', ($auditStatus === 'lengkap' ? 'done' : 'running'),
+        ['files_skipped' => count($lampiranGagal) + count($gagalBacaDetail)]);
+    ai_job_checkpoint($id, ['next_mode' => 'plan', 'tahap' => 'audit',
+        'audit_status' => $auditStatus, 'berkas_dibaca' => count($isi)]);
 
     /* Berkas SASARAN yang tidak ikut terkirim ke model = belum benar-benar diperiksa. */
     foreach ($sasaran as $rel) {
@@ -605,6 +660,8 @@ if ($mode === 'plan') {
                 ['mode' => $intent['mode'], 'kategori' => $intent['kategori'], 'status' => $kode],
                 'AI ' . ($intent['mode'] === 'audit' ? 'memeriksa' : ($intent['mode'] === 'rencana' ? 'menyusun rencana untuk' : 'menjawab'))
                 . ': ' . short_text((string)$task['request'], 120));
+                ai_job_finish($id, $kode === 'audit_incomplete' ? 'AUDIT_INCOMPLETE' : 'COMPLETED',
+                    $kode === 'audit_incomplete' ? implode(' | ', array_slice((array)$gagalBaca, 0, 3)) : '');
             exit(0);
         }
     }
@@ -680,6 +737,7 @@ if ($mode === 'plan') {
         audit('AI Audit Belum Lengkap', 'AI Developer', $id, null,
             ['alasan' => $rincian, 'audit' => 'belum_lengkap', 'ai_ragu' => (bool)($raguFinal['ragu'] ?? false)],
             'AI tidak menyimpulkan "tidak ada perubahan" karena audit belum lengkap');
+            ai_job_finish($id, 'AUDIT_INCOMPLETE', implode(' | ', array_slice($rincian, 0, 3)));
         exit(0);
     };
     for ($putaran = 1; $putaran <= $maksPutaran + $maksBaca; $putaran++) {
@@ -914,6 +972,7 @@ if ($mode === 'plan') {
             . 'inginkan, atau nama berkasnya. Saya mengingat percakapan ini sehingga bisa langsung melanjutkan.');
         audit('AI Tidak Mengusulkan Perubahan', 'AI Developer', $id, null, null,
             'AI menyimpulkan tidak ada perubahan yang perlu dilakukan untuk permintaan ini');
+            ai_job_finish($id, 'NO_CHANGE');
         exit(0);
     }
 
@@ -978,6 +1037,7 @@ if ($mode === 'plan') {
         ai_task_update($id, ['status' => 'failed', 'stage' => '',
             'workflow' => ai_workflow_status('failed')['kode'],
             'error' => $pesanGagal, 'raw_reply' => short_text($raw, 4000), 'finish_reason' => $finish]);
+        ai_job_finish($id, 'FAILED', $pesanGagal);
         exit(1);
     }
 
@@ -1074,6 +1134,9 @@ if ($mode === 'plan') {
         'AI menyusun usulan perubahan untuk: ' . short_text((string)$task['request'], 120));
     /* JEJAK KERJA (traceability) — supaya kegagalan/kejanggalan dapat ditelusuri
        sendiri: apa yang dibaca, apa yang terdampak, apa yang diubah, dan hasil uji. */
+    ai_job_beat($id, 'plan', 'done');
+    ai_job_beat($id, 'implement', 'done');
+    ai_job_checkpoint($id, ['next_mode' => 'test', 'tahap' => 'usulan-tersimpan']);
     ai_trace($id, 'usulan', [
         'berkas_diubah' => $berkasUbah, 'jumlah_ops' => count($parse['ops']),
         'sintaks_ok' => (bool)$lint['ok'], 'putaran_perbaikan' => $catatan,
@@ -1397,6 +1460,11 @@ if ($mode === 'test') {
     /* Status akhir: `tested` hanya bila BENAR-BENAR bersih. Bila berhenti karena butuh
        keputusan pemilik → `blocked` (bukan "selesai", bukan pula "gagal biasa"). */
     $statusAkhir = $lulus ? 'tested' : ($healDihentikan !== '' ? 'blocked' : 'failed');
+    /* Langkah job pada tahap uji. */
+    ai_job_beat($id, 'test', 'done', ['note' => 'PASS ' . (int)($hasil['pass'] ?? 0) . ' · FAIL ' . (int)($hasil['fail'] ?? 0)]);
+    ai_job_beat($id, 'regression', $lulus ? 'done' : 'running');
+    ai_job_beat($id, 'final_audit', !empty($final['ok']) ? 'done' : 'running');
+    ai_job_checkpoint($id, ['next_mode' => 'test', 'tahap' => 'uji', 'lulus' => (bool)$lulus]);
 
     /* RONDE 51: bila ada perbaikan otomatis, DIFF & daftar berkas disegarkan supaya
        pemilik melihat perbedaan yang BENAR (sesuai kondisi yang diuji & akan diterapkan). */
@@ -1490,6 +1558,8 @@ if ($mode === 'test') {
         audit('AI Perbaikan Otomatis', 'AI Developer', $id, null,
             ['putaran' => $i + 1, 'catatan' => $cat], 'AI memperbaiki error sendiri lalu menguji ulang');
     }
+    ai_job_finish($id, $lulus ? 'READY_TO_APPLY' : ($healDihentikan !== '' ? 'BLOCKED' : 'FAILED'),
+        (string)$pesanUji, ['note' => 'PASS ' . (int)($hasil['pass'] ?? 0) . ' · FAIL ' . (int)($hasil['fail'] ?? 0)]);
     exit(0);
 }
 

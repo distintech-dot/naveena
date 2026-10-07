@@ -69,12 +69,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action'] ?? ''), 
         $reason = trim((string)($_POST['reason'] ?? ''));
         if ($reason === '') throw new RuntimeException('Alasan penghapusan wajib diisi.');
         $photos = (int)scalar('SELECT COUNT(*) FROM medical_record_photos WHERE medical_record_id = ?', [$id]);
-        $amend = (int)scalar('SELECT COUNT(*) FROM medical_records WHERE amended_from = ?', [$id]);
+        /* PEMBATASAN CABANG (audit isolasi ronde 56): amendment yang dilepas hanya milik
+           cabang rekam medis ini. */
+        $amend = (int)scalar('SELECT COUNT(*) FROM medical_records WHERE amended_from = ? AND branch_id = ?', [$id, (int)$m['branch_id']]);
         $pdo = db();
         $pdo->exec('BEGIN IMMEDIATE');
         try {
             q('DELETE FROM medical_record_photos WHERE medical_record_id = ?', [$id]);
-            q('UPDATE medical_records SET amended_from = NULL WHERE amended_from = ?', [$id]);
+            q('UPDATE medical_records SET amended_from = NULL WHERE amended_from = ? AND branch_id = ?', [$id, (int)$m['branch_id']]);
             q('DELETE FROM medical_records WHERE id = ?', [$id]);
             $pdo->exec('COMMIT');
         } catch (Throwable $ex) {
@@ -198,6 +200,7 @@ page_head('Rekam Medis Elektronik', 'rekam_medis');
         <?php endforeach; ?>
         <option value="amendment"<?= gp('status') === 'amendment' ? ' selected' : '' ?>>Amendment</option>
       </select></div>
+    <?= branch_filter_field() ?>
     <button class="btn btn-sm btn-primary" type="submit">Filter</button>
     <a class="btn btn-sm" href="rekam_medis.php" title="Reset filter — menampilkan kembali seluruh data rekam medis">Reset</a>
     <?php /* Pemilih "per halaman" dibuat LANGSUNG di dalam form filter ini.

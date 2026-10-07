@@ -611,7 +611,7 @@ switch ($type) {
                        o.member_card, o.member_discount, o.member_tier, o.member_scope,
                        (SELECT GROUP_CONCAT(DISTINCT pm.method) FROM payments pm WHERE pm.order_id=o.id) methods
                 FROM orders o JOIN patients pat ON pat.id=o.patient_id JOIN branches b ON b.id=o.branch_id
-                WHERE ' . implode(' AND ', $w) . ' ORDER BY o.id DESC';
+                WHERE ' . implode(' AND ', $w) . ' ORDER BY o.created_at DESC, o.id DESC';
         $headers = ['Invoice', 'Tanggal', 'Pasien', 'Cabang', 'Kasir', 'Subtotal', 'Diskon', 'Diskon Member',
                     'Kartu Member', 'Cakupan Diskon', 'Total', 'Metode Bayar', 'Status'];
         $sum = 0;
@@ -691,7 +691,7 @@ switch ($type) {
            pemakaiannya bisa dilihat pada laporan "Pemakaian Bahan Treatment". */
         foreach (all("SELECT date(o.created_at) tgl, o.invoice_number, oi.item_type, oi.item_code, oi.item_name, oi.quantity, oi.price, oi.subtotal, b.name branch
                       FROM order_items oi JOIN orders o ON o.id=oi.order_id JOIN branches b ON b.id=o.branch_id
-                      WHERE o.status='paid' AND oi.item_type <> 'material' AND date(o.created_at) BETWEEN ? AND ? {$b1} ORDER BY o.id DESC", $p) as $r) {
+                      WHERE o.status='paid' AND oi.item_type <> 'material' AND date(o.created_at) BETWEEN ? AND ? {$b1} ORDER BY o.created_at DESC, o.id DESC", $p) as $r) {
             $rows[] = [$r['tgl'], $r['invoice_number'], $r['item_type'] === 'treatment' ? 'Treatment' : 'Skincare', $r['item_code'], $r['item_name'], qty_text($r['quantity']), $r['price'], $r['subtotal'], $r['branch']];
         }
         break;
@@ -727,7 +727,7 @@ switch ($type) {
         if (gp('to') !== '') { $w .= ' AND date(m.created_at) <= ?'; $p[] = gp('to'); }
         if (gp('type') !== '') { $w .= ' AND m.type = ?'; $p[] = gp('type'); }
         $headers = ['Tanggal', 'Item', 'Kode', 'Jenis', 'Stok Sebelum', 'Perubahan', 'Stok Sesudah', 'User', 'Kode Cabang', 'Keterangan'];
-        foreach (all("SELECT m.*, b.name branch FROM inventory_movements m JOIN branches b ON b.id=m.branch_id WHERE {$w} ORDER BY m.id DESC", $p) as $r) {
+        foreach (all("SELECT m.*, b.name branch FROM inventory_movements m JOIN branches b ON b.id=m.branch_id WHERE {$w} ORDER BY m.created_at DESC, m.id DESC", $p) as $r) {
             $rows[] = [$r['created_at'], $r['item_name'], $r['item_code'], $r['type'], qty_text($r['stock_before']), ((float)$r['quantity'] > 0 ? '+' : '') . qty_text($r['quantity']), qty_text($r['stock_after']), $r['user_name'], $r['branch'], $r['reason'] ?: '-'];
         }
         break;
@@ -773,7 +773,7 @@ switch ($type) {
                    JOIN patients p ON p.id = o.patient_id JOIN branches b ON b.id = o.branch_id
                    LEFT JOIN treatment_materials m ON m.id = oi.material_id
                    WHERE o.status='paid' AND oi.item_type='material' AND date(o.created_at) BETWEEN ? AND ? {$b1}
-                   ORDER BY o.id DESC", array_merge([$ps, $pe], $b2));
+                   ORDER BY o.created_at DESC, o.id DESC", array_merge([$ps, $pe], $b2));
         $headers = ['Tanggal', 'Invoice', 'Pasien', 'Cabang', 'Kode', 'Bahan Treatment', 'Jumlah', 'Satuan', 'Harga Satuan', 'Nilai Bahan', 'Ditagihkan?'];
         $nQ = 0; $nV = 0;
         foreach ($ex as $r) {

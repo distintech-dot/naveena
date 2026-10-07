@@ -44,8 +44,15 @@ define('APP_DIR', dirname(__DIR__));
  */
 function resolve_db_path(): string
 {
+    /* `NAVEENA_DB` = JALUR IDENTITAS pemasangan ini (dipakai skrip uji & pemeriksaan
+       "jangan sentuh basis data produksi"). Basis data aplikasi sendiri sekarang
+       adalah central + satu berkas per cabang (lihat db_store_root()). */
     $env = getenv('NAVEENA_DB');
     if ($env) return $env;
+    /* Bila folder penyimpanan basis data diatur (mis. oleh skrip uji), identitas
+       mengikutinya supaya tidak menunjuk folder produksi. */
+    $root = getenv('NAVEENA_DB_ROOT');
+    if ($root) return rtrim($root, '/') . '/data-identitas.sqlite';
     $candidates = [
         dirname(APP_DIR) . '/naveena_data/data.sqlite',
         APP_DIR . '/data.sqlite',            // legacy location
@@ -61,8 +68,41 @@ function resolve_db_path(): string
     return $candidates[0];
 }
 define('DB_PATH', resolve_db_path());
+
+/**
+ * AKAR PROSES TERISOLASI (pengaman anti-kontaminasi produksi).
+ *
+ * Bila `NAVEENA_DB` diarahkan ke berkas LAIN (yang selalu dilakukan skrip uji &
+ * alat baris perintah), maka SELURUH folder turunan — basis data central/cabang,
+ * unggahan, dan backup — WAJIB ikut diarahkan ke sekitar berkas itu. Kalau tidak,
+ * proses pembantu hanya mengalihkan "jalur identitas" sedangkan folder penyimpanan
+ * tetap milik aplikasi TERBIT, sehingga pekerjaan uji menulis ke basis data
+ * PRODUKSI. Ini bukan hipotetis: pernah terjadi — 24 pasien contoh
+ * ("Pasien Responsif 1-1" …) beserta transaksinya masuk ke produksi karena satu
+ * proses pembantu dijalankan dengan `NAVEENA_DB=…` tanpa pengalihan folder.
+ *
+ * @return string folder akar terisolasi, atau '' bila proses ini pemasangan normal.
+ */
+function nv_isolated_root(): string
+{
+    static $akar = null;
+    if ($akar !== null) return $akar;
+    $akar = '';
+    $db = (string)getenv('NAVEENA_DB');
+    if ($db === '') return $akar;
+    $akar = rtrim(dirname($db), '/') . '/dbroot-' . preg_replace('/[^A-Za-z0-9_.-]/', '_', basename($db));
+    if (!is_dir($akar)) @mkdir($akar, 0770, true);
+    return $akar;
+}
+
+/** Apakah proses ini BERJALAN TERISOLASI (bukan aplikasi terbit). */
+function nv_isolated_mode(): bool
+{
+    return nv_isolated_root() !== '';
+}
+
 define('BACKUP_DIR', dirname(APP_DIR) . '/naveena_backups');
-define('SCHEMA_VERSION', '1.33.2');
+define('SCHEMA_VERSION', '1.37.1');
 /** Naikkan angka ini setiap kali isi data/icd10.tsv atau data/icd9cm.tsv berubah,
  *  agar kamus pada database yang sudah terpasang ikut dimuat ulang otomatis. */
 define('ICD_DATASET_VERSION', '2');
@@ -79,6 +119,14 @@ require_once __DIR__ . '/retention.php';
 /* AI Developer (ronde 41): bantu revisi/perbaikan/tambah fitur — hanya Super Admin. */
 require_once __DIR__ . '/ai_playbook.php';
 require_once __DIR__ . '/ai.php';
+require_once __DIR__ . '/ai_jobs.php';
+require_once __DIR__ . '/db_manager.php';
+require_once __DIR__ . '/template_default.php';
+require_once __DIR__ . '/db_route.php';
+require_once __DIR__ . '/db_route_migrate.php';
+require_once __DIR__ . '/db_audit.php';
+require_once __DIR__ . '/db_migrate.php';
+require_once __DIR__ . '/demo_filter.php';
 /* Keamanan login: "ingat saya", batas tidak aktif, 2FA, lupa password, dan
    kode pemulihan. Dimuat lebih awal karena penjaga sesinya dijalankan di bawah. */
 require_once __DIR__ . '/login_security.php';
@@ -125,36 +173,38 @@ require_once __DIR__ . '/schema.php';
 /* ------------------------------------------------------------------ *
  * Database
  * ------------------------------------------------------------------ */
+/**
+ * KONEKSI APLIKASI — SELALU central + satu basis data per cabang.
+ *
+ * Satu koneksi PDO dengan `main = central.sqlite`; setiap berkas cabang di-ATTACH
+ * (`b1`, `b2`, …) dan tabel operasional disajikan lewat TEMP VIEW (lihat
+ * includes/db_route.php). Tidak ada lagi mode "satu berkas data.sqlite".
+ */
 function db(): PDO
 {
-    static $pdo = null;
-    if ($pdo instanceof PDO) {
-        return $pdo;
-    }
-    $fresh = !file_exists(DB_PATH);
-    $pdo = new PDO('sqlite:' . DB_PATH, null, null, [
-        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        PDO::ATTR_EMULATE_PREPARES   => false,
-    ]);
-    // Concurrency: wait for the write lock instead of failing instantly.
-    $pdo->exec('PRAGMA busy_timeout = 5000');
-    $pdo->exec('PRAGMA foreign_keys = ON');
-    // WAL is the right journal mode for a database hit by many short write
-    // transactions from separate web requests.
-    $pdo->exec('PRAGMA journal_mode = WAL');
-    $pdo->exec('PRAGMA synchronous = NORMAL');
-    if ($fresh) {
-        @chmod(DB_PATH, 0664);
-    }
-    ensure_schema($pdo);
-    return $pdo;
+    return db_route_conn();
 }
 
 function q(string $sql, array $params = []): PDOStatement
 {
-    $st = db()->prepare($sql);
-    $st->execute($params);
+    /* Pernyataan TULIS ke tabel operasional dikualifikasi ke berkas cabang yang benar;
+       query BACA dilayani TEMP VIEW (lihat includes/db_route.php).
+       Pemeriksaan awal yang murah menghindari pemrosesan regex pada setiap SELECT.
+       Operasi massal tanpa pembatas cabang oleh akun lintas cabang (mis. menu
+       "Hapus Semua Data") dipecah menjadi satu pernyataan per berkas cabang. */
+    $daftar = [$sql];
+    if (isset($sql[0])) {
+        $c = $sql[0];
+        if ($c === 'I' || $c === 'i' || $c === 'U' || $c === 'u' || $c === 'R' || $c === 'r'
+            || $c === 'D' || $c === 'd' || $c === ' ' || $c === '\t' || $c === '\n') {
+            $daftar = db_route_prepare_all($sql, $params);
+        }
+    }
+    $st = null;
+    foreach ($daftar as $satu) {
+        $st = db()->prepare($satu);
+        $st->execute($params);
+    }
     return $st;
 }
 function one(string $sql, array $params = []): ?array
@@ -169,6 +219,55 @@ function all(string $sql, array $params = []): array
 function scalar(string $sql, array $params = [], $default = 0)
 {
     $v = q($sql, $params)->fetchColumn();
+    return ($v === false || $v === null) ? $default : $v;
+}
+
+/* ------------------------------------------------------------------ *
+ * Query pada KONEKSI TERTENTU (basis data per cabang)
+ * ------------------------------------------------------------------ *
+ * Padanan q()/one()/all()/scalar() tetapi memakai koneksi yang diberikan. Dipakai modul
+ * "anak" bersama db_conn_for_record() (includes/db_manager.php) supaya query-nya berjalan
+ * pada basis data CABANG yang benar.
+ *
+ * PENTING: tabel operasional kini disajikan sebagai TEMP VIEW pada koneksi aplikasi
+ * (central + berkas cabang di-ATTACH). Pernyataan TULIS lewat koneksi itu WAJIB
+ * dikualifikasi ke berkas cabangnya — kalau tidak, SQLite menolaknya dengan
+ * "cannot modify … because it is a view". Kesalahan ini pernah membuat status pasien
+ * otomatis ("Baru" → "Lama") TIDAK PERNAH berjalan karena kegagalannya ditelan
+ * try/catch di pemanggil. Karena itu q_on() menempuh jalur routing yang sama dengan q().
+ */
+function q_on(PDO $pdo, string $sql, array $params = []): PDOStatement
+{
+    $daftar = [$sql];
+    $c = isset($sql[0]) ? $sql[0] : '';
+    if (($c === 'I' || $c === 'i' || $c === 'U' || $c === 'u' || $c === 'R' || $c === 'r'
+         || $c === 'D' || $c === 'd')
+        && function_exists('db_route_prepare_all')) {
+        try {
+            /* Hanya untuk KONEKSI APLIKASI — koneksi berkas tersendiri (mis. dipakai
+               pemeriksaan/ migrasi basis data) tidak boleh dialihkan. */
+            if ($pdo === db()) $daftar = db_route_prepare_all($sql, $params);
+        } catch (Throwable $e) { $daftar = [$sql]; }
+    }
+    $st = null;
+    foreach ($daftar as $satu) {
+        $st = $pdo->prepare($satu);
+        $st->execute($params);
+    }
+    return $st;
+}
+function one_on(PDO $pdo, string $sql, array $params = []): ?array
+{
+    $r = q_on($pdo, $sql, $params)->fetch();
+    return $r === false ? null : $r;
+}
+function all_on(PDO $pdo, string $sql, array $params = []): array
+{
+    return q_on($pdo, $sql, $params)->fetchAll();
+}
+function scalar_on(PDO $pdo, string $sql, array $params = [], $default = 0)
+{
+    $v = q_on($pdo, $sql, $params)->fetchColumn();
     return ($v === false || $v === null) ? $default : $v;
 }
 
@@ -1195,15 +1294,32 @@ function js_json($v): string
     return $j === false ? 'null' : $j;
 }
 
-function pagination(int $total, int $per_page, int $page): string
+/**
+ * Kontrol halaman (prev/next + nomor) untuk sebuah daftar.
+ *
+ * `$key` = nama PARAMETER halaman pada tautan. Satu halaman boleh memuat BEBERAPA
+ * daftar berhalaman (mis. Detail Pasien: transaksi, reservasi, rekam medis, bahan) —
+ * masing-masing memakai kunci sendiri (`page_trx`, `page_app`, …) supaya membuka
+ * halaman 2 pada satu kartu TIDAK menggeser kartu lain. Nilai parameter lain
+ * (termasuk nomor halaman kartu lain) selalu dipertahankan oleh `qs()`.
+ *
+ * Atribut `data-pg` dipakai skrip halaman (app.js) untuk mengganti HANYA daftar
+ * yang diklik tanpa memuat ulang halaman — pencocokan berdasarkan kunci ini,
+ * bukan berdasarkan urutan (daftar yang kosong tidak merusak kartu setelahnya).
+ */
+function pagination(int $total, int $per_page, int $page, string $key = 'page'): string
 {
     $pages = max(1, (int)ceil($total / $per_page));
     if ($total <= 0) return '';
-    $out = '<div class="pagination"><div class="pg-info">Menampilkan ' . num(($page - 1) * $per_page + 1) . '–' . num(min($page * $per_page, $total)) . ' dari ' . num($total) . ' data</div><div class="pg-links">';
-    $mk = function ($p, $label, $active = false, $disabled = false) {
+    $kunci = $key !== '' ? $key : 'page';
+    $drop = $kunci === 'page' ? [] : ['page'];      // jangan tinggalkan `page` lama
+    $out = '<div class="pagination" data-pg="' . e($kunci) . '">'
+        . '<div class="pg-info">Menampilkan ' . num(($page - 1) * $per_page + 1) . '–'
+        . num(min($page * $per_page, $total)) . ' dari ' . num($total) . ' data</div><div class="pg-links">';
+    $mk = function ($p, $label, $active = false, $disabled = false) use ($kunci, $drop) {
         if ($disabled) return '<span class="pg disabled">' . e($label) . '</span>';
         $c = $active ? 'pg active' : 'pg';
-        return '<a class="' . $c . '" href="?' . e(qs(['page' => $p])) . '">' . e($label) . '</a>';
+        return '<a class="' . $c . '" href="?' . e(qs([$kunci => $p], $drop)) . '">' . e($label) . '</a>';
     };
     $out .= $mk(max(1, $page - 1), '‹', false, $page <= 1);
     $start = max(1, $page - 2);
@@ -1214,6 +1330,16 @@ function pagination(int $total, int $per_page, int $page): string
     $out .= '</div></div>';
     return $out;
 }
+/**
+ * Nomor halaman aktif untuk sebuah daftar berhalaman.
+ *
+ * @param string $key nama parameter pada URL (mis. `page`, `page_trx`)
+ */
+function pagination_page(string $key = 'page'): int
+{
+    return max(1, (int)gp($key !== '' ? $key : 'page', 1));
+}
+
 /**
  * Pemilih "per halaman" TANPA <form> sendiri.
  *
@@ -1253,6 +1379,49 @@ function per_page_select(): string
 /* ------------------------------------------------------------------ *
  * Reference data helpers (form selects)
  * ------------------------------------------------------------------ */
+
+/**
+ * LARANG PEMINDAHAN CABANG pada baris yang SUDAH ADA.
+ *
+ * Arsitektur sekarang menyimpan data operasional di BERKAS basis data per cabang:
+ * sebuah baris hidup di berkas cabangnya, sedangkan kolom `branch_id` ikut disaring
+ * oleh view cakupan. Kalau `branch_id` sebuah baris lama diubah tanpa memindahkan
+ * berkasnya, baris itu "menghilang" dari daftar (view menyaringnya) dan relasinya
+ * dengan data anak di berkas lama menjadi menggantung. Karena itu pemindahan
+ * dilarang dengan pesan yang jelas — bukan dibiarkan merusak data diam-diam.
+ *
+ * @param string $tabel   nama tabel (patients, treatments, suppliers, doctors, …)
+ * @param int    $id      id baris (0 = baris baru → selalu boleh)
+ * @param int    $tujuan  cabang yang diminta
+ */
+function assert_branch_unchanged(string $tabel, int $id, int $tujuan): void
+{
+    if ($id <= 0 || $tujuan <= 0) return;
+    $bolehTabel = ['patients', 'doctors', 'therapists', 'treatments', 'skincare_products',
+        'treatment_materials', 'suppliers', 'packages'];
+    if (!in_array($tabel, $bolehTabel, true)) return;
+    $row = one('SELECT branch_id FROM ' . $tabel . ' WHERE id = ?', [$id]);
+    if (!$row) return;
+    $lama = (int)($row['branch_id'] ?? 0);
+    if ($lama > 0 && $lama !== $tujuan) {
+        throw new RuntimeException('Cabang ' . $tabel . ' ini tidak dapat dipindah dari '
+            . (branch_name_of($lama) !== '' ? branch_name_of($lama) : ('cabang ' . $lama)) . ' ke '
+            . (branch_name_of($tujuan) !== '' ? branch_name_of($tujuan) : ('cabang ' . $tujuan))
+            . '. Data operasional tersimpan di basis data cabang masing-masing, sehingga '
+            . 'perpindahan cabang akan membuat riwayatnya menggantung. Silakan buat data baru '
+            . 'pada cabang yang dituju.');
+    }
+}
+
+/** Nama cabang dari id-nya ('' bila tidak ada) — untuk pesan/penjelasan ke pengguna. */
+function branch_name_of(int $branchId): string
+{
+    static $cache = [];
+    if (array_key_exists($branchId, $cache)) return $cache[$branchId];
+    $b = $branchId > 0 ? one('SELECT name FROM branches WHERE id = ?', [$branchId]) : null;
+    return $cache[$branchId] = ($b ? (string)$b['name'] : '');
+}
+
 function opt_branches($selected = null, bool $all_option = false, string $all_label = 'Semua Cabang'): string
 {
     $out = $all_option ? '<option value="">' . e($all_label) . '</option>' : '';
@@ -1262,13 +1431,43 @@ function opt_branches($selected = null, bool $all_option = false, string $all_la
     return $out;
 }
 /**
+ * Kolom FILTER CABANG untuk halaman daftar (permintaan pemilik: setiap menu yang
+ * menyimpan data per cabang harus punya pilihan cabang + "Semua Cabang").
+ *
+ * Hanya dirender untuk level OWNER (Super Admin & Direktur) — akun yang dipin satu
+ * cabang tidak perlu memilih karena seluruh datanya memang cabang itu. Nilainya
+ * dibaca `scope_branch()` yang sudah dipakai seluruh halaman, sehingga cukup
+ * menambahkan kolom ini agar filter benar-benar berlaku.
+ *
+ * Dipakai DI DALAM `<form class="filter-bar">` (mengembalikan satu `<div class="field">`
+ * saja — tidak membuat form baru, jadi tidak ada form bersarang).
+ */
+function branch_filter_field(string $label = 'Cabang'): string
+{
+    if (!is_owner_level()) return '';
+    $now = scope_branch();
+    $out = '<div class="field"><label>' . e($label) . '</label>'
+        . '<select class="input input-sm" name="branch">'
+        . '<option value="all"' . ($now === null ? ' selected' : '') . '>Semua Cabang</option>';
+    foreach (branches() as $b) {
+        $out .= '<option value="' . (int)$b['id'] . '"'
+            . ($now === (int)$b['id'] ? ' selected' : '') . '>' . e((string)$b['name']) . '</option>';
+    }
+    return $out . '</select></div>';
+}
+
+/**
  * Pilihan supplier: dropdown dari supplier yang TERDAFTAR di menu Supplier,
  * ditambah opsi mengisi nama baru secara manual (agar tetap fleksibel).
  * Sebelumnya memakai <datalist> yang dianggap tidak berfungsi oleh pengguna.
  */
 function opt_supplier(string $name, string $selected = '', string $prefix = 'sup'): string
 {
-    $list = all('SELECT DISTINCT name FROM suppliers WHERE status = "active" ORDER BY name');
+    /* PEMBATASAN CABANG (audit isolasi ronde 55): daftar nama supplier mengikuti cabang
+       akun — akun yang dipin satu cabang tidak melihat supplier cabang lain. Pemilik
+       (cakupan semua cabang) tetap melihat seluruhnya. */
+    $sc = bscope('branch_id');
+    $list = all('SELECT DISTINCT name FROM suppliers WHERE status = "active" ' . $sc[0] . ' ORDER BY name', $sc[1]);
     $selected = trim($selected);
     $known = false;
     foreach ($list as $r) {
@@ -1541,6 +1740,15 @@ function local_upload_dir(): string
     if ($env) {
         if (!is_dir($env)) @mkdir($env, 0770, true);
         return rtrim($env, '/');
+    }
+    /* PENGAMAN (lihat nv_isolated_root): proses uji/CLI yang mengalihkan NAVEENA_DB
+       memakai folder unggahan sendiri — jangan menulis ke folder unggahan aplikasi
+       terbit (pernah menumpuk 600+ berkas sisa uji di sana). */
+    $iso = nv_isolated_root();
+    if ($iso !== '') {
+        $d = $iso . '/uploads';
+        if (!is_dir($d)) @mkdir($d, 0770, true);
+        return $d;
     }
     $dirs = [dirname(APP_DIR) . '/naveena_uploads', APP_DIR . '/storage/photos'];
     foreach ($dirs as $d) {

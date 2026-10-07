@@ -40,7 +40,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     [$code, $name, $address, $phone, $email, $hours, $status]);
                 $newId = (int)db()->lastInsertId();
                 audit('Tambah Cabang', 'Pengaturan', $newId, null, ['name' => $name, 'code' => $code], 'Cabang baru');
-                flash('Cabang baru ditambahkan.');
+                /* BASIS DATA CABANG OTOMATIS (ronde 54): saat mode central/branch aktif,
+                   setiap cabang baru langsung mendapat basis datanya sendiri — skema +
+                   migrasi + PRAGMA + integrity/FK check + registrasi + health check.
+                   Pada mode `legacy` (bawaan) langkah ini dilewati sehingga produksi
+                   tidak berubah. */
+                /* Cabang baru SELALU dibuatkan basis datanya (arsitektur central +
+                   satu basis data per cabang berlaku untuk semua pemasangan). */
+                if ($newId > 0) {
+                    $dbBranch = db_branch_create($newId, $code);
+                    flash($dbBranch['ok']
+                        ? 'Basis data cabang dibuat & sehat: ' . basename($dbBranch['path'])
+                        : 'Cabang tersimpan, tetapi basis datanya perlu diperiksa: ' . $dbBranch['error'],
+                        $dbBranch['ok'] ? 'success' : 'warning');
+                } else {
+                    flash('Cabang baru ditambahkan.');
+                }
             }
         }
         if ($act === 'toggle') {
@@ -71,12 +86,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
+/* Paginasi (maksimal per halaman mengikuti Pengaturan; bawaan 25). */
+$page = page_no(); $pp = per_page();
+$total = (int)scalar('SELECT COUNT(*) FROM branches');
 $rows = all('SELECT b.*,
                 (SELECT COUNT(*) FROM users u WHERE u.branch_id=b.id) users,
                 (SELECT COUNT(*) FROM patients p WHERE p.branch_id=b.id) patients,
                 (SELECT COUNT(*) FROM orders o WHERE o.branch_id=b.id AND o.status="paid") orders,
                 (SELECT COALESCE(SUM(o.total),0) FROM orders o WHERE o.branch_id=b.id AND o.status="paid") revenue
-             FROM branches b ORDER BY b.id');
+             FROM branches b ORDER BY b.id LIMIT ' . $pp . ' OFFSET ' . (($page - 1) * $pp));
 $edit = gp('action') === 'edit' ? one('SELECT * FROM branches WHERE id = ?', [(int)gp('id')]) : null;
 
 $pageTitle = $canManage ? 'Manajemen Cabang' : 'Data Cabang';
@@ -142,6 +160,7 @@ page_head($pageTitle, 'branches');
       </tbody>
     </table>
   </div>
+  <?= pagination($total, $pp, $page) ?>
 </div>
 
 <?php if ($canManage): ?>

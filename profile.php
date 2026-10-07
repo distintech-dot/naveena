@@ -44,7 +44,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $perms = has_perm('user.manage') ? all('SELECT p.code, p.name, p.module FROM permissions p') : [];
 $myPerms = user_perms();
 $loginCount = (int)scalar('SELECT COUNT(*) FROM audit_logs WHERE user_id = ? AND action = "Login"', [$user['id']]);
-$myTrx = (int)scalar('SELECT COUNT(*) FROM orders WHERE user_id = ?', [$user['id']]);
+/* PEMBATASAN CABANG (audit isolasi ronde 56): akun yang dipin satu cabang menghitung
+   transaksinya pada cabang itu; level owner (lintas cabang) tetap seluruhnya. */
+$myBranch = (int)($user['branch_id'] ?? 0);
+[$myBrSql, $myBrParams] = $myBranch > 0 ? [' AND branch_id = ?', [$myBranch]] : bscope('branch_id');
+$myTrx = (int)scalar('SELECT COUNT(*) FROM orders WHERE user_id = ?' . $myBrSql, array_merge([$user['id']], $myBrParams));
 $myActs = all('SELECT * FROM audit_logs WHERE user_id = ? ORDER BY id DESC LIMIT 12', [$user['id']]);
 
 page_head('Akun Saya', '');

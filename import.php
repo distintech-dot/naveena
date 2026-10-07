@@ -225,11 +225,28 @@ function imp_pasien(array $row, array $map, int $branch, array $user): array
     $birth = parse_date_cell(cell($row, $map, 'birth'));
     if ($birth === '' && cell($row, $map, 'birth') !== '') $warn[] = 'Tanggal lahir "' . cell($row, $map, 'birth') . '" tidak dapat dibaca — dibiarkan kosong.';
 
-    // Cari data yang sudah ada: NIK -> telepon -> nomor member
+    /* Cari data yang sudah ada: NIK -> telepon -> nomor member.
+       PEMBATASAN CABANG (audit isolasi ronde 55): pencocokan hanya mencari di CABANG
+       TUJUAN impor. Bila NIK/telepon ternyata milik pasien CABANG LAIN, baris itu
+       DITOLAK dengan pesan yang jelas (bukan diam-diam menimpa data cabang lain).
+       Perilaku lama (mencari lintas cabang) aman karena diperiksa assert_branch, tetapi
+       pesannya membingungkan dan pencariannya sendiri tidak dibatasi. */
     $existing = null;
-    if ($nik !== '') $existing = one('SELECT * FROM patients WHERE nik = ? LIMIT 1', [$nik]);
-    if (!$existing) { $p = cell($row, $map, 'phone'); if ($p !== '') $existing = one('SELECT * FROM patients WHERE phone = ? LIMIT 1', [$p]); }
-    if (!$existing) { $m = cell($row, $map, 'member'); if ($m !== '') $existing = one('SELECT * FROM patients WHERE member_number = ? LIMIT 1', [$m]); }
+    $br = (int)$branch > 0 ? ' AND branch_id = ' . (int)$branch : '';
+    $cariPasien = function (string $kolom, string $nilai) use ($br, $branch) {
+        $row = one('SELECT * FROM patients WHERE ' . $kolom . ' = ?' . $br . ' LIMIT 1', [$nilai]);
+        if ($row) return $row;
+        $lain = one('SELECT id, branch_id, name FROM patients WHERE ' . $kolom . ' = ? LIMIT 1', [$nilai]);
+        if ($lain && (int)$lain['branch_id'] !== (int)$branch) {
+            throw new RuntimeException('Data dengan ' . $kolom . ' itu sudah terdaftar sebagai pasien '
+                . 'cabang lain (' . (string)$lain['name'] . '). Impor ini untuk cabang yang Anda pilih — '
+                . 'periksa kembali atau ubah cabang tujuan impor.');
+        }
+        return null;
+    };
+    if ($nik !== '') $existing = $cariPasien('nik', $nik);
+    if (!$existing) { $p = cell($row, $map, 'phone'); if ($p !== '') $existing = $cariPasien('phone', $p); }
+    if (!$existing) { $m = cell($row, $map, 'member'); if ($m !== '') $existing = $cariPasien('member_number', $m); }
 
     $data = [
         'name' => $name,

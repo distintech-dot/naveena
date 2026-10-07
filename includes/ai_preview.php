@@ -34,30 +34,66 @@ function ai_preview_dir(int $taskId): string
 }
 
 /**
- * Alamat basis data SALINAN untuk pratinjau (di dalam folder salinan pratinjau).
+ * Akar basis data SALINAN untuk pratinjau (di dalam folder salinan pratinjau).
  *
- * JEBAKAN PENTING (ronde 47): aplikasi memakai SQLite mode **WAL**, sehingga
- * perubahan terbaru bisa masih berada di berkas `-wal` dan BELUM masuk berkas
- * utama. Menyalin `data.sqlite` saja membuat salinan kehilangan data terbaru —
- * akibatnya pratinjau bisa menampilkan setelan/data lama (mis. gambar QRIS yang
- * baru diunggah tidak muncul). Karena itu checkpoint dijalankan lebih dulu, lalu
- * berkas `-wal`/`-shm` juga ikut disalin sebagai pengaman.
+ * PENTING (arsitektur central + satu basis data per cabang): aplikasi TIDAK lagi
+ * memakai satu berkas `data.sqlite`. Yang harus disalin adalah SUSUNAN LENGKAP:
+ * `databases/central.sqlite` + `databases/branches/branch_00N.sqlite`. Dulu fungsi ini
+ * menyalin `DB_PATH` (yang sekarang hanya jalur identitas) sehingga berkasnya tidak ada,
+ * salinan basis data GAGAL dibuat dan pratinjau AI Developer mati — persis yang tertangkap
+ * uji ronde 47.
+ *
+ * JEBAKAN WAL (tetap berlaku): perubahan terbaru bisa masih ada di berkas `-wal`
+ * (untuk semua berkas: central maupun tiap cabang), jadi checkpoint dijalankan lebih
+ * dulu lalu berkas `-wal`/`-shm` juga ikut disalin sebagai pengaman.
+ *
+ * @return string|null akar basis data salinan (memuat `databases/...`) atau null bila gagal
+ */
+function ai_preview_db_root(int $taskId): ?string
+{
+    $dir = ai_preview_dir($taskId);
+    $akar = $dir . '/naveena_data';
+    if (!is_dir($akar)) @mkdir($akar, 0770, true);
+    $tujuan = $akar . '/databases';
+    $central = $tujuan . '/central.sqlite';
+    if (is_file($central)) return $akar;
+
+    ai_db_checkpoint();
+    $sumber = db_store_root() . '/databases';
+    if (!is_dir($sumber)) return null;                 // basis data aplikasi belum siap
+    if (!is_dir($tujuan . '/branches')) @mkdir($tujuan . '/branches', 0770, true);
+    $gagal = false;
+    foreach ([$sumber . '/central.sqlite' => $central] as $dari => $ke) {
+        if (!is_file($dari)) { $gagal = true; continue; }
+        if (!@copy($dari, $ke)) { $gagal = true; continue; }
+        foreach (['-wal', '-shm'] as $akhiran) {
+            if (is_file($dari . $akhiran)) @copy($dari . $akhiran, $ke . $akhiran);
+        }
+        @chmod($ke, 0664);
+    }
+    foreach (glob($sumber . '/branches/*.sqlite') ?: [] as $dari) {
+        $ke = $tujuan . '/branches/' . basename($dari);
+        if (!@copy($dari, $ke)) { $gagal = true; continue; }
+        foreach (['-wal', '-shm'] as $akhiran) {
+            if (is_file($dari . $akhiran)) @copy($dari . $akhiran, $ke . $akhiran);
+        }
+        @chmod($ke, 0664);
+    }
+    if ($gagal || !is_file($central)) return null;
+    return $akar;
+}
+
+/**
+ * Alamat basis data SALINAN untuk pratinjau.
+ *
+ * Mengembalikan berkas CENTRAL (data global: pengaturan, pengguna, cabang) karena di
+ * sanalah tabel `settings` berada — dipakai pemeriksaan seperti "setelan QRIS ikut
+ * tersalin ke salinan pratinjau".
  */
 function ai_preview_db(int $taskId): ?string
 {
-    $dir = ai_preview_dir($taskId);
-    $dbDir = $dir . '/naveena_data';
-    if (!is_dir($dbDir)) @mkdir($dbDir, 0770, true);
-    $db = $dbDir . '/data.sqlite';
-    if (!is_file($db)) {
-        ai_db_checkpoint();
-        if (!@copy(DB_PATH, $db)) return null;
-        foreach (['-wal', '-shm'] as $akhiran) {
-            if (is_file(DB_PATH . $akhiran)) @copy(DB_PATH . $akhiran, $db . $akhiran);
-        }
-        @chmod($db, 0664);
-    }
-    return $db;
+    $akar = ai_preview_db_root($taskId);
+    return $akar === null ? null : $akar . '/databases/central.sqlite';
 }
 
 /**
@@ -198,8 +234,8 @@ function ai_preview_render(int $taskId, string $page, string $query = '', int $u
     if (!is_file($app . '/' . $page)) {
         return array_merge($gagal, ['error' => 'Halaman ' . $page . ' tidak ada di salinan pratinjau.']);
     }
-    $db = ai_preview_db($taskId);
-    if ($db === null) return array_merge($gagal, ['error' => 'Tidak dapat menyiapkan basis data salinan.']);
+    $dbAkar = ai_preview_db_root($taskId);
+    if ($dbAkar === null) return array_merge($gagal, ['error' => 'Tidak dapat menyiapkan basis data salinan.']);
 
     $runner = __DIR__ . '/../ai_preview_run.php';
     if (!is_file($runner)) return array_merge($gagal, ['error' => 'Penjalan pratinjau tidak ditemukan.']);

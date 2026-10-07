@@ -239,7 +239,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                semua member dengan aturan baru (akumulasi periode berjalan). */
             $roll = member_rollover_run();
             $synced = $roll['berubah'];
-            foreach (all('SELECT id FROM patients WHERE member_card = 1') as $row) {
+            /* SENGAJA LINTAS CABANG: perubahan aturan kartu member berlaku untuk SEMUA
+               cabang sehingga seluruh pemegang kartu disinkronkan. Penanda `cross-branch`
+               dipakai alat audit isolasi (db_audit.php); saat pengalihan koneksi
+               central/branch, operasi ini harus disisir per cabang (db_for_branch()). */
+            foreach (all('/* cross-branch */ SELECT id FROM patients WHERE member_card = 1') as $row) {
                 $r = member_sync_level((int)$row['id']);
                 if ($r['changed'] || $r['activated']) $synced++;
             }
@@ -305,19 +309,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             set_setting('chart_palette_mode', in_array($mode, ['kontras', 'tema'], true) ? $mode : 'kontras');
             $defs = ['treatment' => '#C2185B', 'skincare' => '#2E7D32', 'total' => '#37474F',
                      'positif' => '#2E7D32', 'negatif' => '#C62828'];
+            /* Pembaca nilai warna: mendukung dua bentuk nama kolom —
+               `chart_color_<k>` (warna grafik) dan `stat_color_<nama>_<bagian>`
+               (warna kartu statistik, dipanggil dengan "stat:<nama>:<bagian>"). */
             $hexIn = function (string $k, string $def): string {
-                $v = strtoupper(trim((string)($_POST['chart_color_' . $k] ?? '')));
+                $field = str_starts_with($k, 'stat:')
+                    ? 'stat_color_' . implode('_', array_slice(explode(':', $k), 1))
+                    : 'chart_color_' . $k;
+                $v = strtoupper(trim((string)($_POST[$field] ?? '')));
                 if ($v === '' || !preg_match('/^#?[0-9A-F]{6}$/', $v)) return $def;
                 return '#' . ltrim($v, '#');
             };
             foreach ($defs as $k => $def) set_setting('chart_color_' . $k, $hexIn($k, $def));
+            /* WARNA KARTU STATISTIK (gold/pink/coklat) — diletakkan di bagian yang SAMA
+               dengan warna grafik supaya semua pengaturan warna ada di satu tempat
+               (permintaan pemilik: "konfigurasikan warna ini ke bagian terkait"). */
+            foreach (stat_card_colors() as $nama => $w) {
+                foreach (array_keys($w) as $bagian) {
+                    set_setting('stat_color_' . $nama . '_' . $bagian,
+                        $hexIn('stat:' . $nama . ':' . $bagian, $w[$bagian]));
+                }
+            }
             audit('Ubah Warna Grafik', 'Pengaturan', null, null, [
                 'mode' => setting('chart_palette_mode'),
                 'treatment' => setting('chart_color_treatment'),
                 'skincare' => setting('chart_color_skincare'),
                 'total' => setting('chart_color_total'),
-            ], 'Pengaturan warna grafik diperbarui (layar, Excel, PDF, dan email)');
-            flash('Warna grafik disimpan — berlaku di dashboard, laporan, Excel, PDF, dan laporan email. '
+                'kartu_gold' => setting('stat_color_gold_to'),
+                'kartu_pink' => setting('stat_color_pink_to'),
+                'kartu_coklat' => setting('stat_color_brown_to'),
+            ], 'Pengaturan warna grafik & warna kartu statistik diperbarui (layar, Excel, PDF, dan email)');
+            flash('Warna grafik & warna kartu statistik disimpan — berlaku di dashboard, laporan, dan menu '
+                . 'Keuangan (kartu Treatment = gold, Skincare = pink, Laba Kotor = coklat). '
                 . 'Grafik perbandingan antar cabang memakai palet kontras tinggi otomatis sehingga setiap '
                 . 'cabang (berapa pun jumlahnya) memakai warna yang berbeda.');
         }
@@ -445,6 +468,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             set_setting('pay_qris_file', '');
             audit('Hapus QRIS Klinik', 'Pengaturan', null, null, ['file' => $oldQris], 'Gambar QRIS dihapus');
             flash('Gambar QRIS dihapus.');
+        }
+        /* ---------- KEMBALI KE DEFAULT (permintaan pemilik) ----------
+           Mengembalikan teks email struk / template WhatsApp ke BAKUANNYA.
+           Bakuannya adalah rekaman template yang berlaku saat fitur ini dipasang
+           (lihat includes/template_default.php), sehingga mengubah-ubah template
+           tidak mengubah bakuannya. Konfirmasi 2 tahap di sisi tampilan
+           (data-heavy-confirm) mencegah terpencet tanpa sengaja. */
+        if ($act === 'email_reset_default' || $act === 'wa_reset_default') {
+            if (!has_perm('settings.manage')) deny('Hanya pemegang izin Pengaturan Sistem yang dapat mengembalikan template ke bawaan.');
+            $grup = $act === 'email_reset_default' ? 'email' : 'wa';
+            $g = template_default_groups()[$grup];
+            $r = template_default_restore($grup);
+            audit('Kembalikan Template ke Default', 'Pengaturan', null,
+                array_map(fn($v) => short_text($v, 120), $r['dari']),
+                array_map(fn($v) => short_text($v, 120), $r['ke']),
+                'Template ' . $g['label'] . ' dikembalikan ke bakuannya (' . count($r['ke']) . ' teks)');
+            $nama = [];
+            foreach (array_keys($r['ke']) as $k) {
+                $nama[] = ['email_receipt_subject' => 'Subjek email struk', 'email_receipt_body' => 'Isi email struk',
+                    'wa_template' => 'Template reservasi', 'wa_template_doctor' => 'Template pengingat dokter',
+                    'wa_receipt_template' => 'Template struk WhatsApp'][$k] ?? $k;
+            }
+            flash('Template ' . $g['label'] . ' dikembalikan ke DEFAULT: ' . e(implode(', ', $nama))
+                . '. Tekan "Simpan Konfigurasi" bila ingin menyimpan perubahan lain pada kartu ini.', 'success');
         }
         if ($act === 'wa') {
             foreach (['wa_api_url', 'wa_api_sender', 'wa_template', 'wa_sender_number', 'wa_receipt_template', 'wa_template_doctor'] as $k) {
@@ -594,7 +641,7 @@ foreach ([2, 7, 12, 24] as $cgN) {
 ?>
 <div class="card" id="warnagrafik">
   <div class="card-head">
-    <h3>Warna Grafik</h3>
+    <h3>Warna Grafik &amp; Kartu Statistik</h3>
     <span><?= badge('Palet kontras: ' . num(count(chart_palette_full())) . ' warna', 'green') ?></span>
   </div>
   <form method="post">
@@ -653,9 +700,38 @@ foreach ([2, 7, 12, 24] as $cgN) {
       <div class="notice mt-2">Bawaan yang disarankan: Treatment <strong>magenta</strong> dan Skincare
         <strong>hijau tua</strong> — dua warna yang sangat kontras sehingga batangnya langsung terbaca
         (versi lama memakai hijau muda sehingga perbedaannya tipis).</div>
+
+      <?php /* ---------- WARNA KARTU STATISTIK ----------
+         Dipakai SERAGAM di dashboard, laporan, dan menu Keuangan:
+           Penjualan/Pendapatan Treatment = gold · Penjualan/Pendapatan Skincare = pink ·
+           Laba Kotor = coklat. Satu tempat pengaturan supaya tidak berbeda antar halaman. */ ?>
+      <?php $scc = stat_card_colors(); ?>
+      <div class="section-title">Warna Kartu Statistik</div>
+      <p class="muted">Kartu berwarna dipakai seragam di <strong>Dashboard</strong>, <strong>Laporan</strong>,
+        dan <strong>Keuangan</strong>. Angka &amp; label pada kartu memakai warna gelap sehingga tetap
+        terbaca jelas di atas latar berwarna.</p>
+      <div class="form-grid g3">
+        <?php foreach ([['gold', 'Kartu Gold (Treatment)'], ['pink', 'Kartu Pink (Skincare)'], ['brown', 'Kartu Coklat (Laba Kotor)']] as [$sk, $slbl]): ?>
+          <div class="field"><label><?= e($slbl) ?></label>
+            <div class="flex gap-sm" style="align-items:center;flex-wrap:wrap">
+              <?php foreach (['from' => 'Terang', 'to' => 'Utama'] as $bag => $blbl): ?>
+                <label class="small muted" style="display:flex;align-items:center;gap:6px">
+                  <input class="input chart-color" type="color"
+                         name="stat_color_<?= e($sk) ?>_<?= e($bag) ?>"
+                         value="<?= e($scc[$sk][$bag]) ?>" title="warna <?= e(strtolower($blbl)) ?>">
+                  <?= e($blbl) ?>
+                </label>
+              <?php endforeach; ?>
+              <span class="stat <?= e($sk) ?>" style="padding:6px 12px;gap:0">
+                <span class="lbl" style="font-size:.66rem">Contoh</span>
+                <span class="val" style="font-size:.95rem">Rp 1.250.000</span>
+              </span>
+            </div></div>
+        <?php endforeach; ?>
+      </div>
     </div>
     <div class="modal-foot" style="border-radius:0 0 var(--radius) var(--radius)">
-      <button class="btn btn-primary" type="submit"><?= icon('settings') ?> Simpan Warna Grafik</button>
+      <button class="btn btn-primary" type="submit"><?= icon('settings') ?> Simpan Warna Grafik &amp; Kartu</button>
     </div>
   </form>
 </div>
@@ -1065,10 +1141,25 @@ foreach ([2, 7, 12, 24] as $cgN) {
       </div>
     </div>
 
+    <?php /* Tombol "Kembali ke Default" — di SEBELAH KIRI tombol simpan (permintaan
+             pemilik). Tombol berada di form utama tetapi diarahkan ke form terpisah
+             lewat atribut `form=` (form bersarang tidak diperbolehkan). Konfirmasi
+             2 tahap mencegah terpencet tanpa sengaja. */ ?>
+    <?php $tplEmailBeda = template_default_changed('email'); ?>
     <div class="modal-foot" style="border-radius:0 0 var(--radius) var(--radius)">
-      <button class="btn btn-primary" type="submit">Simpan Konfigurasi Email</button>
+      <button class="btn" type="submit" form="emailResetForm"<?= $tplEmailBeda ? '' : ' disabled title="Teks sudah sama dengan default"' ?>>
+        <?= icon('refresh') ?> Kembali ke Default
+      </button>
+      <button class="btn btn-primary" type="submit"><?= icon('save') ?> Simpan Konfigurasi Email</button>
     </div>
       </form>
+  <?php /* Formulir terpisah untuk mengembalikan teks email ke default. */ ?>
+  <form method="post" id="emailResetForm" data-heavy-kind="reset"
+        data-heavy-confirm="KEMBALIKAN TEKS EMAIL KE DEFAULT"
+        data-heavy-warning="Subjek &amp; isi email struk akan dikembalikan ke template DEFAULT (bakuannya). Perubahan yang Anda tulis pada kedua kolom itu akan DIGANTI. Template lain pada kartu ini (tujuan, jadwal, pengirim, tombol struk otomatis) TIDAK berubah."
+        data-heavy-confirm2="PERINGATAN KEDUA (terakhir): kembalikan teks email ke default sekarang?">
+    <?= csrf_field() ?><input type="hidden" name="action" value="email_reset_default">
+  </form>
   <div class="card-body" style="border-top:1px solid var(--line)">
     <div class="flex flex-wrap gap-lg mb-2">
       <form method="post">
@@ -1316,7 +1407,22 @@ $payInfo = pay_clinic_info();
             — <code>{klinik}</code> otomatis menjadi <strong><?= e(clinic_name()) ?></strong>.</span></div>
       </div>
     </div>
-    <div class="modal-foot" style="border-radius:0 0 var(--radius) var(--radius)"><button class="btn btn-primary" type="submit">Simpan Konfigurasi WhatsApp</button></div>
+    <?php /* Lihat catatan pada kartu Email: tombol default di sebelah kiri tombol simpan,
+             memakai form terpisah + konfirmasi 2 tahap. */ ?>
+    <?php $tplWaBeda = template_default_changed('wa'); ?>
+    <div class="modal-foot" style="border-radius:0 0 var(--radius) var(--radius)">
+      <button class="btn" type="submit" form="waResetForm"<?= $tplWaBeda ? '' : ' disabled title="Teks sudah sama dengan default"' ?>>
+        <?= icon('refresh') ?> Kembali ke Default
+      </button>
+      <button class="btn btn-primary" type="submit"><?= icon('save') ?> Simpan Konfigurasi WhatsApp</button>
+    </div>
+  </form>
+  <?php /* Formulir terpisah untuk mengembalikan template WhatsApp ke default. */ ?>
+  <form method="post" id="waResetForm" data-heavy-kind="reset"
+        data-heavy-confirm="KEMBALIKAN TEMPLATE WHATSAPP KE DEFAULT"
+        data-heavy-warning="Tiga template WhatsApp (reservasi, pengingat dokter, struk) akan dikembalikan ke template DEFAULT (bakuannya). Tulisan yang Anda ubah pada ketiganya akan DIGANTI. Pengaturan lain pada kartu ini (nomor pengirim, API, sertakan tautan PDF) TIDAK berubah."
+        data-heavy-confirm2="PERINGATAN KEDUA (terakhir): kembalikan template WhatsApp ke default sekarang?">
+    <?= csrf_field() ?><input type="hidden" name="action" value="wa_reset_default">
   </form>
 </div>
 

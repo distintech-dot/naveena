@@ -238,6 +238,52 @@ if (!empty($spec['locked_scope'])) {
 }
 $scopeKey = $scopeId === null ? 'Semua Cabang' : (string)scalar('SELECT name FROM branches WHERE id = ?', [$scopeId], '-');
 
+/**
+ * Bersihkan baris data operasional yang tertinggal di basis data CENTRAL untuk
+ * cabang yang TIDAK dipertahankan.
+ *
+ * Ditemukan dari kegagalan nyata: `DELETE FROM branches` selalu ditolak
+ * ("FOREIGN KEY constraint failed") karena central masih memuat data contoh
+ * dokter/terapis (tabel operasional) yang ber-FK ke `branches`. Fungsi ini
+ * menyisir sendiri tabel mana pun di central yang punya kolom `branch_id`
+ * ber-FK ke `branches`, jadi tidak bergantung daftar nama tabel.
+ *
+ * PENTING: memakai KONEKSI YANG SAMA (`main` = central). Membuka koneksi KEDUA
+ * ke central saat transaksi tulis sedang berjalan membuat pernyataan kedua
+ * terblokir kunci tulis dan menunggu `busy_timeout` (5 detik) SETIAP pernyataan —
+ * pernah membuat "Hapus Semua Data" memakan 55 detik.
+ */
+function purge_central_leftovers(array $keepIds): int
+{
+    $dibuang = 0;
+    try {
+        $c = db();      // main = central.sqlite (routed) — jangan buka koneksi kedua
+        $tabel = $c->query("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+            ->fetchAll(PDO::FETCH_ASSOC);
+        $keep = implode(',', array_map('intval', $keepIds ?: [0]));
+        foreach ($tabel as $t) {
+            $sql = (string)$t['sql'];
+            $nama = (string)$t['name'];
+            if (!preg_match('/REFERENCES\s+[`"\[]?branches/i', $sql)) continue;
+            /* `users` DIKECUALIKAN: akun pengguna bukan data operasional dan sudah
+               dipindahkan ke cabang yang dipertahankan oleh pemanggil. Tanpa
+               pengecualian ini, akun staf yang terpaut cabang terakhir ikut terhapus
+               (terjadi: 8 akun menjadi 6). */
+            if ($nama === 'users') continue;
+            /* Kolomnya harus ada; kalau tidak ada, tabel itu tidak menyimpan cabang. */
+            $kol = $c->query('PRAGMA table_info(' . $c->quote($nama) . ')')->fetchAll(PDO::FETCH_ASSOC);
+            $punya = false;
+            foreach ($kol as $k) if ((string)$k['name'] === 'branch_id') { $punya = true; break; }
+            if (!$punya) continue;
+            try {
+                $dibuang += (int)$c->exec('DELETE FROM main."' . $nama
+                    . '" WHERE branch_id IS NOT NULL AND branch_id NOT IN (' . $keep . ')');
+            } catch (Throwable $e) { /* dilewati — dilaporkan lewat jumlah */ }
+        }
+    } catch (Throwable $e) { /* central tidak tersedia */ }
+    return $dibuang;
+}
+
 /** Sisipkan pembatas cabang ke SQL spesifikasi. */
 function purge_sql(string $sql, ?int $scopeId, ?string $scopeCol): string
 {
@@ -422,7 +468,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $cnt = preg_replace('/^DELETE FROM\s+(\w+)/i', 'SELECT COUNT(*) FROM $1', $sql, 1);
                     $n = (int)scalar($cnt);
                     if ($n > 0) {
-                        $pdo->exec($sql);
+                        /* WAJIB lewat q(): pernyataan harus dikualifikasi ke berkas
+                           cabang (temp view hanya bisa dibaca, tidak bisa diubah), dan
+                           operasi tanpa pembatas cabang dipecah per berkas cabang. */
+                        q($sql);
                         $deleted[$st['label']] = $n;
                     }
                 }
@@ -448,6 +497,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $keep = array_slice($all, 0, $trim);
                     if ($keep) {
                         $keepList = implode(',', array_map('intval', $keep));
+                        /* Sisa baris data operasional di CENTRAL (mis. data contoh
+                           dokter/terapis pada basis data lama) dibersihkan lebih dulu:
+                           baris seperti itu masih ber-FK ke `branches` sehingga
+                           penghapusan cabang selalu gagal. */
+                        purge_central_leftovers($keep);
                         $pdo->exec('UPDATE users SET branch_id = ' . (int)$keep[0]
                             . ' WHERE branch_id IS NOT NULL AND branch_id NOT IN (' . $keepList . ')');
                         $nBranch = (int)scalar('SELECT COUNT(*) FROM branches WHERE id NOT IN (' . $keepList . ')');

@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/layout.php';
+require_once __DIR__ . '/includes/patient_form.php';
 require_perm('patient.view');
 
 $id = (int)gp('id');
@@ -42,6 +43,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $period = gp('period', 'month');
 [$ps, $pe] = resolve_period($period, gp('start'), gp('end'));
 
+/* SATU PERIODE UNTUK SEMUA DAFTAR (permintaan pemilik): filter periode di panel
+   atas berlaku untuk KETIGA daftar di halaman ini — riwayat transaksi, riwayat
+   reservasi, dan riwayat rekam medis. Filter terpisah per kartu sudah DIHAPUS
+   supaya tidak ada dua pengaturan tanggal yang membingungkan.
+   Bawaannya "Bulan ini"; pilih "Seluruh riwayat" untuk melihat semuanya. */
+$histLabel = $period === 'all' ? 'seluruh riwayat' : 'periode ' . tgl($ps) . ' — ' . tgl($pe);
+
 $sum = one("SELECT COUNT(*) trx, COALESCE(SUM(total),0) total FROM orders WHERE patient_id=? AND status='paid'", [$id]);
 $qty = one("SELECT
       COALESCE(SUM(CASE WHEN oi.item_type='treatment' THEN oi.quantity ELSE 0 END),0) tr_qty,
@@ -49,23 +57,38 @@ $qty = one("SELECT
       COALESCE(SUM(CASE WHEN oi.item_type='material'  THEN oi.quantity ELSE 0 END),0) mat_qty
     FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.patient_id=? AND o.status='paid'", [$id]);
 $last = one("SELECT MAX(created_at) last FROM orders WHERE patient_id=? AND status='paid'", [$id]);
-/* Bahan treatment yang pernah dipakai pada perawatan pasien ini (tidak ditagihkan,
-   hanya tercatat sebagai pemakaian) — berguna untuk melihat riwayat pemakaian bahan. */
-$materials = all("SELECT oi.item_name, oi.item_code, COALESCE(SUM(oi.quantity),0) q,
-                         COUNT(DISTINCT o.id) trx, MAX(date(o.created_at)) terakhir, oi.material_id
-                  FROM order_items oi JOIN orders o ON o.id=oi.order_id
-                  WHERE o.patient_id=? AND o.status='paid' AND oi.item_type='material'
-                  GROUP BY oi.item_name ORDER BY q DESC", [$id]);
 
+/* ------------------------------------------------------------------ *
+ * DAFTAR BERHALAMAN PER KARTU (permintaan pemilik)
+ * ------------------------------------------------------------------ *
+ * Dulu keempat daftar di halaman ini menampilkan SEMUA baris (transaksi tanpa
+ * batas, reservasi & rekam medis `LIMIT 100`), sehingga memilih periode
+ * "Seluruh riwayat" membuat halaman sangat panjang dan harus digulir jauh.
+ * Sekarang setiap kartu memakai jumlah baris per halaman yang SAMA dengan menu
+ * lain (Pengaturan → default 25, dapat dipilih 10/25/50/100) dan punya NOMOR
+ * HALAMAN sendiri (`page_trx`, `page_app`, `page_med`, `page_mat`) sehingga
+ * membuka halaman 2 pada satu kartu tidak menggeser kartu yang lain. Klik nomor
+ * halaman tidak memuat ulang halaman (ditangani app.js lewat `data-pg`).
+ */
+$perPage = per_page();
+
+$trxPage  = pagination_page('page_trx');
+$appsPage = pagination_page('page_app');
+$medsPage = pagination_page('page_med');
+$matPage  = pagination_page('page_mat');
+$off = function (int $page) use ($perPage): int { return max(0, ($page - 1) * $perPage); };
+
+$ordersTotal = (int)scalar('SELECT COUNT(*) FROM orders WHERE patient_id = ? AND date(created_at) BETWEEN ? AND ?', [$id, $ps, $pe]);
 $orders = all("SELECT o.*, b.name AS branch_name, u.name AS cashier_name,
                       (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type <> 'material') items,
                       (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type = 'material') materials
                FROM orders o JOIN branches b ON b.id=o.branch_id LEFT JOIN users u ON u.id=o.user_id
                WHERE o.patient_id=? AND date(o.created_at) BETWEEN ? AND ?
-               ORDER BY o.id DESC", [$id, $ps, $pe]);
+               ORDER BY o.id DESC LIMIT {$perPage} OFFSET " . $off($trxPage), [$id, $ps, $pe]);
 /* Reservasi & rekam medis juga MENGIKUTI filter periode di atas. Sebelumnya
    keduanya selalu menampilkan seluruh riwayat, sehingga data di luar rentang
    tanggal tetap muncul walau filter sudah diterapkan (dilaporkan pemilik). */
+$appsTotalPeriod = (int)scalar('SELECT COUNT(*) FROM appointments WHERE patient_id = ? AND date BETWEEN ? AND ?', [$id, $ps, $pe]);
 $apps = all("SELECT a.*, t.name AS treatment_name, d.name AS doctor_name, th.name AS therapist_name, b.name AS branch_name,
                      (SELECT GROUP_CONCAT(COALESCE(t2.name, ''), ', ')
                         FROM appointment_treatments at2 LEFT JOIN treatments t2 ON t2.id = at2.treatment_id
@@ -74,17 +97,35 @@ $apps = all("SELECT a.*, t.name AS treatment_name, d.name AS doctor_name, th.nam
              LEFT JOIN doctors d ON d.id=a.doctor_id LEFT JOIN therapists th ON th.id=a.therapist_id
              JOIN branches b ON b.id=a.branch_id
              WHERE a.patient_id=? AND a.date BETWEEN ? AND ?
-             ORDER BY a.date DESC, a.id DESC LIMIT 100", [$id, $ps, $pe]);
+             ORDER BY a.date DESC, a.id DESC LIMIT {$perPage} OFFSET " . $off($appsPage), [$id, $ps, $pe]);
+$appsTotal = (int)scalar('SELECT COUNT(*) FROM appointments WHERE patient_id = ?', [$id]);
 $meds = [];
 $medsAll = 0;
+$medsTotalPeriod = 0;
 if (has_perm('medical.view')) {
-    $meds = all('SELECT m.*, b.name AS branch_name FROM medical_records m JOIN branches b ON b.id=m.branch_id
+    /* Nama dokter & terapis di-join TERPISAH supaya keduanya bisa tampil — kolom
+       `staff_name` tidak pernah ada pada query ini sehingga kolom "Dokter/Terapis"
+       selalu tampil "-" (bug kecil yang ikut diperbaiki). */
+    $medsTotalPeriod = (int)scalar('SELECT COUNT(*) FROM medical_records WHERE patient_id = ? AND date BETWEEN ? AND ?', [$id, $ps, $pe]);
+    $meds = all('SELECT m.*, b.name AS branch_name, d.name AS doctor_name, th.name AS therapist_name
+                 FROM medical_records m JOIN branches b ON b.id=m.branch_id
+                 LEFT JOIN doctors d ON d.id=m.doctor_id
+                 LEFT JOIN therapists th ON th.id=m.therapist_id
                  WHERE m.patient_id=? AND m.date BETWEEN ? AND ?
-                 ORDER BY m.date DESC, m.id DESC LIMIT 100', [$id, $ps, $pe]);
+                 ORDER BY m.date DESC, m.id DESC LIMIT ' . $perPage . ' OFFSET ' . $off($medsPage), [$id, $ps, $pe]);
     /* Jumlah seluruh rekam medis pasien ini (tanpa filter) supaya petugas tahu
        ada riwayat lain di luar periode terpilih. */
     $medsAll = (int)scalar('SELECT COUNT(*) FROM medical_records WHERE patient_id = ?', [$id]);
 }
+/* Bahan treatment yang pernah dipakai pada perawatan pasien ini (tidak ditagihkan,
+   hanya tercatat sebagai pemakaian) — berguna untuk melihat riwayat pemakaian bahan. */
+$matTotal = (int)scalar("SELECT COUNT(DISTINCT oi.item_name) FROM order_items oi JOIN orders o ON o.id=oi.order_id
+                         WHERE o.patient_id=? AND o.status='paid' AND oi.item_type='material'", [$id]);
+$materials = all("SELECT oi.item_name, oi.item_code, COALESCE(SUM(oi.quantity),0) q,
+                         COUNT(DISTINCT o.id) trx, MAX(date(o.created_at)) terakhir, oi.material_id
+                  FROM order_items oi JOIN orders o ON o.id=oi.order_id
+                  WHERE o.patient_id=? AND o.status='paid' AND oi.item_type='material'
+                  GROUP BY oi.item_name ORDER BY q DESC, oi.item_name LIMIT {$perPage} OFFSET " . $off($matPage), [$id]);
 
 page_head('Detail Pasien', 'pasien');
 
@@ -109,7 +150,8 @@ function pd_period_bar(int $patientId, string $period, string $ps, string $pe): 
     <div class="field" data-period-custom style="display:none"><label>Sampai</label>
       <input type="date" class="input input-sm" name="end" value="<?= e($pe) ?>"></div>
     <button class="btn btn-sm btn-primary" type="submit">Terapkan</button>
-    <span class="muted">Berlaku untuk <strong>transaksi, rekam medis, dan reservasi</strong> di bawah —
+    <div class="field"><label>Per halaman</label><?= per_page_inline() ?></div>
+    <span class="muted">Berlaku untuk <strong>transaksi, rekam medis, reservasi, dan bahan</strong> di bawah —
       periode terpilih <strong><?= e(tglIndo($ps)) ?> — <?= e(tglIndo($pe)) ?></strong></span>
   </form>
 </div>
@@ -174,7 +216,9 @@ function pd_period_bar(int $patientId, string $period, string $ps, string $pe): 
 <div class="grid g2 mt-2">
   <div class="card">
     <div class="card-head"><h3>Profil Pasien</h3>
-      <?php if (has_perm('patient.manage')): ?><a class="btn btn-sm" href="pasien.php?action=edit&id=<?= (int)$p['id'] ?>"><?= icon('edit') ?> Edit</a><?php endif; ?>
+      <?php if (has_perm('patient.manage')): ?>
+        <button class="btn btn-sm" type="button" data-modal-open="patientModal"><?= icon('edit') ?> Edit</button>
+      <?php endif; ?>
     </div>
     <div class="card-body">
       <dl class="kv">
@@ -188,7 +232,7 @@ function pd_period_bar(int $patientId, string $period, string $ps, string $pe): 
         <dt>Email</dt><dd><?php if (($p['email'] ?? '') !== ''): ?>
           <a href="mailto:<?= e($p['email']) ?>"><?= e($p['email']) ?></a>
           <?php else: ?><span class="muted">belum diisi</span>
-          <?php if (has_perm('patient.manage')): ?> · <a href="pasien.php?action=edit&id=<?= (int)$p['id'] ?>">tambahkan</a><?php endif; ?>
+          <?php if (has_perm('patient.manage')): ?> · <a href="#" onclick="document.querySelector('[data-modal-open=patientModal]').click();return false;">tambahkan</a><?php endif; ?>
         <?php endif; ?></dd>
         <dt>Alamat</dt><dd><?= e($p['address'] ?: '-') ?></dd>
         <dt>Status Pasien</dt><dd><?= badge($p['patient_type'] ?: 'Baru', $p['patient_type'] === 'Lama' ? 'blue' : 'pink') ?></dd>
@@ -200,11 +244,18 @@ function pd_period_bar(int $patientId, string $period, string $ps, string $pe): 
 
   <div class="card tight">
     <div class="card-head"><h3>Riwayat Reservasi</h3>
-      <span class="muted"><?= num(count($apps)) ?> pada periode <?= e(tgl($ps)) ?> — <?= e(tgl($pe)) ?></span></div>
+      <div class="flex gap-sm" style="align-items:center;flex-wrap:wrap">
+        <span class="muted"><?= num($appsTotalPeriod) ?> <?= e($histLabel) ?><?php if ($appsTotal > $appsTotalPeriod): ?> dari <?= num($appsTotal) ?><?php endif; ?></span>
+        <?php if ($appsTotal > $appsTotalPeriod): ?>
+          <span class="badge badge-gray" title="Ada riwayat lain di luar periode terpilih"><?= num($appsTotal) ?> total riwayat</span>
+        <?php endif; ?>
+      </div></div>
     <div class="table-wrap">
-      <?php if (!$apps): ?><?= empty_state('Belum ada reservasi.') ?><?php else: ?>
+      <?php if (!$apps): ?><?= empty_state($appsTotal > 0
+          ? 'Tidak ada reservasi pada periode ini. Pasien ini punya ' . num($appsTotal) . ' riwayat — pilih periode "Seluruh riwayat" untuk melihat semuanya.'
+          : 'Belum ada reservasi.') ?><?php else: ?>
       <table class="tbl">
-        <thead><tr><th>No. Reservasi</th><th>Tanggal</th><th>Treatment</th><th>Petugas</th><th>Status</th></tr></thead>
+        <thead><tr><th>No. Reservasi</th><th>Tanggal</th><th>Treatment</th><th>Petugas</th><th>Status</th><th></th></tr></thead>
         <tbody>
         <?php foreach ($apps as $a): ?>
           <tr>
@@ -213,17 +264,29 @@ function pd_period_bar(int $patientId, string $period, string $ps, string $pe): 
             <td><?= e(trim((string)($a['treatments_all'] ?? '')) !== '' ? $a['treatments_all'] : ($a['treatment_name'] ?: '-')) ?></td>
             <td class="small"><?= e($a['doctor_name'] ?: ($a['therapist_name'] ?: '-')) ?></td>
             <td><?= appointment_status_badge($a['status']) ?></td>
+            <?php /* Tombol Lihat (permintaan pemilik): membuka reservasi itu di daftar
+                     Reservasi (disaring dengan nomor reservasinya). */ ?>
+            <td class="nowrap">
+              <a class="btn btn-sm" href="reservasi.php?view=list&amp;q=<?= urlencode((string)$a['appointment_number']) ?>">
+                <?= icon('search') ?> Lihat</a>
+              <?php if (has_perm('reservation.manage')): ?>
+                <a class="btn btn-sm" href="reservasi.php?action=edit&amp;id=<?= (int)$a['id'] ?>">Ubah</a>
+              <?php endif; ?>
+            </td>
           </tr>
         <?php endforeach; ?>
         </tbody>
       </table>
       <?php endif; ?>
     </div>
+    <?= pagination($appsTotalPeriod, $perPage, $appsPage, 'page_app') ?>
   </div>
 </div>
 
 <div class="card tight mt-2">
-  <div class="card-head"><h3>Riwayat Transaksi</h3></div>
+  <div class="card-head"><h3>Riwayat Transaksi</h3>
+    <span class="muted"><?= num($ordersTotal) ?> <?= e($histLabel) ?></span>
+  </div>
   <div class="table-wrap">
     <?php if (!$orders): ?><?= empty_state('Belum ada transaksi pada periode ini.') ?><?php else: ?>
     <table class="tbl">
@@ -246,14 +309,15 @@ function pd_period_bar(int $patientId, string $period, string $ps, string $pe): 
     </table>
     <?php endif; ?>
   </div>
+  <?= pagination($ordersTotal, $perPage, $trxPage, 'page_trx') ?>
 </div>
 
 <?php if (has_perm('medical.view')): ?>
 <div class="card tight mt-2">
   <div class="card-head"><h3>Riwayat Rekam Medis</h3>
-    <div class="flex gap-sm" style="align-items:center">
-      <span class="muted"><?= num(count($meds)) ?> pada periode <?= e(tgl($ps)) ?> — <?= e(tgl($pe)) ?></span>
-      <?php if ($medsAll > count($meds)): ?>
+    <div class="flex gap-sm" style="align-items:center;flex-wrap:wrap">
+      <span class="muted"><?= num($medsTotalPeriod) ?> <?= e($histLabel) ?><?php if ($medsAll > $medsTotalPeriod): ?> dari <?= num($medsAll) ?><?php endif; ?></span>
+      <?php if ($medsAll > $medsTotalPeriod): ?>
         <span class="badge badge-gray" title="Ada riwayat lain di luar periode terpilih"><?= num($medsAll) ?> total riwayat</span>
       <?php endif; ?>
       <?php if (has_perm('medical.manage')): ?><a class="btn btn-sm btn-primary" href="rekam_medis_form.php?patient_id=<?= (int)$p['id'] ?>"><?= icon('plus-circle') ?> Rekam Medis Baru</a><?php endif; ?>
@@ -270,7 +334,7 @@ function pd_period_bar(int $patientId, string $period, string $ps, string $pe): 
         <tr>
           <td class="small"><?= e($m['record_number']) ?></td>
           <td><?= e(tgl($m['date'])) ?></td>
-          <td class="small"><?= e($m['staff_name'] ?: '-') ?></td>
+          <td class="small"><?= e(staff_both_text($m['doctor_name'] ?? '', $m['therapist_name'] ?? '') ?: '-') ?></td>
           <td><?= e($m['diagnosis'] ?: '-') ?></td>
           <td class="small"><?= e($m['icd10'] ?: '-') ?></td>
           <td><?= record_status_badge($m['status']) ?></td>
@@ -281,14 +345,15 @@ function pd_period_bar(int $patientId, string $period, string $ps, string $pe): 
     </table>
     <?php endif; ?>
   </div>
+  <?= pagination($medsTotalPeriod, $perPage, $medsPage, 'page_med') ?>
 </div>
 <?php endif; ?>
 
-<?php if ($materials): ?>
+<?php if ($matTotal > 0): ?>
 <div class="card tight mt-2">
   <div class="card-head">
     <h3>Bahan Treatment yang Pernah Dipakai</h3>
-    <span class="muted"><?= num(count($materials)) ?> jenis bahan · tidak ditagihkan ke pasien</span>
+    <span class="muted"><?= num($matTotal) ?> jenis bahan · tidak ditagihkan ke pasien</span>
   </div>
   <div class="card-body" style="border-bottom:1px solid var(--line)">
     <div class="notice">Bahan treatment dipakai sebagai pelengkap proses treatment, bukan produk yang dijual.
@@ -311,6 +376,11 @@ function pd_period_bar(int $patientId, string $period, string $ps, string $pe): 
       </tbody>
     </table>
   </div>
+  <?= pagination($matTotal, $perPage, $matPage, 'page_mat') ?>
 </div>
 <?php endif; ?>
+<?php /* Formulir Edit pasien DI HALAMAN INI (permintaan pemilik): dikirim ke
+   pasien.php dengan penanda `back`, sehingga setelah menyimpan pengguna kembali ke
+   halaman detail pasien ini — bukan dilempar ke daftar pasien. */
+patient_form_modal($p, 'pasien_detail.php?id=' . (int)$p['id'], false); ?>
 <?php page_foot(); ?>

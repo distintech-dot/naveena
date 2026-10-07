@@ -39,6 +39,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $old = one('SELECT * FROM treatments WHERE id = ?', [$id]);
                 if (!$old) throw new RuntimeException('Treatment tidak ditemukan.');
                 assert_branch((int)$old['branch_id']);
+                assert_branch_unchanged('treatments', $id, (int)$branch);
                 q('UPDATE treatments SET code=?, name=?, category=?, normal_price=?, promo_price=?, hpp=?, duration=?, branch_id=?, status=?, updated_at=datetime("now","localtime") WHERE id=?',
                     [$code, $name, $cat, $np, $pp, $hpp, $dur, $branch, $status, $id]);
                 audit('Edit Treatment', 'Master Data', $id, $old, ['code' => $code, 'name' => $name, 'normal_price' => $np, 'promo_price' => $pp, 'status' => $status], 'Perubahan master treatment');
@@ -101,7 +102,11 @@ $rows = all("SELECT t.*, b.name AS branch_name,
                     (SELECT COUNT(*) FROM order_items oi WHERE oi.treatment_id=t.id) sold
              FROM treatments t JOIN branches b ON b.id=t.branch_id WHERE {$w}
              ORDER BY t.status DESC, t.name LIMIT {$pp} OFFSET " . (($page - 1) * $pp), $params);
-$cats = all('SELECT DISTINCT category FROM treatments WHERE category IS NOT NULL AND category <> "" ORDER BY category');
+/* PEMBATASAN CABANG (audit isolasi ronde 56): pilihan kategori diambil dari treatment
+   cabang akun saja, supaya nama kategori cabang lain tidak muncul. */
+[$catSql, $catParams] = bscope('branch_id');
+$cats = all('SELECT DISTINCT category FROM treatments WHERE category IS NOT NULL AND category <> ""'
+    . $catSql . ' ORDER BY category', $catParams);
 
 $edit = gp('action') === 'edit' ? one('SELECT * FROM treatments WHERE id = ?', [(int)gp('id')]) : null;
 if ($edit) assert_branch((int)$edit['branch_id']);

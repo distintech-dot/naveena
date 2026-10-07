@@ -51,6 +51,30 @@ function demo_range_text(): string
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verify_csrf();
     $act = (string)($_POST['action'] ?? '');
+    /* HAPUS PER BATCH DEMO (ronde 54): pratinjau dulu, snapshot pengaman, lalu hapus
+       dengan urutan dependency yang aman + pemeriksaan FK. */
+    if ($act === 'hapus_batch') {
+        if (!is_super()) deny('Hanya Super Admin.');
+        $batch = trim((string)($_POST['batch_id'] ?? ''));
+        if ($batch === '') throw new RuntimeException('Batch demo tidak disebutkan.');
+        $pratinjau = demo_batch_preview($batch);
+        if (!$pratinjau) throw new RuntimeException('Batch itu tidak memiliki data demo lagi.');
+        $snap = backup_create('Snapshot sebelum hapus data demo ' . $batch, (int)$user['id'],
+            ['prefix' => 'sebelum-hapus-demo-', 'enforce' => false]);
+        if (!$snap['ok']) throw new RuntimeException('Snapshot pengaman gagal dibuat: ' . $snap['error']);
+        $res = demo_batch_delete($batch);
+        if ($res['fk'] > 0) {
+            throw new RuntimeException('Penghapusan menyisakan ' . $res['fk']
+                . ' pelanggaran relasi — periksa data. Snapshot pengaman: ' . $snap['file']);
+        }
+        audit('Hapus Data Demo (batch)', 'Data Demo', null, null,
+            ['batch' => $batch, 'terhapus' => $res['total'], 'snapshot' => $snap['file']],
+            'Data demo dihapus per batch beserta pemeriksaan relasi');
+        flash('Data demo batch ' . $batch . ' dihapus: ' . num((int)$res['total']) . ' record. '
+            . 'Snapshot pengaman: ' . $snap['file'] . '.', 'success');
+        header('Location: demo_data.php');
+        exit;
+    }
     try {
         if ($act === 'seed') {
             $pass = (string)($_POST['password'] ?? '');
@@ -106,8 +130,16 @@ $plan = demo_plan();
 
 page_head('Isi Data Demo', '');
 ?>
-<div class="page-head">
-  <div>
+<?php
+/* ==========================================================================
+ * BATCH DATA DEMO (ronde 54) — pelacakan & penghapusan per batch.
+ * Setiap pengisian data demo menghasilkan satu `demo_batch_id`; seluruh record
+ * (pasien, rekam medis, reservasi, transaksi, item, pembayaran, pergerakan stok)
+ * ditandai batch itu sehingga dapat diringkas dan dihapus per batch dengan urutan
+ * dependency yang aman, snapshot pengaman, dan pemeriksaan relasi.
+ * ======================================================================== */
+$daftarBatch = function_exists('demo_batches_list') ? demo_batches_list() : [];
+?>
     <h2><?= icon('database') ?> Isi Data Demo</h2>
     <p class="muted">Khusus Super Admin · mengisi aplikasi dengan data contoh yang siap dihapus kembali.</p>
   </div>
@@ -190,4 +222,65 @@ page_head('Isi Data Demo', '');
     </div>
   </form>
 </div>
+<div class="card" id="batchdemo">
+  <div class="card-head">
+    <h3>Batch Data Demo</h3>
+    <span class="muted"><?= num(count($daftarBatch)) ?> batch terakhir</span>
+  </div>
+  <div class="card-body">
+    <div class="notice small">
+      Data demo ditandai <code>demo_batch_id</code> sehingga <strong>dapat dilacak</strong> dan
+      <strong>dihapus per batch</strong> — hanya data demo yang terhapus, data klinik yang asli
+      tidak tersentuh. Sebelum menghapus, sistem membuat <strong>snapshot pengaman</strong> dan
+      setelahnya memeriksa relasi (FK) agar tidak ada data menggantung.
+    </div>
+    <?php if (!$daftarBatch): ?>
+      <p class="muted small mt-2">Belum ada batch data demo. Batch dibuat otomatis saat Anda
+        menekan <em>Isi Data Demo</em>.</p>
+    <?php endif; ?>
+    <?php foreach ($daftarBatch as $b): ?>
+      <div class="notice small mt-2">
+        <div class="flex gap-sm flex-wrap" style="align-items:center">
+          <strong><code><?= e((string)$b['batch_id']) ?></code></strong>
+          <?= badge((string)$b['status'] === 'ACTIVE' ? 'ada' : 'sudah dihapus',
+              (string)$b['status'] === 'ACTIVE' ? 'green' : 'gray') ?>
+          <span class="muted">dibuat <?= e(tgl((string)$b['created_at'], true)) ?>
+            · <?= num((int)$b['total']) ?> record</span>
+        </div>
+        <?php if (!$b['rincian']): ?>
+          <?php /* Batch ada tetapi recordnya sudah tidak ada (mis. sudah dihapus lewat
+                   "Hapus Semua Data" atau tombol hapus batch sebelumnya) — dinyatakan
+                   apa adanya supaya pemilik tidak mengira tombolnya hilang. */ ?>
+          <div class="small muted mt-1">Tidak ada record demo tersisa pada batch ini
+            (sudah terhapus). Tidak ada yang perlu dibersihkan.</div>
+        <?php endif; ?>
+        <?php if ($b['rincian']): ?>
+          <div class="mt-1 small muted">
+            <?php foreach ($b['rincian'] as $x): ?>
+              <span class="nowrap"><?= e((string)$x['label']) ?> <strong><?= num((int)$x['jumlah']) ?></strong></span>
+              &nbsp;·&nbsp;
+            <?php endforeach; ?>
+          </div>
+          <form method="post" class="mt-2" data-heavy-confirm="HAPUS DATA DEMO"
+                data-heavy-warning="Sistem akan membuat snapshot pengaman lalu MENGHAPUS seluruh record batch ini (<?= num((int)$b['total']) ?> record) beserta relasinya. Data klinik yang asli tidak terhapus."
+                data-heavy-confirm2="PERINGATAN KEDUA (terakhir): hapus batch data demo ini?">
+            <?= csrf_field() ?><input type="hidden" name="action" value="hapus_batch">
+            <input type="hidden" name="batch_id" value="<?= e((string)$b['batch_id']) ?>">
+            <div class="field" style="max-width:320px"><label>Kata sandi Super Admin</label>
+              <input class="input input-sm" type="password" name="password" required></div>
+            <button class="btn btn-danger btn-sm mt-1" type="submit">
+              <?= icon('x') ?> Hapus Batch Ini (<?= num((int)$b['total']) ?> record)</button>
+          </form>
+        <?php endif; ?>
+      </div>
+    <?php endforeach; ?>
+  </div>
+</div>
+
+<?php
+
+?>
+<div class="page-head">
+  <div>
+
 <?php page_foot(); ?>

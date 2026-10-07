@@ -117,10 +117,237 @@ function demo_operational_counts(): array
  *
  * @return array ringkasan jumlah baris yang dibuat per bagian
  */
+/** Daftar tabel yang ikut pelacakan batch demo (nama tabel = nama nyata di aplikasi). */
+function demo_batch_tables(): array
+{
+    return ['patients' => 'Pasien', 'medical_records' => 'Rekam medis',
+        'appointments' => 'Reservasi', 'appointment_treatments' => 'Isi reservasi',
+        'orders' => 'Transaksi', 'order_items' => 'Item transaksi', 'payments' => 'Pembayaran',
+        'inventory_movements' => 'Pergerakan stok', 'packages' => 'Paket',
+        'treatments' => 'Treatment', 'skincare_products' => 'Skincare',
+        'treatment_materials' => 'Bahan treatment', 'suppliers' => 'Supplier'];
+}
+
+/**
+ * Apakah sebuah tabel ada? WAJIB diperiksa sebelum menulis SQL ke tabel yang mungkin
+ * belum ada — kesalahan ini pernah membatalkan SELURUH transaksi penghapusan batch
+ * (rollback) sehingga hapus demo tampak "tidak melakukan apa pun".
+ */
+/**
+ * Apakah sebuah tabel punya kolom `demo_batch_id`? Diperiksa SEBELUM menulis SQL ke
+ * kolom itu — tanpa pemeriksaan ini, satu tabel yang belum ikut migrasi membatalkan
+ * seluruh transaksi penghapusan batch (rollback) sehingga hapus demo tampak tidak
+ * melakukan apa pun.
+ */
+function demo_table_has_batch(string $tabel): bool
+{
+    static $cache = [];
+    if (isset($cache[$tabel])) return $cache[$tabel];
+    try {
+        $n = (int)scalar("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = 'demo_batch_id'", [$tabel]);
+    } catch (Throwable $e) { $n = 0; }
+    return $cache[$tabel] = ($n > 0);
+}
+
+/** Tabel yang benar-benar ikut pelacakan batch (ada & punya kolomnya). */
+function demo_batch_usable_tables(): array
+{
+    $out = [];
+    foreach (demo_batch_tables() as $t => $label) {
+        if (demo_table_exists($t) && demo_table_has_batch($t)) $out[$t] = $label;
+    }
+    return $out;
+}
+
+function demo_table_exists(string $tabel): bool
+{
+    static $cache = [];
+    if (isset($cache[$tabel])) return $cache[$tabel];
+    try {
+        $n = (int)scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?", [$tabel]);
+    } catch (Throwable $e) { $n = 0; }
+    return $cache[$tabel] = ($n > 0);
+}
+
+/**
+ * Identitas SATU batch data demo (ronde 54).
+ *
+ * Seluruh record yang dibuat tombol "Isi Data Demo" diberi `demo_batch_id` sehingga
+ * dapat dilacak, diringkas, dan dihapus per batch dengan urutan dependency yang aman.
+ */
+function demo_batch_new(?int $userId = null, string $note = ''): string
+{
+    $batch = 'DEMO-' . date('Ymd-His') . '-' . strtoupper(bin2hex(random_bytes(2)));
+    q('INSERT INTO demo_batches (batch_id, created_by, note, status) VALUES (?,?,?,?)',
+        [$batch, $userId, $note, 'SEEDING']);
+    return $batch;
+}
+
+/** Tandai baris-baris tertentu sebagai bagian dari sebuah batch demo. */
+function demo_batch_stamp(string $batch, string $table, array $ids): int
+{
+    $ids = array_values(array_filter(array_map('intval', $ids)));
+    if ($batch === '' || !$ids) return 0;
+    $n = 0;
+    foreach (array_chunk($ids, 200) as $chunk) {
+        $ph = implode(',', array_fill(0, count($chunk), '?'));
+        $params = array_merge([$batch], $chunk);
+        q("UPDATE {$table} SET demo_batch_id = ? WHERE id IN ({$ph})", $params);
+        $n += count($chunk);
+    }
+    return $n;
+}
+
+/** Tandai baris anak (mis. order_items) berdasarkan kolom penghubung. */
+function demo_batch_stamp_by(string $batch, string $table, string $kolom, array $ids): int
+{
+    $ids = array_values(array_filter(array_map('intval', $ids)));
+    if ($batch === '' || !$ids) return 0;
+    foreach (array_chunk($ids, 200) as $chunk) {
+        $ph = implode(',', array_fill(0, count($chunk), '?'));
+        q("UPDATE {$table} SET demo_batch_id = ? WHERE {$kolom} IN ({$ph})", array_merge([$batch], $chunk));
+    }
+    return count($ids);
+}
+
+/** Ringkasan jumlah baris demo per batch (dipakai pratinjau & laporan). */
+function demo_batch_preview(string $batch): array
+{
+    $out = [];
+    foreach (demo_batch_usable_tables() as $t => $label) {
+        try {
+            $n = (int)scalar("SELECT COUNT(*) FROM {$t} WHERE demo_batch_id = ?", [$batch]);
+        } catch (Throwable $e) { $n = 0; }
+        if ($n > 0) $out[] = ['tabel' => $t, 'label' => $label, 'jumlah' => $n];
+    }
+    return $out;
+}
+
+/** Daftar batch demo yang masih ada. */
+function demo_batches_list(): array
+{
+    try {
+        $rows = all('SELECT * FROM demo_batches ORDER BY id DESC LIMIT 20');
+    } catch (Throwable $e) { return []; }
+    foreach ($rows as $i => $r) {
+        $rows[$i]['rincian'] = demo_batch_preview((string)$r['batch_id']);
+        $rows[$i]['total'] = array_sum(array_map(fn($x) => (int)$x['jumlah'], $rows[$i]['rincian']));
+    }
+    return $rows;
+}
+
+/**
+ * Nama tabel yang sudah DIKUALIFIKASI berkas cabang, mis. `b2."orders"`.
+ *
+ * PENTING (arsitektur central + satu basis data per cabang): tabel operasional
+ * disajikan sebagai TEMP VIEW sehingga `DELETE FROM orders …` biasa DITOLAK SQLite
+ * ("cannot modify orders because it is a view"). Penghapusan batch demo karena itu
+ * harus menyebut BERKAS CABANGNYA. Batch demo bersifat SELURUH KLINIK, jadi
+ * penghapusan dilakukan untuk tiap berkas cabang — bukan hanya cabang yang sedang
+ * dibuka akun (kalau tidak, sisa data demo di cabang lain menggantung).
+ */
+function demo_batch_table_ref(string $tabel, string $alias = ''): string
+{
+    if ($alias === '' || !function_exists('db_route_scope_of') || db_route_scope_of($tabel) !== 'branch') {
+        return '"' . $tabel . '"';
+    }
+    return $alias . '."' . $tabel . '"';
+}
+
+/** Daftar "berkas" yang harus disentuh sebuah tabel: alias cabang, atau [''] untuk tabel global. */
+function demo_batch_scope_refs(string $tabel): array
+{
+    if (!function_exists('db_route_scope_of') || db_route_scope_of($tabel) !== 'branch') return [''];
+    $out = [];
+    foreach (db_route_attached() as $alias) $out[] = (string)$alias;
+    /* Belum ada berkas cabang ter-ATTACH (permintaan tanpa basis data cabang) →
+       pakai nama polos supaya perilakunya sama seperti sebelumnya. */
+    return $out ?: [''];
+}
+
+/** Hapus semua baris sebuah batch pada SATU tabel (per berkas cabang bila perlu). */
+function demo_batch_delete_rows(PDO $pdo, string $tabel, string $batch): int
+{
+    $total = 0;
+    foreach (demo_batch_scope_refs($tabel) as $alias) {
+        $ref = demo_batch_table_ref($tabel, $alias);
+        try {
+            $total += (int)$pdo->exec("DELETE FROM {$ref} WHERE demo_batch_id = " . $pdo->quote($batch));
+        } catch (Throwable $e) { /* tabel belum ada di berkas itu */ }
+    }
+    return $total;
+}
+
+/**
+ * HAPUS satu batch data demo — urutan dependency AMAN (anak dulu), satu transaksi,
+ * lalu pemeriksaan FK/orphan. Master yang masih dipakai transaksi NON-demo TIDAK
+ * dihapus (dilewati) supaya data klinik yang asli tidak rusak.
+ *
+ * @return array{hapus:array<string,int>,dilewati:array<int,string>,fk:int,total:int}
+ */
+function demo_batch_delete(string $batch): array
+{
+    if ($batch === '') return ['hapus' => [], 'dilewati' => [], 'fk' => 0, 'total' => 0];
+    $urut = ['appointment_treatments', 'appointments', 'order_items', 'payments', 'orders',
+        'medical_records', 'patients', 'inventory_movements'];
+    $hapus = []; $dilewati = [];
+    $pdo = db();
+    $pdo->exec('BEGIN IMMEDIATE');
+    try {
+        foreach ($urut as $t) {
+            if (!demo_table_exists($t) || !demo_table_has_batch($t)) continue;
+            $n = demo_batch_delete_rows($pdo, $t, $batch);
+            if ($n > 0) $hapus[$t] = $n;
+        }
+        /* Master: hanya dihapus bila TIDAK dipakai data non-demo. Daftar tabelnya diambil
+           dari satu sumber (demo_batch_tables) supaya nama tabel tidak pernah berbeda. */
+        $master = ['packages', 'treatments', 'skincare_products', 'treatment_materials', 'suppliers'];
+        $rujukan = [['order_items', 'treatment_id'], ['order_items', 'skincare_id'],
+            ['order_items', 'material_id'], ['appointment_treatments', 'treatment_id'],
+            ['appointments', 'treatment_id'], ['package_items', 'item_id']];
+        foreach ($master as $t) {
+            if (!demo_table_exists($t) || !demo_table_has_batch($t)) continue;
+            $boleh = 0;
+            foreach (demo_batch_scope_refs($t) as $alias) {
+                $ref = demo_batch_table_ref($t, $alias);
+                $ids = $pdo->query("SELECT id FROM {$ref} WHERE demo_batch_id = " . $pdo->quote($batch))
+                    ->fetchAll(PDO::FETCH_COLUMN);
+                foreach ($ids as $id) {
+                    $dipakai = 0;
+                    foreach ($rujukan as [$tt, $kol]) {
+                        if (!demo_table_exists($tt)) continue;
+                        /* Rujukan diperiksa di BERKAS YANG SAMA (relasi tidak mungkin
+                           melintasi berkas basis data) supaya tidak salah menilai. */
+                        $refRujukan = demo_batch_table_ref($tt, $alias);
+                        try { $dipakai += (int)$pdo->query("SELECT COUNT(*) FROM {$refRujukan} WHERE {$kol} = " . (int)$id)->fetchColumn(); }
+                        catch (Throwable $e) { /* kolom tidak ada di tabel itu */ }
+                    }
+                    if ($dipakai === 0) { $pdo->exec("DELETE FROM {$ref} WHERE id = " . (int)$id); $boleh++; }
+                    else $dilewati[] = $t . ' #' . (int)$id . ' masih dipakai transaksi lain';
+                }
+            }
+            if ($boleh > 0) $hapus[$t] = $boleh;
+        }
+        $pdo->exec("UPDATE demo_batches SET status = 'DELETED' WHERE batch_id = " . $pdo->quote($batch));
+        $pdo->exec('COMMIT');
+    } catch (Throwable $e) {
+        $pdo->exec('ROLLBACK');
+        return ['hapus' => [], 'dilewati' => ['gagal: ' . $e->getMessage()], 'fk' => 0, 'total' => 0];
+    }
+    $fk = count($pdo->query('PRAGMA foreign_key_check')->fetchAll(PDO::FETCH_ASSOC));
+    return ['hapus' => $hapus, 'dilewati' => $dilewati, 'fk' => $fk,
+        'total' => array_sum($hapus)];
+}
+
 function demo_seed(?int $userId = null): array
 {
     @set_time_limit(0);
-    $out = ['cabang' => 0, 'dokter' => 0, 'terapis' => 0, 'supplier' => 0, 'treatment' => 0,
+    /* BATCH DEMO (ronde 54): semua record yang dibuat proses ini ditandai satu batch_id
+       supaya dapat dilacak, diringkas, dan dihapus per batch dengan urutan aman. */
+    $batchDemo = demo_batch_new($userId, 'Isi Data Demo');
+    $idPasienDemo = []; $idRmDemo = []; $idResvDemo = []; $idOrderDemo = [];
+    $out = ['demo_batch' => $batchDemo,
+        'cabang' => 0, 'dokter' => 0, 'terapis' => 0, 'supplier' => 0, 'treatment' => 0,
             'skincare' => 0, 'bahan' => 0, 'stok_awal' => 0, 'pasien' => 0, 'kartu_member' => 0,
             'rekam_medis' => 0, 'reservasi' => 0, 'transaksi' => 0,
             'hari_terisi' => 0, 'hari_dilewati' => 0, 'restok' => 0, 'warnings' => []];
@@ -445,6 +672,7 @@ function demo_seed(?int $userId = null): array
                      $i < 5 ? 'Baru' : 'Lama', $dob, $bid, $user['id'], $created]);
                 $pid = (int)db()->lastInsertId();
                 $patientIds[$bid][] = $pid;
+                $idPasienDemo[] = $pid;
                 $out['pasien']++;
                 $patientIds[$bid][] = $pid;
             }
@@ -531,6 +759,7 @@ function demo_seed(?int $userId = null): array
                      $statuses[$k % count($statuses)],
                      'Reservasi contoh data demo', $user['id'], date('Y-m-d H:i:s', strtotime($date) + 8 * 3600)]);
                 $apptId = (int)db()->lastInsertId();
+                $idResvDemo[] = $apptId;
                 res_save_treatments($apptId, $ids);
                 $out['reservasi']++;
             }
@@ -627,6 +856,7 @@ function demo_seed(?int $userId = null): array
                         continue;
                     }
                     $oid = (int)$r['order_id'];
+                    $idOrderDemo[] = $oid;
                     /* order_create() selalu memakai waktu SEKARANG, jadi tanggal
                        transaksi digeser ke hari yang sedang diisi. Jam dipatok dari
                        TANGGAL tersebut supaya tidak pernah jatuh ke hari berikutnya
@@ -648,5 +878,39 @@ function demo_seed(?int $userId = null): array
         if ($savedActive !== null) $_SESSION['active_branch'] = $savedActive;
         set_setting('email_receipt_auto', $emailAuto === '' ? '0' : $emailAuto);
     }
+
+    /* ==========================================================================
+     * TANDAI SELURUH RECORD DEMO DENGAN demo_batch_id (ronde 54)
+     * --------------------------------------------------------------------------
+     * Baris utama ditandai langsung dari id yang baru dibuat, lalu baris ANAK
+     * ditandai lewat kolom penghubung (patient_id/order_id/appointment_id) —
+     * sehingga seluruh relasi demo dapat dilacak, diringkas, dan dihapus per batch
+     * dengan urutan dependency yang aman.
+     * ======================================================================== */
+    $tanda = 0;
+    $tanda += demo_batch_stamp($batchDemo, 'patients', $idPasienDemo);
+    $tanda += demo_batch_stamp($batchDemo, 'appointments', $idResvDemo);
+    $tanda += demo_batch_stamp($batchDemo, 'orders', $idOrderDemo);
+    if ($idPasienDemo) {
+        $tanda += demo_batch_stamp_by($batchDemo, 'medical_records', 'patient_id', $idPasienDemo);
+    }
+    if ($idResvDemo) {
+        $tanda += demo_batch_stamp_by($batchDemo, 'appointment_treatments', 'appointment_id', $idResvDemo);
+    }
+    if ($idOrderDemo) {
+        $tanda += demo_batch_stamp_by($batchDemo, 'order_items', 'order_id', $idOrderDemo);
+        $tanda += demo_batch_stamp_by($batchDemo, 'payments', 'order_id', $idOrderDemo);
+        $tanda += demo_batch_stamp_by($batchDemo, 'inventory_movements', 'ref_id', $idOrderDemo);
+    }
+    /* Ringkasan batch dicatat supaya riwayat menampilkan apa yang dibuat. */
+    $rincianBatch = demo_batch_preview($batchDemo);
+    q('UPDATE demo_batches SET status = ?, summary = ? WHERE batch_id = ?', ['ACTIVE',
+        json_encode(['record' => $rincianBatch, 'total' => $tanda], JSON_UNESCAPED_UNICODE), $batchDemo]);
+    $out['batch_ditandai'] = $tanda;
+    audit('Data Demo Ditandai', 'Data Demo', null, null,
+        ['batch' => $batchDemo, 'record' => $tanda],
+        'Seluruh record data demo diberi demo_batch_id untuk pelacakan & penghapusan per batch');
+
+
     return $out;
 }

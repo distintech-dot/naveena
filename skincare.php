@@ -42,6 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $old = one('SELECT * FROM skincare_products WHERE id = ?', [$id]);
                 if (!$old) throw new RuntimeException('Produk tidak ditemukan.');
                 assert_branch((int)$old['branch_id']);
+                assert_branch_unchanged('skincare_products', $id, (int)$branch);
                 q('UPDATE skincare_products SET code=?, name=?, category=?, purchase_price=?, selling_price=?, minimum_stock=?, unit=?, supplier_name=?, branch_id=?, status=?, updated_at=datetime("now","localtime") WHERE id=?',
                     [$code, $name, $cat, $buy, $sell, $min, $unit, $sup, $branch, $status, $id]);
                 q('UPDATE inventory SET minimum_stock=?, status=?, branch_id=? WHERE item_type="skincare" AND item_id=?', [$min, $status, $branch, $id]);
@@ -160,7 +161,10 @@ $rows = all("SELECT s.*, b.name AS branch_name,
                     (SELECT COUNT(*) FROM order_items oi WHERE oi.skincare_id=s.id) sold
              FROM skincare_products s JOIN branches b ON b.id=s.branch_id WHERE {$w}
              ORDER BY (s.stock <= s.minimum_stock) DESC, s.name LIMIT {$pp} OFFSET " . (($page - 1) * $pp), $params);
-$suppliers = all('SELECT DISTINCT name FROM suppliers WHERE status="active" ORDER BY name');
+/* PEMBATASAN CABANG (audit isolasi ronde 56): pilihan supplier mengikuti cabang akun —
+   akun yang dipin satu cabang tidak melihat supplier cabang lain. */
+[$supSql, $supParams] = bscope('branch_id');
+$suppliers = all('SELECT DISTINCT name FROM suppliers WHERE status="active"' . $supSql . ' ORDER BY name', $supParams);
 $edit = gp('action') === 'edit' ? one('SELECT * FROM skincare_products WHERE id = ?', [(int)gp('id')]) : null;
 if ($edit) assert_branch((int)$edit['branch_id']);
 $stockItem = gp('action') === 'stock' ? one('SELECT * FROM skincare_products WHERE id = ?', [(int)gp('id')]) : null;
@@ -206,6 +210,7 @@ page_head('Master Skincare', 'skincare');
         <option value="">Semua</option>
         <option value="1"<?= gp('alert') === '1' ? ' selected' : '' ?>>Hanya stok menipis/habis</option>
       </select></div>
+    <?= branch_filter_field() ?>
     <button class="btn btn-sm btn-primary" type="submit">Filter</button>
     <a class="btn btn-sm" href="skincare.php">Reset</a>
     <?= per_page_inline() ?>

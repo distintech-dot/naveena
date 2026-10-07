@@ -92,8 +92,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($u['role_code'] === 'super_admin' && !is_super()) {
                 deny('Akun Super Admin hanya dapat dikelola oleh Super Admin.');
             }
-            $refs = (int)scalar('SELECT COUNT(*) FROM orders WHERE user_id = ?', [$id])
-                  + (int)scalar('SELECT COUNT(*) FROM inventory_movements WHERE user_id = ?', [$id]);
+            /* PEMBATASAN CABANG (audit isolasi ronde 56): akun terikat satu cabang →
+               histori yang dihitung hanya cabangnya (akun lintas cabang tetap seluruhnya). */
+            $uBranch = (int)($u['branch_id'] ?? 0);
+            [$ubSql, $ubParams] = $uBranch > 0 ? [' AND branch_id = ?', [$uBranch]] : bscope('branch_id');
+            $refs = (int)scalar('SELECT COUNT(*) FROM orders WHERE user_id = ?' . $ubSql, array_merge([$id], $ubParams))
+                  + (int)scalar('SELECT COUNT(*) FROM inventory_movements WHERE user_id = ?' . $ubSql, array_merge([$id], $ubParams));
             if ($refs > 0) throw new RuntimeException('Akun ini sudah memiliki histori transaksi. Nonaktifkan saja agar audit & histori tetap utuh.');
             q('DELETE FROM user_permissions WHERE user_id = ?', [$id]);
             q('DELETE FROM users WHERE id = ?', [$id]);
@@ -120,10 +124,13 @@ if ($q !== '') { $where[] = '(u.name LIKE ? OR u.email LIKE ?)'; $t = '%' . $q .
 if (gp('role') !== '') { $where[] = 'u.role_id = ?'; $params[] = (int)gp('role'); }
 if (gp('branch') !== '' && is_owner_level()) { $where[] = 'u.branch_id = ?'; $params[] = (int)gp('branch'); }
 $w = implode(' AND ', $where);
+/* Paginasi (maksimal per halaman mengikuti Pengaturan; bawaan 25). */
+$page = page_no(); $pp = per_page();
+$total = (int)scalar("SELECT COUNT(*) FROM users u JOIN roles r ON r.id=u.role_id WHERE {$w}", $params);
 $rows = all("SELECT u.*, r.name AS role_name, r.code AS role_code, b.name AS branch_name,
                     (SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id) trx
              FROM users u JOIN roles r ON r.id=u.role_id LEFT JOIN branches b ON b.id=u.branch_id
-             WHERE {$w} ORDER BY r.id, u.name", $params);
+             WHERE {$w} ORDER BY r.id, u.name LIMIT {$pp} OFFSET " . (($page - 1) * $pp), $params);
 $edit = gp('action') === 'edit' ? one('SELECT * FROM users WHERE id = ?', [(int)gp('id')]) : null;
 $editPerms = $edit ? array_column(all('SELECT permission_id FROM user_permissions WHERE user_id = ?', [(int)$edit['id']]), 'permission_id') : [];
 $grouped = [];
@@ -199,6 +206,7 @@ page_head('Manajemen User', 'users');
     </table>
     <?php endif; ?>
   </div>
+  <?= pagination($total, $pp, $page) ?>
 </div>
 
 <div class="card">

@@ -50,9 +50,13 @@ $_SERVER['HTTP_USER_AGENT'] = 'Naveena-Pratinjau/1.0';
 $_SERVER['HTTPS'] = 'on';
 /* Basis data & folder unggahan salinan (di dalam folder staging). Folder unggahan
    berisi SALINAN logo/latar kartu saja — foto pasien sengaja tidak disalin supaya
-   pratinjau tidak pernah menyentuh berkas produksi. */
+   pratinjau tidak pernah menyentuh berkas produksi.
+   PENTING: aplikasi sekarang memakai central.sqlite + satu basis data per cabang di
+   dalam `databases/`, jadi yang harus ditunjuk adalah AKARNYA (NAVEENA_DB_ROOT).
+   Tanpa itu halaman pratinjau membaca basis data PRODUKSI. */
 $appDir = realpath($app) ?: $app;
-putenv('NAVEENA_DB=' . dirname($appDir) . '/naveena_data/data.sqlite');
+putenv('NAVEENA_DB=' . dirname($appDir) . '/naveena_data/data-identitas.sqlite');
+putenv('NAVEENA_DB_ROOT=' . dirname($appDir) . '/naveena_data');
 putenv('NAVEENA_UPLOAD_DIR=' . dirname($appDir) . '/naveena_uploads');
 putenv('NAVEENA_BACKUP_DIR=' . dirname($appDir) . '/naveena_backups');
 

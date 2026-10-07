@@ -6,15 +6,85 @@
  */
 declare(strict_types=1);
 
+/**
+ * Ruang lingkup skema yang sedang dibangun: 'central' (bawaan) atau 'branch'.
+ *
+ * Berkas CABANG memakai DDL yang klausa foreign key ke tabel GLOBAL-nya dibuang
+ * (SQLite tidak mendukung FK antar berkas; klausa itu justru menolak setiap
+ * insert — lihat db_route_strip_cross_fk()). Selain itu berkas cabang juga TIDAK
+ * ditanami data contoh (seed_core) karena data contoh itu milik central.
+ */
+function db_schema_scope(): string
+{
+    return $GLOBALS['DB_SCHEMA_SCOPE'] ?? 'central';
+}
+/**
+ * Id CABANG yang sedang dibangun skemanya (dipakai seed data contoh operasional).
+ * Diisi db_branch_create()/db_route_ensure_branch_schema() sebelum skema diterapkan.
+ */
+function db_schema_branch_id(): int
+{
+    return (int)($GLOBALS['DB_SCHEMA_BRANCH_ID'] ?? 0);
+}
+
+/**
+ * Apakah seed data contoh boleh dijalankan pada skema yang sedang dibangun?
+ *
+ * Berkas CABANG juga perlu ditanami data contoh (dokter, terapis, supplier, master
+ * treatment/skincare/bahan) karena data itu MILIK CABANG. Baris milik cabang lain
+ * yang ikut tertanam saat berkas dibuat dibuang oleh db_branch_purge_foreign_rows()
+ * dan tidak pernah terlihat karena view menyaring per cabang.
+ */
+function db_schema_seed_allowed(): bool
+{
+    return true;
+}
+/** Jalankan $fn dengan ruang lingkup skema tertentu ('central'|'branch'). */
+function db_schema_with_scope(string $scope, callable $fn)
+{
+    $lama = $GLOBALS['DB_SCHEMA_SCOPE'] ?? 'central';
+    $GLOBALS['DB_SCHEMA_SCOPE'] = $scope;
+    try { return $fn(); } finally { $GLOBALS['DB_SCHEMA_SCOPE'] = $lama; }
+}
+
+/**
+ * Apakah skema sebuah basis data SUDAH mengikuti aplikasi?
+ *
+ * Satu sumber penilaian untuk SEMUA berkas (central maupun tiap berkas cabang):
+ * versi skema HARUS sama **dan** sidik jari daftar tambahan kolom harus cocok.
+ * Dipakai jalur cepat `ensure_schema()` dan gerbang migrasi berkas cabang
+ * (`db_route_ensure_branch_schema()`) — supaya kolom baru tidak pernah "tertinggal"
+ * hanya karena lupa menaikkan SCHEMA_VERSION (kejadian nyata: `backups.auto_run`).
+ */
+function schema_is_current(PDO $pdo): bool
+{
+    try {
+        $v = (string)$pdo->query("SELECT value FROM settings WHERE key = 'schema_version'")->fetchColumn();
+        $fp = (string)$pdo->query("SELECT value FROM settings WHERE key = 'schema_adds_fp'")->fetchColumn();
+    } catch (Throwable $e) {
+        return false;                     // tabel settings belum ada → basis data baru
+    }
+    return $v === SCHEMA_VERSION && $fp === schema_adds_fingerprint();
+}
+
+/** Baca satu setelan langsung dari PDO (dipakai jalur cepat ensure_schema). */
+function scalar_schema_setting(PDO $pdo, string $key): string
+{
+    try {
+        $st = $pdo->prepare('SELECT value FROM settings WHERE key = ?');
+        $st->execute([$key]);
+        $v = $st->fetchColumn();
+        return ($v === false || $v === null) ? '' : (string)$v;
+    } catch (Throwable $e) {
+        return '';
+    }
+}
+
 function ensure_schema(PDO $pdo): void
 {
-    // Fast path: already migrated.
-    try {
-        $v = $pdo->query("SELECT value FROM settings WHERE key = 'schema_version'")->fetchColumn();
-        if ($v === SCHEMA_VERSION) return;
-    } catch (Throwable $e) {
-        // tables not created yet
-    }
+    // Fast path: already migrated — versi skema SAMA **dan** daftar tambahan kolom
+    // tidak berubah sejak terakhir dijalankan (lihat schema_adds_fingerprint()).
+    if (schema_is_current($pdo)) return;
 
     $pdo->exec('BEGIN IMMEDIATE');
     try {
@@ -25,31 +95,61 @@ function ensure_schema(PDO $pdo): void
            kali (dulu menyebabkan migrasi penggeser waktu jalan berkali-kali). */
         try {
             $again = (string)$pdo->query("SELECT value FROM settings WHERE key = 'schema_version'")->fetchColumn();
+            $fpAgain = (string)scalar_schema_setting($pdo, 'schema_adds_fp');
         } catch (Throwable $e) {
             $again = '';   // tabel settings belum ada → database benar-benar baru
+            $fpAgain = '';
         }
-        if ($again === SCHEMA_VERSION) {
+        if ($again === SCHEMA_VERSION && $fpAgain === schema_adds_fingerprint()) {
             $pdo->exec('ROLLBACK');
             return;
         }
-        foreach (schema_ddl() as $sql) {
+        foreach (schema_ddl(db_schema_scope()) as $sql) {
             $pdo->exec($sql);
         }
+        /* BERKAS CABANG: lantai id diterapkan SEKARANG — tabel baru dibuat & MASIH
+           KOSONG, tepat sebelum data contoh ditanam. Tanpa urutan ini, id data
+           contoh (treatment/skincare/bahan/dokter) mulai dari 1 di SETIAP cabang
+           sehingga bertabrakan antar cabang: pencarian `WHERE id = ?` pada tampilan
+           "semua cabang" menemukan baris cabang lain (dulu muncul keluhan
+           "Treatment ... bukan milik cabang ini" di Order Baru). */
+        if (db_schema_scope() === 'branch'
+            && function_exists('db_branch_apply_id_floor_pdo')
+            && db_schema_branch_id() > 0) {
+            db_branch_apply_id_floor_pdo($pdo, db_schema_branch_id());
+        }
         run_migrations($pdo);
-        seed_core($pdo);
+        if (db_schema_seed_allowed()) seed_core($pdo);
         // Setelah peran & permission ada (seed_core), pastikan semua level —
         // termasuk Kasir — boleh MELIHAT & MENGEDIT rekam medis.
-        grant_kasir_medical($pdo);
-        ensure_direktur_seed($pdo);
+        /* Berkas cabang hanya memuat data operasional — akun/role adalah data global. */
+        if (db_schema_scope() !== 'branch') {
+            grant_kasir_medical($pdo);
+            ensure_direktur_seed($pdo);
+        }
         ensure_staff_seed($pdo);
         seed_icd_dictionary($pdo);
+        /* Baris versi skema WAJIB ada juga di berkas CABANG (dipakai jalur cepat
+           ensure_schema agar migrasi tidak diulang setiap permintaan). Sidik jari
+           daftar tambahan kolom ikut disimpan supaya kelalaian menaikkan versi
+           tidak membuat kolom baru hilang pada pemasangan yang sudah berjalan. */
         $pdo->exec("INSERT INTO settings (key, value) VALUES ('schema_version', '" . SCHEMA_VERSION . "')
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+        $pdo->exec("INSERT INTO settings (key, value) VALUES ('schema_adds_fp', '" . schema_adds_fingerprint() . "')
                     ON CONFLICT(key) DO UPDATE SET value = excluded.value");
         $pdo->exec('COMMIT');
         /* Migrasi di atas bisa mengubah isi settings (mis. status struk). Cache
            pengaturan bersifat statis, jadi harus disegarkan agar pemanggilan
            berikutnya pada request yang sama membaca nilai terbaru. */
         if (function_exists('settings')) settings(true);
+        /* PENTING: rekaman template default dijalankan SETELAH cache disegarkan.
+           Bila dijalankan di dalam transaksi (sebelum refresh), `setting()` masih
+           membaca cache LAMA yang belum memuat nilai bawaan yang baru disisipkan
+           seed_core — akibatnya rekaman email/WhatsApp tidak pernah terbentuk
+           dan tombol "Kembali ke Default" tidak punya bakuannya. */
+        if (function_exists('template_default_snapshot_ensure')) {
+            template_default_snapshot_ensure();
+        }
     } catch (Throwable $e) {
         $pdo->exec('ROLLBACK');
         throw $e;
@@ -64,6 +164,12 @@ function ensure_schema(PDO $pdo): void
  */
 function ensure_staff_seed(PDO $pdo): void
 {
+    /* Dokter & terapis adalah data OPERASIONAL milik cabang. Di basis data CENTRAL
+       tabelnya harus KOSONG — kalau tidak, baris sisa di central akan menghalangi
+       penghapusan cabang (FK `branches`) dan membuat central memuat data operasional
+       (dulu terjadi: central berisi 2 dokter per cabang, sehingga "Hapus Semua Data"
+       gagal dengan "FOREIGN KEY constraint failed"). */
+    if (db_schema_scope() === 'central') return;
     $branches = $pdo->query('SELECT id FROM branches')->fetchAll(PDO::FETCH_COLUMN);
     if (!$branches) return;
     $docs = [
@@ -158,10 +264,27 @@ function table_has_column(PDO $pdo, string $table, string $column): bool
     return false;
 }
 
-/** Additive migrations (idempotent, guarded) — runs inside the schema transaction. */
-function run_migrations(PDO $pdo): void
+/**
+ * DAFTAR TAMBAHAN KOLOM (additive migrations) — SATU SUMBER.
+ *
+ * Dipisahkan dari `run_migrations()` supaya sidik jarinya dapat dihitung oleh
+ * `ensure_schema()` (lihat `schema_adds_fingerprint()`).
+ *
+ * @return array<int,array{0:string,1:string,2:string}>
+ */
+function schema_adds(): array
 {
-    $adds = [
+    return [
+        /* Jenis berkas backup ('sql' dump · 'package' zip central+cabang · 'branch'
+           salinan satu basis data cabang) + cabangnya — dipakai halaman Backup
+           untuk memilih cara pemulihan yang tepat (ronde 59). */
+        ['backups', 'kind', "TEXT DEFAULT 'sql'"],
+        ['backups', 'branch_id', 'INTEGER'],
+        /* Penanda satu SET backup otomatis (mis. '2026-10-07'): satu kali jadwal
+           berjalan dapat menghasilkan beberapa berkas (paket lengkap + per cabang).
+           Batas "Jumlah Backup Otomatis Disimpan" memangkas per SET supaya tidak
+           ada set yang terhapus separuh. */
+        ['backups', 'auto_run', 'TEXT'],
         ['medical_records', 'icd10_desc', 'TEXT'],
         ['medical_records', 'icd9_desc', 'TEXT'],
         // jejak pengiriman struk ke WhatsApp
@@ -184,6 +307,9 @@ function run_migrations(PDO $pdo): void
         ['doctors', 'photo_updated_at', 'TEXT'],
         ['therapists', 'photo_file', 'TEXT'],
         ['therapists', 'photo_updated_at', 'TEXT'],
+        /* Email tenaga medis (ronde 60) — dipakai daftar, form, dan ekspor. */
+        ['doctors', 'email', 'TEXT'],
+        ['therapists', 'email', 'TEXT'],
         // keterangan gambar pada rekam medis (dipakai juga utk doc)
         ['medical_record_photos', 'file_size', 'INTEGER'],
         ['medical_record_photos', 'dimensions', 'TEXT'],
@@ -229,6 +355,30 @@ function run_migrations(PDO $pdo): void
         /* AI DEVELOPER — kolom jawaban mentah ditambahkan SETELAH tabel ai_tasks
            dibuat di bawah (lihat catatan di sana), BUKAN di daftar $adds. */
     ];
+}
+
+/**
+ * SIDIK JARI daftar tambahan kolom.
+ *
+ * KENAPA ADA (kejadian nyata): `ensure_schema()` punya jalur cepat "versi skema sama →
+ * tidak perlu migrasi". Ketika satu kolom baru ditambahkan ke `$adds` TANPA menaikkan
+ * SCHEMA_VERSION, basis data yang sudah terpasang TIDAK PERNAH mendapat kolom itu —
+ * dan aplikasi baru gagal di tengah jalan ("table backups has no column named auto_run"
+ * saat backup dibuat, yaitu SETIAP kali pengguna login). Dengan sidik jari ini jalur
+ * cepat otomatis batal begitu daftarnya berubah, sehingga kelalaian menaikkan versi
+ * tidak lagi bisa membuat kolom hilang di pemasangan yang sudah berjalan.
+ */
+function schema_adds_fingerprint(): string
+{
+    static $fp = null;
+    if ($fp === null) $fp = substr(md5(json_encode(schema_adds())), 0, 12);
+    return $fp;
+}
+
+/** Additive migrations (idempotent, guarded) — runs inside the schema transaction. */
+function run_migrations(PDO $pdo): void
+{
+    $adds = schema_adds();
     foreach ($adds as [$t, $col, $type]) {
         if (!table_has_column($pdo, $t, $col)) {
             $pdo->exec("ALTER TABLE {$t} ADD COLUMN {$col} {$type}");
@@ -573,9 +723,76 @@ function run_migrations(PDO $pdo): void
     )");
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_traces_task ON ai_traces(task_id)');
 
+    /* JOB ENGINE AI DEVELOPER (ronde 53) — pekerjaan berat berjalan sebagai JOB di
+       latar belakang dengan identitas, heartbeat, checkpoint, retry, resume dan
+       pembatalan. Status job diturunkan dari status tugas sehingga UI & mesin selalu
+       memakai sumber status yang sama. */
+    $pdo->exec("CREATE TABLE IF NOT EXISTS ai_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL,
+        job_id TEXT,
+        type TEXT DEFAULT 'pipeline',
+        status TEXT NOT NULL DEFAULT 'QUEUED',
+        current_step TEXT,
+        progress INTEGER DEFAULT 0,
+        heartbeat TEXT,
+        started_at TEXT,
+        updated_at TEXT,
+        finished_at TEXT,
+        retry_count INTEGER DEFAULT 0,
+        max_retry INTEGER DEFAULT 2,
+        checkpoint TEXT,
+        error TEXT,
+        note TEXT,
+        cancel_requested INTEGER DEFAULT 0,
+        steps_json TEXT,
+        files_found INTEGER DEFAULT 0,
+        files_read INTEGER DEFAULT 0,
+        files_skipped INTEGER DEFAULT 0,
+        worker_pid INTEGER
+    )");
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_jobs_task ON ai_jobs(task_id)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_jobs_status ON ai_jobs(status)');
+
     migrate_finance_cost_amounts($pdo);
     migrate_finance_cost_modes($pdo);
     migrate_ai_audit_status($pdo);
+    /* PELACAKAN DATA DEMO (ronde 54) — seluruh record yang dibuat tombol "Isi Data Demo"
+       diberi `demo_batch_id` sehingga dapat dilacak, dilaporkan, dan dihapus per batch
+       dengan urutan dependency yang aman. Laporan produksi mengecualikan demo secara
+       bawaan; basis data lama tetap aman karena kolomnya ditambah dengan nilai NULL.
+
+       JEBAKAN YANG WAJIB DIHINDARI (pelajaran ronde 43): ALTER TABLE ke tabel yang
+       BELUM ADA membatalkan SELURUH transaksi pembuatan skema (database baru jadi
+       kosong). Karena itu setiap tabel diperiksa keberadaannya lebih dulu, dan blok ini
+       diletakkan di AKHIR run_migrations() setelah semua tabel selesai dibuat. */
+    $pdo->exec("CREATE TABLE IF NOT EXISTS demo_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        batch_id TEXT NOT NULL,
+        created_by INTEGER,
+        created_at TEXT DEFAULT (datetime('now','localtime')),
+        note TEXT,
+        status TEXT DEFAULT 'ACTIVE',
+        summary TEXT
+    )");
+    $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_demo_batches ON demo_batches(batch_id)');
+    /* Nama tabel HARUS sama dengan yang ada di aplikasi (mis. 'treatment_materials',
+       bukan 'materials') — nama yang salah membuat ALTER dilewati sehingga penghapusan
+       batch demo gagal dengan "no such column". */
+    $tabelDemo = ['patients', 'medical_records', 'appointments', 'appointment_treatments',
+                  'orders', 'order_items', 'payments', 'inventory_movements', 'packages',
+                  'treatments', 'skincare_products', 'treatment_materials', 'suppliers'];
+    foreach ($tabelDemo as $tbl) {
+        $ada = (int)$pdo->query("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name="
+            . $pdo->quote($tbl))->fetchColumn();
+        if ($ada === 0) continue;                    // tabel belum ada → lewati (jangan batalkan skema)
+        if (!table_has_column($pdo, $tbl, 'demo_batch_id')) {
+            $pdo->exec("ALTER TABLE {$tbl} ADD COLUMN demo_batch_id TEXT");
+        }
+        $pdo->exec("CREATE INDEX IF NOT EXISTS idx_{$tbl}_demo ON {$tbl}(demo_batch_id)");
+    }
+
+
 }
 
 /**
@@ -822,7 +1039,16 @@ function seed_icd_dictionary(PDO $pdo, bool $force = false): int
     return $n;
 }
 
-function schema_ddl(): array
+function schema_ddl(string $scope = 'central'): array
+{
+    $ddl = schema_ddl_raw();
+    if ($scope !== 'branch') return $ddl;
+    /* Berkas cabang: klausa foreign key ke tabel GLOBAL dibuang supaya insert
+       tidak ditolak (FK antar berkas tidak didukung SQLite). */
+    return array_map('db_route_strip_cross_fk', $ddl);
+}
+
+function schema_ddl_raw(): array
 {
     return [
         "CREATE TABLE IF NOT EXISTS branches (
@@ -876,16 +1102,20 @@ function schema_ddl(): array
             created_at TEXT DEFAULT (datetime('now','localtime')), updated_at TEXT,
             FOREIGN KEY (branch_id) REFERENCES branches(id)
         )",
+        /* `email` (ronde 60): alamat email tenaga medis — dipakai untuk mengirim
+           jadwal/notifikasi dan ditampilkan pada daftar & ekspor. Kolomnya juga
+           ditambahkan ke daftar `schema_adds()` supaya pemasangan LAMA ikut dapat
+           (sidik jari daftar kolom memicu migrasi walau versi skema tidak naik). */
         "CREATE TABLE IF NOT EXISTS doctors (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL, phone TEXT, specialization TEXT, schedule TEXT,
+            name TEXT NOT NULL, phone TEXT, email TEXT, specialization TEXT, schedule TEXT,
             branch_id INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'active',
             created_at TEXT DEFAULT (datetime('now','localtime')), updated_at TEXT,
             FOREIGN KEY (branch_id) REFERENCES branches(id)
         )",
         "CREATE TABLE IF NOT EXISTS therapists (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL, phone TEXT, specialization TEXT, schedule TEXT,
+            name TEXT NOT NULL, phone TEXT, email TEXT, specialization TEXT, schedule TEXT,
             branch_id INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'active',
             created_at TEXT DEFAULT (datetime('now','localtime')), updated_at TEXT,
             FOREIGN KEY (branch_id) REFERENCES branches(id)
@@ -1080,6 +1310,9 @@ function schema_ddl(): array
         "CREATE TABLE IF NOT EXISTS backups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             filename TEXT, size INTEGER, note TEXT, created_by INTEGER,
+            /* kind: 'sql' (dump seluruh data) · 'package' (zip central+cabang) ·
+               'branch' (salinan satu basis data cabang — ronde 59) */
+            kind TEXT DEFAULT 'sql', branch_id INTEGER,
             created_at TEXT DEFAULT (datetime('now','localtime'))
         )",
         "CREATE TABLE IF NOT EXISTS settings (
@@ -1146,6 +1379,12 @@ function schema_ddl(): array
 function seed_core(PDO $pdo): void
 {
     $count = (int)$pdo->query('SELECT COUNT(*) FROM branches')->fetchColumn();
+
+    /* BERKAS CABANG: bagian GLOBAL (peran, izin, pengaturan, daftar cabang, akun
+       pengguna) DILEWATI — semuanya milik basis data central dan dibaca dari sana.
+       Data CONTOH OPERASIONAL (dokter, terapis, supplier, master treatment/skincare/
+       bahan, stok) TETAP ditanam karena memang milik cabang. */
+    if (db_schema_scope() !== 'branch') {
 
     // ---- Roles -------------------------------------------------------
     $roles = [
@@ -1233,6 +1472,8 @@ function seed_core(PDO $pdo): void
     // ---- Settings defaults ------------------------------------------
     $defaults = [
         'schema_version'      => SCHEMA_VERSION,
+        /* Sidik jari daftar tambahan kolom — lihat schema_adds_fingerprint(). */
+        'schema_adds_fp'      => schema_adds_fingerprint(),
         'company_name'        => 'Naveena Skincare',
         'company_tagline'     => 'Klinik Kecantikan & Skincare',
         'company_address'     => 'Jl. Raya Kaliwungu, Kendal',
@@ -1264,6 +1505,11 @@ function seed_core(PDO $pdo): void
         'backup_last_file'    => '',
         'backup_last_error'   => '',
         'backup_keep'         => '7',            // jumlah backup otomatis yang disimpan
+        /* Batas total ukuran FOTO yang ikut ke dalam paket backup (MB). 0 = hanya
+           mencatat metadata/path-nya. Foto (pasien/dokter/terapis/lampiran rekam
+           medis) disimpan sebagai berkas di luar basis data, jadi tanpa ini paket
+           backup tidak dapat memulihkan gambarnya. */
+        'backup_media_max_mb' => '40',
         // Integrasi Satu Sehat (Kemenkes). Status apa adanya: selama kredensial
         // belum diisi, sistem menampilkan "belum dikonfigurasi" dan tidak
         // mengirim/mengklaim apa pun. Verifikasi kode ICD berjalan lokal
@@ -1361,6 +1607,13 @@ function seed_core(PDO $pdo): void
         /* RONDE 52: batas percobaan ulang bila HARNESS uji sendiri tidak berjalan
            (mis. port/sisa proses) — berbeda dari putaran perbaikan kode. */
         'ai_harness_retry'      => '2',
+        /* RONDE 53 — JOB ENGINE: batas percobaan ulang, ambang worker dianggap
+           stalled (detik), dan langkah baku pekerjaan. */
+        'ai_job_max_retry'      => '2',
+        /* RONDE 54: laporan produksi MENGECUALIKAN data demo secara bawaan; laporan
+           demo/uji dapat memasukkannya bila konteksnya memang demo. */
+        'report_include_demo'   => '0',
+        'ai_job_stall_seconds'  => '900',
         /* KEAMANAN LOGIN (ronde 38): lingkup wajib 2FA, durasi "ingat saya"
            (1/3/7 hari), dan batas tidak aktif tanpa "ingat saya" (1/3/5/8 jam). */
         'login_security_enabled' => '1',
@@ -1447,6 +1700,26 @@ function seed_core(PDO $pdo): void
     $uid = [];
     foreach ($pdo->query('SELECT id, email FROM users') as $u) $uid[$u['email']] = (int)$u['id'];
 
+    }   // akhir bagian GLOBAL
+
+    /* PENTING (arsitektur central + satu basis data per cabang): data CONTOH
+       OPERASIONAL di bawah ini TIDAK ditanam di basis data CENTRAL saat pengalihan
+       aktif — data itu milik berkas cabang. Tanpa penjaga ini, central ikut memuat
+       baris operasional sehingga jumlahnya tidak lagi sama dengan sumber migrasi. */
+    if (db_schema_scope() === 'central') {
+        /* Central HANYA memuat data global/sistem — data contoh operasional
+           (dokter, terapis, supplier, master treatment/skincare/bahan, stok) ditanam
+           saat berkas masing-masing CABANG dibuat. */
+        return;
+    }
+
+    /* Berkas CABANG: daftar cabang (`branches`) adalah data GLOBAL sehingga tabelnya
+       kosong di berkas cabang — sasaran data contoh operasionalnya adalah cabang
+       PEMILIK berkas ini (diberitahu pemanggil lewat db_schema_branch_id()). */
+    if (db_schema_scope() === 'branch') {
+        $bid = ['cabang' => max(1, db_schema_branch_id())];
+    }
+
     // ---- Dokter & Terapis (contoh awal, boleh diedit/dinonaktifkan) -----
     $doctors = [
         ['dr. Ratna Kusuma', '0812-3000-0011', 'Kulit & Estetika', 'Senin–Jumat 10.00–17.00'],
@@ -1510,11 +1783,21 @@ function seed_core(PDO $pdo): void
     }
 
     // ---- Inventory mirror rows + opening stock movements -------------
-    $sst = $pdo->prepare('INSERT INTO inventory (item_type, item_id, branch_id, stock, minimum_stock, status) VALUES (?,?,?,?,?,?)');
+    /* IDEMPOTEN (perbaikan penting): tabel `inventory` punya UNIQUE(item_type, item_id)
+       — jadi seed ini TIDAK boleh memakai INSERT biasa. Dulu ia biasa, dan pada basis
+       data yang SUDAH berisi baris inventory untuk item yang sama, seluruh transaksi
+       skema GAGAL ("UNIQUE constraint failed: inventory.item_type, inventory.item_id")
+       sehingga migrasi (dan setiap kolom baru) pada berkas itu tidak pernah diterapkan
+       — kegagalannya senyap karena pemanggil menangkapnya. Sekarang baris yang sudah
+       ada dilewati, dan pergerakan "Stok Awal" hanya ditulis untuk baris yang benar-benar
+       BARU dibuat supaya riwayat stok tidak berganda. */
+    $sst = $pdo->prepare('INSERT INTO inventory (item_type, item_id, branch_id, stock, minimum_stock, status)
+                          VALUES (?,?,?,?,?,?) ON CONFLICT(item_type, item_id) DO NOTHING');
     $mst = $pdo->prepare('INSERT INTO inventory_movements (inventory_id, item_type, item_id, item_name, item_code, type, quantity, stock_before, stock_after, reason, user_id, user_name, branch_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
     foreach ([['skincare', 'skincare_products', $uid['superadmin@naveena.id'] ?? null], ['material', 'treatment_materials', $uid['superadmin@naveena.id'] ?? null]] as $cfg) {
         foreach ($pdo->query("SELECT * FROM {$cfg[1]}") as $row) {
             $sst->execute([$cfg[0], (int)$row['id'], (int)$row['branch_id'], (float)$row['stock'], (float)$row['minimum_stock'], 'active']);
+            if ($sst->rowCount() === 0) continue;      // sudah ada → jangan gandakan pergerakan stok
             $invId = (int)$pdo->lastInsertId();
             $mst->execute([$invId, $cfg[0], (int)$row['id'], $row['name'], $row['code'], 'Stok Awal',
                 (float)$row['stock'], 0, (float)$row['stock'], 'Stok awal saat pembuatan sistem', $cfg[2], 'Super Admin', (int)$row['branch_id']]);
