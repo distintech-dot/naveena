@@ -189,9 +189,12 @@ page_head('Dokter & Terapis', 'staff');
                  <?= $stPhoto !== '' ? 'data-zoom="' . e($stPhoto) . '" tabindex="0" role="button"' : '' ?>></div>
           <div class="grow">
             <div class="field"><label>Foto <span class="muted small">(opsional)</span></label>
-              <input class="input" type="file" name="photo" id="st_photo" accept="image/*" onchange="nvStaffPhotoPreview(this)">
-              <span class="hint">JPG/PNG/WebP. Otomatis diperkecil &amp; dikompres (maks <?= num((int)setting('photo_max_staff', '480')) ?> px,
-                mutu <?= e(setting('photo_quality', '80')) ?>). Foto dapat diklik untuk dilihat lebih besar.</span></div>
+              <input class="input" type="file" name="photo" id="st_photo" accept="image/*"
+                     data-max-kb="<?= img_source_max_kb('staff') ?>" onchange="nvStaffPhotoPreview(this)">
+              <span class="hint">JPG/PNG/WebP, <strong>maksimal <?= num(img_source_max_kb('staff')) ?> KB</strong>
+                (berkas lebih besar ditolak). Foto <strong>otomatis dipotong 1:1</strong> lalu dikompres menjadi
+                maks <?= num((int)setting('photo_max_staff', '480')) ?>×<?= num((int)setting('photo_max_staff', '480')) ?> px,
+                mutu <?= e(setting('photo_quality', '80')) ?>. Foto dapat diklik untuk dilihat lebih besar.</span></div>
           </div>
         </div>
         <div class="form-grid g2 mt-2">
@@ -231,9 +234,12 @@ page_head('Dokter & Terapis', 'staff');
             <input type="hidden" name="kind" value="<?= $kind ?>">
             <input type="hidden" name="id" id="photoId" value="0">
             <div class="field"><label>Unggah Foto</label>
-              <input class="input" type="file" name="photo" accept="image/*" required>
-              <span class="hint">Otomatis diperkecil &amp; dikompres (maks <?= num((int)setting('photo_max_staff', '480')) ?> px,
-                mutu <?= e(setting('photo_quality', '80')) ?>).</span></div>
+              <input class="input" type="file" name="photo" accept="image/*"
+                     data-max-kb="<?= img_source_max_kb('staff') ?>" required>
+              <span class="hint">JPG/PNG/WebP, <strong>maksimal <?= num(img_source_max_kb('staff')) ?> KB</strong>
+                (berkas lebih besar ditolak). Otomatis dipotong 1:1 &amp; dikompres menjadi maks
+                <?= num((int)setting('photo_max_staff', '480')) ?>×<?= num((int)setting('photo_max_staff', '480')) ?> px,
+                mutu <?= e(setting('photo_quality', '80')) ?>.</span></div>
             <button class="btn btn-primary btn-sm" type="submit"><?= icon('upload') ?> Simpan Foto</button>
           </form>
         </div>

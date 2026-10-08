@@ -201,11 +201,31 @@ if ($type === 'laporan' && $format === 'xlsx') {
                    $prev > 0 ? round(($mx['total'][$i] - $prev) / $prev * 100, 1) : ''];
     }
     $rows[] = ['TOTAL', (int)array_sum($mx['trx']), (float)array_sum($mx['tr']), (float)array_sum($mx['sk']), (float)$mx['sum'], ''];
+    /* PENTING: baris terakhir DATA dicatat SEKARANG (sebelum baris keterangan
+       ditambahkan) supaya rentang grafik Excel tidak ikut memuat baris keterangan —
+       kalau tertukar, grafik akan menggambar angka yang sama dua kali. */
+    $lastDataRow = count($rows);                    // baris pertama = judul kolom
+    /* KETERANGAN ASAL ANGKA (permintaan pemilik): dijelaskan pada lembar yang sama
+       supaya berkas Excel dapat dibaca/diaudit tanpa membuka aplikasi. Rinciannya
+       berasal dari satu fungsi bersama (report_income_breakdown). */
+    $incX = $Bx['income'] ?? report_income_breakdown($fx);
+    $rows[] = [];
+    $rows[] = ['Asal angka kolom Total', income_formula_text()];
+    $rows[] = ['Pendapatan treatment', (float)$incX['tr']];
+    $rows[] = ['Pendapatan skincare', (float)$incX['sk']];
+    if ($incX['pkg'] > 0) $rows[] = ['Pendapatan paket', (float)$incX['pkg']];
+    $rows[] = ['Diskon manual', -(float)$incX['disc']];
+    $rows[] = ['Diskon member', -(float)$incX['member_disc']];
+    if ($incX['unique'] > 0) $rows[] = ['Kode unik pembayaran', (float)$incX['unique']];
+    $rows[] = ['Total Pendapatan', (float)$incX['total']];
+    $rows[] = ['Subtotal transaksi', (float)$incX['subtotal']];
+    $rows[] = ['Catatan', 'Bahan treatment tidak dihitung (tidak dijual); isi paket tidak dihitung dua kali.'];
+    $incNote = income_breakdown_note($incX);
+    if ($incNote !== '') $rows[] = ['Catatan selisih', $incNote];
     /* Grafik NATIVE EXCEL dari sel lembar ini: bila angkanya diubah, grafik ikut
        berubah. Dua grafik dipisah — (1) Treatment vs Skincare berjajaran,
        (2) Total Pendapatan — supaya nilai masing-masing terbaca dan Total tidak
        menempel di puncak batang seperti grafik bertumpuk. */
-    $lastDataRow = count($rows);                    // baris pertama = judul kolom
     $progresCharts = [];
     if ($lastDataRow > 2) {
         $progresCharts[] = [

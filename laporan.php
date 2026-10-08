@@ -22,10 +22,13 @@ $perTreatment = $B['treatments'];
 $perSkincare  = $B['skincares'];
 $perMaterials = $B['materials'] ?? [];   // pemakaian bahan treatment (tidak ditagihkan)
 $perMember    = $B['member_usage'] ?? [];   // pemakaian kartu member (diskon otomatis)
-$daily       = $B['daily'];
 $monthly     = $B['monthly'];
 $methods     = $B['methods'];
 $cashiersPerf = $B['cashiers'];
+/* RINCIAN ASAL "TOTAL PENDAPATAN" (permintaan pemilik: beri keterangan pada grafik
+   Total Pendapatan). Angkanya berasal dari SATU fungsi bersama sehingga keterangan
+   di halaman ini, dokumen cetak, dan PDF tidak pernah berbeda. */
+$income      = $B['income'] ?? report_income_breakdown($f);
 
 /* RINGKASAN KEUANGAN (HPP, laba kotor, biaya operasional, laba bersih) —
    HANYA untuk level owner (Super Admin & Direktur). Level lain tidak melihat
@@ -221,8 +224,66 @@ page_head('Laporan Lengkap', 'laporan');
     <div class="mt-2">
       <h4 class="chart-cap">Total Pendapatan</h4>
       <div class="chart-box"><canvas id="chartMonthlyTotal" data-chart="Progres Total"></canvas></div>
+      <?php /* KETERANGAN ASAL ANGKA (permintaan pemilik). Rinciannya dihitung dari
+               transaksi yang SAMA dengan grafiknya (filter identik), jadi jumlahnya
+               selalu cocok dengan total seluruh batang. */ ?>
+      <div class="notice mt-2">
+        <strong>Asal angka “Total Pendapatan”:</strong> <?= e(income_formula_text()) ?>.
+        <div class="table-wrap mt-1">
+          <table class="tbl">
+            <tbody>
+              <tr><td><strong>Subtotal transaksi</strong>
+                  <span class="muted small">(jumlah baris item yang dijual)</span></td>
+                <td class="num"><strong><?= money($income['subtotal']) ?></strong></td></tr>
+              <tr><td>Pendapatan treatment</td><td class="num"><?= money($income['tr']) ?></td></tr>
+              <tr><td>Pendapatan skincare (produk)</td><td class="num"><?= money($income['sk']) ?></td></tr>
+              <?php if ($income['pkg'] > 0): ?>
+              <tr><td>Pendapatan paket treatment/produk</td><td class="num"><?= money($income['pkg']) ?></td></tr>
+              <?php endif; ?>
+              <tr><td>Diskon manual</td><td class="num">− <?= money($income['disc']) ?></td></tr>
+              <tr><td>Diskon member</td><td class="num">− <?= money($income['member_disc']) ?></td></tr>
+              <?php if ($income['unique'] > 0): ?>
+              <tr><td>Kode unik pembayaran <span class="muted small">(3 digit transfer/QRIS — dipakai
+                  mencocokkan mutasi bank)</span></td><td class="num">+ <?= money($income['unique']) ?></td></tr>
+              <?php endif; ?>
+              <tr><th>Total Pendapatan</th><th class="num"><?= money($income['total']) ?></th></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="muted small mt-1">
+          Bahan treatment <strong>tidak</strong> dihitung karena tidak dijual (harga 0) — pemakaiannya
+          dilaporkan terpisah pada tabel “Bahan Treatment Terpakai”. Isi paket juga tidak dihitung dua kali
+          (barisnya berharga 0); hanya paketnya yang menambah pendapatan.
+          <?php if ((float)$income['unique'] > 0): ?>
+            <br>Tanpa kode unik, jumlahnya <?= money($income['before_unique']) ?>.
+          <?php endif; ?>
+          <br>Menu <strong>Keuangan</strong> (khusus owner) menghitung <strong>omzet</strong> tanpa kode unik,
+            jadi angkanya bisa berbeda sedikit — itu disengaja: kode unik hanya alat pencocokan mutasi.
+          <?php $incNote = income_breakdown_note($income); ?>
+          <?php if ($incNote !== ''): ?><br><strong><?= e($incNote) ?></strong><?php endif; ?>
+        </div>
+      </div>
     </div>
-    <p class="muted mt-1">Grafik ini mengikuti <strong>seluruh filter penerapan</strong> di atas (tanggal, cabang,
+    <?php if ($finSeries): ?>
+    <?php /* Grafik LABA BERSIH dipindah ke kartu ini: sebelumnya berada di kartu
+             "Pergerakan Pendapatan" yang isinya sama dengan kartu ini sehingga
+             dihapus (permintaan pemilik). */ ?>
+    <div class="mt-2">
+      <div class="flex gap-sm mb-1" style="align-items:center;flex-wrap:wrap">
+        <h4 class="chart-cap" style="margin:0">Laba Bersih <span class="muted small">(internal — khusus owner · sudah dikurangi HPP<?=
+          $fin && $fin['mode'] === 'lengkap' ? ' &amp; biaya operasional' : '' ?>)</span></h4>
+        <button class="btn btn-sm" type="button" onclick="Naveena.chartPng('chartLaba','laba-bersih')"><?= icon('download') ?> PNG</button>
+      </div>
+      <div class="chart-box"><canvas id="chartLaba" data-chart="Laba Bersih"></canvas></div>
+      <?php if ($fin): ?>
+        <p class="muted small mt-1">Laba bersih periode ini: <strong><?= money($fin['laba_bersih']) ?></strong>
+          (omzet <?= money($fin['omzet']) ?> − HPP <?= money($fin['hpp_total']) ?><?= $fin['mode'] === 'lengkap'
+            ? ' − biaya operasional ' . money($fin['biaya_total']) : '' ?>).
+          Rincian lengkapnya ada di menu <a href="keuangan.php?<?= e(qs([], ['page'])) ?>">Keuangan</a>.</p>
+      <?php endif; ?>
+    </div>
+    <?php endif; ?>
+    <p class="muted mt-2">Grafik ini mengikuti <strong>seluruh filter penerapan</strong> di atas (tanggal, cabang,
       kasir, metode bayar, treatment/skincare, dan status transaksi). Rentang ≤ 62 hari ditampilkan harian, lebih dari itu diringkas per bulan.
       Treatment dan Skincare ditampilkan <strong>berjajaran</strong> (bukan ditumpuk) supaya nilai masing-masing terbaca,
       sedangkan <strong>total pendapatan</strong> punya grafiknya sendiri.</p>
@@ -320,34 +381,6 @@ page_head('Laporan Lengkap', 'laporan');
       </tr></tfoot>
       <?php endif; ?>
     </table>
-  </div>
-</div>
-
-<!-- ============ TREN HARIAN ============ -->
-<div class="card">
-  <div class="card-head">
-    <h3>Pergerakan Pendapatan <?= $daily['by_month'] ? 'Per Bulan' : 'Harian' ?></h3>
-    <div class="flex gap-sm">
-      <span class="muted"><?= e(tgl($f['ps'])) ?> — <?= e(tgl($f['pe'])) ?></span>
-      <button class="btn btn-sm" type="button" onclick="Naveena.chartPng('chartDaily','tren-treatment-skincare')"><?= icon('download') ?> PNG Treatment &amp; Skincare</button>
-      <button class="btn btn-sm" type="button" onclick="Naveena.chartPng('chartDailyTotal','tren-total')"><?= icon('download') ?> PNG Total</button>
-    </div>
-  </div>
-  <div class="card-body">
-    <div>
-      <h4 class="chart-cap">Treatment vs Skincare (batang berjajaran)</h4>
-      <div class="chart-box lg"><canvas id="chartDaily" data-chart="Pergerakan Treatment &amp; Skincare"></canvas></div>
-    </div>
-    <div class="mt-2">
-      <h4 class="chart-cap">Total Pendapatan</h4>
-      <div class="chart-box"><canvas id="chartDailyTotal" data-chart="Pergerakan Total"></canvas></div>
-      <?php if ($finSeries): ?>
-      <div class="mt-2">
-        <h4 class="chart-cap">Laba Bersih <span class="muted small">(internal — khusus owner)</span></h4>
-        <div class="chart-box"><canvas id="chartLaba" data-chart="Laba Bersih"></canvas></div>
-      </div>
-      <?php endif; ?>
-    </div>
   </div>
 </div>
 
@@ -747,19 +780,6 @@ ob_start();
         } } } } }
   });
 
-  /* --- tren harian/bulanan: DUA grafik (batang berjajaran + total terpisah) ---
-     Dulu Treatment & Skincare ditumpuk ke atas dan garis Total ikut tertumpuk
-     sehingga nilainya berlipat dan garisnya keluar dari area grafik (tidak terlihat). */
-  NaveenaIncome({
-    bars: 'chartDaily', total: 'chartDailyTotal',
-    labels: <?= js_json($daily['labels']) ?>,
-    tr: <?= js_json($daily['tr']) ?>,
-    sk: <?= js_json($daily['sk']) ?>,
-    totalData: <?= js_json($daily['total']) ?>,
-    trColor: S.tr, skColor: S.sk,
-    totalColor: S.tot, totalFill: Naveena.rgba(S.tot, .14),
-    money: money, short: Naveena.rupiahShort
-  });
 
   /* --- top 5: batang + lingkaran --- */
   function topCharts(barId, pieId, rows) {

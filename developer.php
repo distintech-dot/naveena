@@ -37,6 +37,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $act = (string)($_POST['action'] ?? '');
     try {
 
+        if ($act === 'github_save') {
+            if (!is_super()) deny('Pengaturan GitHub hanya dapat diubah oleh Super Admin.');
+            $repo = trim((string)($_POST['github_repo'] ?? ''));
+            $branch = trim((string)($_POST['github_branch'] ?? 'main'));
+            if ($repo !== '' && !preg_match('~^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?/?$~i', $repo)) {
+                throw new RuntimeException('URL repository harus berupa https://github.com/pemilik/repository.');
+            }
+            if ($branch === '' || !preg_match('~^[A-Za-z0-9._/-]{1,120}$~', $branch) || strpos($branch, '..') !== false) {
+                throw new RuntimeException('Nama branch GitHub tidak valid.');
+            }
+            set_setting('github_repo', $repo);
+            set_setting('github_branch', $branch);
+            if (trim((string)($_POST['github_token'] ?? '')) !== '') {
+                set_setting('github_token', trim((string)$_POST['github_token']));
+            }
+            audit('Ubah Pengaturan GitHub', 'Developer Settings', null, null,
+                ['repo' => $repo, 'branch' => $branch], 'Pengaturan repository GitHub diperbarui');
+            flash('Pengaturan GitHub disimpan. Token yang dikosongkan tidak diubah.');
+        }
+
         if ($act === 'system') {
             /* PINDAHAN dari Pengaturan Sistem (ronde 37): Data per halaman dan
                petunjuk akun bawaan di halaman login kini hanya Super Admin yang
@@ -471,7 +491,7 @@ page_head('Developer Settings', 'developer');
     <div class="grid g4">
       <div class="stat"><span class="lbl">Ukuran Database</span>
         <span class="val"><?= num(round((is_file(DB_PATH) ? filesize(DB_PATH) : 0) / 1048576, 2), 2) ?> MB</span>
-        <span class="sub"><?= e(basename(DB_PATH)) ?></span></div>
+        <span class="sub"><?= e(basename(DB_PATH)) ?> <span class="muted">(basis data utama = central)</span></span></div>
       <div class="stat"><span class="lbl">Stok &amp; Movement</span>
         <span class="val"><?= num((int)scalar('SELECT COUNT(*) FROM inventory_movements')) ?></span>
         <span class="sub"><?= e(retention_menu_status_text('movement')) ?></span></div>
@@ -651,6 +671,34 @@ page_head('Developer Settings', 'developer');
     </div>
     <div class="modal-foot" style="border-radius:0 0 var(--radius) var(--radius)">
       <button class="btn btn-primary" type="submit"><?= icon('settings') ?> Simpan Pengaturan Penyimpanan Data</button>
+    </div>
+  </form>
+</div>
+
+<div class="card" id="github">
+  <div class="card-head">
+    <h3>Push GitHub</h3>
+    <span><?= badge('Khusus Super Admin', 'pink') ?></span>
+  </div>
+  <form method="post" id="githubSettingsForm">
+    <?= csrf_field() ?><input type="hidden" name="action" value="github_save">
+    <div class="card-body">
+      <p class="muted">Simpan repository, branch, dan token GitHub. Push mengirim berkas aplikasi yang berubah ke repository; basis data, unggahan, dan berkas runtime dilewati.</p>
+      <div class="form-grid g3">
+        <div class="field"><label>Repository GitHub</label>
+          <input class="input" name="github_repo" value="<?= e(setting('github_repo', '')) ?>" placeholder="https://github.com/pemilik/repository" required></div>
+        <div class="field"><label>Branch</label>
+          <input class="input" name="github_branch" value="<?= e(setting('github_branch', 'main')) ?>" required></div>
+        <div class="field"><label>Personal Access Token</label>
+          <input class="input" type="password" name="github_token" autocomplete="new-password"
+                 placeholder="<?= setting('github_token', '') !== '' ? '•••••• (tersimpan; kosongkan untuk mempertahankan)' : 'belum diisi' ?>">
+          <span class="hint">Token tidak ditampilkan kembali. Gunakan token dengan izin minimum untuk menulis repository ini.</span></div>
+      </div>
+      <div class="alert alert-info mt-2" data-github-status aria-live="polite" style="display:none"></div>
+    </div>
+    <div class="modal-foot" style="border-radius:0 0 var(--radius) var(--radius)">
+      <button class="btn btn-primary" type="submit"><?= icon('save') ?> Simpan Pengaturan GitHub</button>
+      <button class="btn" type="button" data-github-push data-endpoint="api.php?a=push_github"><?= icon('upload') ?> Push GitHub</button>
     </div>
   </form>
 </div>

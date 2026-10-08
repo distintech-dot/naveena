@@ -264,6 +264,10 @@ function page_head(string $title, string $active, array $opts = []): void
     echo '<title>' . e($fullTitle) . '</title>';
     echo '<link rel="stylesheet" href="assets/css/app.css">';
     echo '<style id="themeVars">' . theme_css() . '</style>';
+    /* GAMBAR LATAR WEB (ronde 64): satu gambar dipilih acak di server setiap halaman
+       dimuat, jadi menyegarkan halaman menampilkan gambar berbeda. Kosong bila fitur
+       nonaktif atau tidak dipakai di halaman ini. */
+    if (function_exists('wallpaper_style_tag')) echo wallpaper_style_tag();
     echo '<script>window.NAVEENA_THEME=' . js_json([
         'key' => theme_key(),
         'palette' => theme_chart_palette(),

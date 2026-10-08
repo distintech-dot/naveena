@@ -56,8 +56,33 @@ function db_schema_with_scope(string $scope, callable $fn)
  * (`db_route_ensure_branch_schema()`) — supaya kolom baru tidak pernah "tertinggal"
  * hanya karena lupa menaikkan SCHEMA_VERSION (kejadian nyata: `backups.auto_run`).
  */
+/**
+ * Angka versi skema (untuk berkas CABANG yang tidak punya tabel `settings`).
+ *
+ * Berkas cabang TIDAK memuat tabel pengaturan (data global hanya di central), jadi
+ * versi skemanya dicatat pada `PRAGMA user_version` — field bawaan SQLite yang selalu
+ * ada di setiap berkas dan tidak memerlukan tabel apa pun. Angkanya diturunkan dari
+ * versi + sidik jari daftar tambahan kolom sehingga perilakunya sama dengan central.
+ */
+function schema_version_code(): int
+{
+    static $kode = null;
+    if ($kode === null) {
+        $kode = (int)(hexdec(substr(md5(SCHEMA_VERSION . '|' . schema_adds_fingerprint()), 0, 7)) & 0x7FFFFFFF);
+    }
+    return $kode;
+}
+
 function schema_is_current(PDO $pdo): bool
 {
+    /* Berkas CABANG: penandanya `PRAGMA user_version` (tanpa tabel settings). */
+    if (function_exists('db_schema_scope') && db_schema_scope() === 'branch') {
+        try {
+            return (int)$pdo->query('PRAGMA user_version')->fetchColumn() === schema_version_code();
+        } catch (Throwable $e) {
+            return false;
+        }
+    }
     try {
         $v = (string)$pdo->query("SELECT value FROM settings WHERE key = 'schema_version'")->fetchColumn();
         $fp = (string)$pdo->query("SELECT value FROM settings WHERE key = 'schema_adds_fp'")->fetchColumn();
@@ -93,14 +118,19 @@ function ensure_schema(PDO $pdo): void
            Karena itu versi skema diperiksa ULANG setelah kunci didapat — tanpa
            ini, dua permintaan yang datang bersamaan akan menjalankan migrasi dua
            kali (dulu menyebabkan migrasi penggeser waktu jalan berkali-kali). */
-        try {
-            $again = (string)$pdo->query("SELECT value FROM settings WHERE key = 'schema_version'")->fetchColumn();
-            $fpAgain = (string)scalar_schema_setting($pdo, 'schema_adds_fp');
-        } catch (Throwable $e) {
-            $again = '';   // tabel settings belum ada → database benar-benar baru
-            $fpAgain = '';
+        if (db_schema_scope() === 'branch') {
+            $ulang = schema_is_current($pdo);        // PRAGMA user_version (dibaca ulang)
+        } else {
+            try {
+                $again = (string)$pdo->query("SELECT value FROM settings WHERE key = 'schema_version'")->fetchColumn();
+                $fpAgain = (string)scalar_schema_setting($pdo, 'schema_adds_fp');
+            } catch (Throwable $e) {
+                $again = '';   // tabel settings belum ada → database benar-benar baru
+                $fpAgain = '';
+            }
+            $ulang = ($again === SCHEMA_VERSION && $fpAgain === schema_adds_fingerprint());
         }
-        if ($again === SCHEMA_VERSION && $fpAgain === schema_adds_fingerprint()) {
+        if ($ulang) {
             $pdo->exec('ROLLBACK');
             return;
         }
@@ -128,15 +158,20 @@ function ensure_schema(PDO $pdo): void
             ensure_direktur_seed($pdo);
         }
         ensure_staff_seed($pdo);
-        seed_icd_dictionary($pdo);
-        /* Baris versi skema WAJIB ada juga di berkas CABANG (dipakai jalur cepat
-           ensure_schema agar migrasi tidak diulang setiap permintaan). Sidik jari
-           daftar tambahan kolom ikut disimpan supaya kelalaian menaikkan versi
-           tidak membuat kolom baru hilang pada pemasangan yang sudah berjalan. */
-        $pdo->exec("INSERT INTO settings (key, value) VALUES ('schema_version', '" . SCHEMA_VERSION . "')
-                    ON CONFLICT(key) DO UPDATE SET value = excluded.value");
-        $pdo->exec("INSERT INTO settings (key, value) VALUES ('schema_adds_fp', '" . schema_adds_fingerprint() . "')
-                    ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+        /* KAMUS ICD hanya ada di CENTRAL (data global). Berkas cabang TIDAK lagi
+           menyimpan kamusnya — dulu 15.966 baris terduplikasi di setiap cabang. */
+        if (db_schema_scope() !== 'branch') seed_icd_dictionary($pdo);
+        if (db_schema_scope() === 'branch') {
+            /* Penanda versi skema pada berkas CABANG: `PRAGMA user_version`
+               (berkas cabang tidak punya tabel settings). */
+            $pdo->exec('PRAGMA user_version = ' . schema_version_code());
+        } else {
+            /* Baris versi skema + sidik jari daftar tambahan kolom (central). */
+            $pdo->exec("INSERT INTO settings (key, value) VALUES ('schema_version', '" . SCHEMA_VERSION . "')
+                        ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+            $pdo->exec("INSERT INTO settings (key, value) VALUES ('schema_adds_fp', '" . schema_adds_fingerprint() . "')
+                        ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+        }
         $pdo->exec('COMMIT');
         /* Migrasi di atas bisa mengubah isi settings (mis. status struk). Cache
            pengaturan bersifat statis, jadi harus disegarkan agar pemanggilan
@@ -170,6 +205,9 @@ function ensure_staff_seed(PDO $pdo): void
        (dulu terjadi: central berisi 2 dokter per cabang, sehingga "Hapus Semua Data"
        gagal dengan "FOREIGN KEY constraint failed"). */
     if (db_schema_scope() === 'central') return;
+    /* Berkas CABANG tidak memiliki tabel `branches`; data contoh dokter/terapis di
+       sana sudah ditanam seed_core() untuk cabang PEMILIK berkas ini. */
+    if (db_schema_scope() === 'branch') return;
     $branches = $pdo->query('SELECT id FROM branches')->fetchAll(PDO::FETCH_COLUMN);
     if (!$branches) return;
     $docs = [
@@ -251,6 +289,27 @@ function ensure_direktur_seed(PDO $pdo): void
                          ON CONFLICT(email) DO NOTHING');
     $st->execute(['Direktur / Owner', 'direktur@naveena.id', password_hash('Direktur#2025', PASSWORD_DEFAULT),
         'direktur', '0812-9000-0002', 'active']);
+}
+
+/** Apakah sebuah tabel ADA pada basis data ini? (dipakai penjaga migrasi)
+ *
+ * PENTING: simpanan (cache) dikunci per-KONEKSI. Tanpa kunci itu, hasil dari
+ * basis data central "menempel" saat koneksi berikutnya (berkas cabang) diperiksa
+ * — akibatnya tabel yang tidak ada dianggap ada dan ALTER TABLE menggagalkan
+ * seluruh transaksi skema (pernah terjadi saat migrasi central/branch).
+ */
+function table_exists(PDO $pdo, string $table): bool
+{
+    static $cache = [];
+    $kunci = spl_object_id($pdo) . '|' . $table;
+    if (array_key_exists($kunci, $cache)) return $cache[$kunci];
+    try {
+        $st = $pdo->prepare("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?");
+        $st->execute([$table]);
+        return $cache[$kunci] = ((int)$st->fetchColumn() > 0);
+    } catch (Throwable $e) {
+        return $cache[$kunci] = false;
+    }
 }
 
 function table_has_column(PDO $pdo, string $table, string $column): bool
@@ -378,10 +437,31 @@ function schema_adds_fingerprint(): string
 /** Additive migrations (idempotent, guarded) — runs inside the schema transaction. */
 function run_migrations(PDO $pdo): void
 {
+    /* BERKAS CABANG hanya memuat tabel OPERASIONAL. Setiap pernyataan migrasi yang
+       menyebut tabel GLOBAL (pengguna, peran, pengaturan, kamus ICD, biaya operasional,
+       audit, backup, demo, AI, dsb.) DILEWATI — tabelnya memang tidak ada di berkas
+       cabang, dan dulu hal itu menggagalkan seluruh transaksi skema ("no such table").
+       Penyaringnya memeriksa NAMA TABEL pada teks SQL, jadi lengkap: CREATE TABLE,
+       CREATE INDEX, dan ALTER TABLE sekaligus. */
+    $branch = (db_schema_scope() === 'branch');
+    $namaGlobal = $branch ? db_route_global_tables() : [];
+    $ex = function (string $sql) use ($pdo, $branch, $namaGlobal) {
+        if ($branch) {
+            foreach ($namaGlobal as $g) {
+                if (preg_match('/\b' . preg_quote($g, '/') . '\b/i', $sql)) return;
+            }
+        }
+        $pdo->exec($sql);
+    };
+
     $adds = schema_adds();
     foreach ($adds as [$t, $col, $type]) {
+        /* Tabelnya mungkin tidak ada di berkas ini (tabel GLOBAL tidak dibuat di
+           berkas CABANG) — dahulu ALTER TABLE pada tabel yang tidak ada membuat
+           SELURUH transaksi skema gagal, jadi dijaga di sini. */
+        if (!table_exists($pdo, $t)) continue;
         if (!table_has_column($pdo, $t, $col)) {
-            $pdo->exec("ALTER TABLE {$t} ADD COLUMN {$col} {$type}");
+            $ex("ALTER TABLE {$t} ADD COLUMN {$col} {$type}");
         }
     }
     /* Permintaan pembayaran (jalur OTOMATIS): transaksi BELUM dibuat sampai
@@ -389,7 +469,7 @@ function run_migrations(PDO $pdo): void
        notifikasi gateway (tanpa sesi pengguna) bisa menyelesaikannya.
        Kolom `payload` menyimpan data transaksi, `raw` menyimpan balasan gateway
        apa adanya untuk keperluan penelusuran. */
-    $pdo->exec("CREATE TABLE IF NOT EXISTS pay_pending (
+    $ex("CREATE TABLE IF NOT EXISTS pay_pending (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ref TEXT NOT NULL UNIQUE,
         order_payload TEXT NOT NULL,
@@ -400,23 +480,23 @@ function run_migrations(PDO $pdo): void
         branch_id INTEGER, user_id INTEGER, order_id INTEGER,
         created_at TEXT DEFAULT (datetime('now','localtime')), expires_at TEXT, paid_at TEXT
     )");
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_pay_pending_ref ON pay_pending(ref)');
+    $ex('CREATE INDEX IF NOT EXISTS idx_pay_pending_ref ON pay_pending(ref)');
 
     /* Tabel treatment per reservasi (dibuat di sini juga supaya database yang
        sudah terpasang ikut mendapatkannya; CREATE TABLE IF NOT EXISTS aman
        dijalankan berulang). */
-    $pdo->exec("CREATE TABLE IF NOT EXISTS appointment_treatments (
+    $ex("CREATE TABLE IF NOT EXISTS appointment_treatments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         appointment_id INTEGER NOT NULL,
         treatment_id INTEGER NOT NULL,
         position INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY (appointment_id) REFERENCES appointments(id)
     )");
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_appt_treat ON appointment_treatments(appointment_id)');
+    $ex('CREATE INDEX IF NOT EXISTS idx_appt_treat ON appointment_treatments(appointment_id)');
 
     /* PAKET treatment/produk (CREATE TABLE IF NOT EXISTS aman dijalankan berulang;
        juga diperlukan oleh database yang sudah terpasang). */
-    $pdo->exec("CREATE TABLE IF NOT EXISTS packages (
+    $ex("CREATE TABLE IF NOT EXISTS packages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         code TEXT NOT NULL, name TEXT NOT NULL,
         kind TEXT NOT NULL DEFAULT 'treatment',
@@ -427,7 +507,7 @@ function run_migrations(PDO $pdo): void
         UNIQUE (code, branch_id),
         FOREIGN KEY (branch_id) REFERENCES branches(id)
     )");
-    $pdo->exec("CREATE TABLE IF NOT EXISTS package_items (
+    $ex("CREATE TABLE IF NOT EXISTS package_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         package_id INTEGER NOT NULL,
         item_type TEXT NOT NULL,
@@ -436,14 +516,14 @@ function run_migrations(PDO $pdo): void
         position INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY (package_id) REFERENCES packages(id) ON DELETE CASCADE
     )");
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_package_items_pkg ON package_items(package_id)');
+    $ex('CREATE INDEX IF NOT EXISTS idx_package_items_pkg ON package_items(package_id)');
 
     /* BIAYA OPERASIONAL (menu Keuangan — mode "Laporan Lengkap"). Setiap baris
        punya nominal DAN periode pembayaran (1/3/6/12/24/36/60 bulan) sehingga
        biaya tahunan (mis. sewa bangunan) maupun bulanan (gaji, listrik & air,
        marketing, pajak, operasional lain) dapat diisi apa adanya dan sistem
        menghitung porsi untuk periode laporan secara proporsional. */
-    $pdo->exec("CREATE TABLE IF NOT EXISTS finance_costs (
+    $ex("CREATE TABLE IF NOT EXISTS finance_costs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         amount REAL NOT NULL DEFAULT 0,
@@ -463,13 +543,13 @@ function run_migrations(PDO $pdo): void
         status TEXT NOT NULL DEFAULT 'active',
         created_at TEXT DEFAULT (datetime('now','localtime')), updated_at TEXT
     )");
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_finance_costs_sort ON finance_costs(sort)');
+    $ex('CREATE INDEX IF NOT EXISTS idx_finance_costs_sort ON finance_costs(sort)');
     /* MODE pos biaya (ronde 33) — WAJIB ditambahkan SETELAH tabelnya dibuat:
        tabel `finance_costs` dibuat di blok ini, sedangkan daftar `$adds` di atas
        dijalankan lebih dulu (kalau diisi di sana, instalasi baru gagal dengan
        "no such table: finance_costs"). */
     if (!table_has_column($pdo, 'finance_costs', 'cost_mode')) {
-        $pdo->exec("ALTER TABLE finance_costs ADD COLUMN cost_mode TEXT NOT NULL DEFAULT 'branch'");
+        $ex("ALTER TABLE finance_costs ADD COLUMN cost_mode TEXT NOT NULL DEFAULT 'branch'");
     }
     /* NOMINAL PER CAKUPAN (permintaan pemilik, ronde 31): satu pos biaya
        (mis. "Gaji") dapat diisi BEDA untuk tiap cakupan — biaya bersama
@@ -480,7 +560,7 @@ function run_migrations(PDO $pdo): void
        tersimpan dan dapat dipakai kembali kapan saja), sedangkan penyimpanan
        pada cakupan sebuah cabang menonaktifkan isian "semua cabang" untuk
        biaya tersebut (cabang lebih khusus daripada bersama). */
-    $pdo->exec("CREATE TABLE IF NOT EXISTS finance_cost_amounts (
+    $ex("CREATE TABLE IF NOT EXISTS finance_cost_amounts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         cost_id INTEGER NOT NULL,
         branch_id INTEGER NOT NULL DEFAULT 0,
@@ -492,9 +572,9 @@ function run_migrations(PDO $pdo): void
         UNIQUE (cost_id, branch_id),
         FOREIGN KEY (cost_id) REFERENCES finance_costs(id) ON DELETE CASCADE
     )");
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_fc_amounts_cost ON finance_cost_amounts(cost_id)');
+    $ex('CREATE INDEX IF NOT EXISTS idx_fc_amounts_cost ON finance_cost_amounts(cost_id)');
     /* Contoh awal supaya pemilik klinik tinggal mengisi nominalnya. */
-    if ((int)$pdo->query('SELECT COUNT(*) FROM finance_costs')->fetchColumn() === 0) {
+    if (!$branch && (int)$pdo->query('SELECT COUNT(*) FROM finance_costs')->fetchColumn() === 0) {
         $seed = [
             ['Gaji', 1, 'Gaji & Tunjangan', 10],
             ['Listrik & Air', 1, 'Utilitas', 20],
@@ -514,7 +594,7 @@ function run_migrations(PDO $pdo): void
     foreach ([
         'idx_order_items_material' => 'order_items(material_id)',
     ] as $idx => $target) {
-        $pdo->exec("CREATE INDEX IF NOT EXISTS {$idx} ON {$target}");
+        $ex("CREATE INDEX IF NOT EXISTS {$idx} ON {$target}");
     }
     /* CATATAN PENTING (jangan dihidupkan kembali):
        Dulu di sini ada "perbaikan zona waktu sekali saja" yang menggeser SEMUA
@@ -531,16 +611,16 @@ function run_migrations(PDO $pdo): void
     // Koreksi data: baris lama yang tercatat "terkirim" padahal kenyataannya hanya
     // DISIAPKAN lewat deep link wa.me (WhatsApp API belum dipakai) ditandai ulang
     // supaya sistem tidak menampilkan klaim pengiriman yang tidak terjadi.
-    $pdo->exec("UPDATE orders SET receipt_status = 'prepared'
+    $ex("UPDATE orders SET receipt_status = 'prepared'
                 WHERE receipt_status IS NULL AND receipt_sent_at IS NOT NULL
                   AND (receipt_sent_via IS NULL OR receipt_sent_via NOT LIKE '%API%')");
-    $pdo->exec("UPDATE orders SET receipt_status = 'sent'
+    $ex("UPDATE orders SET receipt_status = 'sent'
                 WHERE receipt_status IS NULL AND receipt_sent_at IS NOT NULL AND receipt_sent_via LIKE '%API%'");
 
     /* Tabel KEAMANAN LOGIN (ronde 38): "ingat saya", lupa password, kode
        pemulihan, dan kode verifikasi cadangan lewat email. Semua nilai sensitif
        disimpan sebagai HASH. */
-    $pdo->exec("CREATE TABLE IF NOT EXISTS login_remember (
+    $ex("CREATE TABLE IF NOT EXISTS login_remember (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
         selector TEXT NOT NULL UNIQUE,
@@ -549,8 +629,8 @@ function run_migrations(PDO $pdo): void
         last_used_at TEXT,
         created_at TEXT DEFAULT (datetime('now','localtime'))
     )");
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_login_remember_sel ON login_remember(selector)');
-    $pdo->exec("CREATE TABLE IF NOT EXISTS password_resets (
+    $ex('CREATE INDEX IF NOT EXISTS idx_login_remember_sel ON login_remember(selector)');
+    $ex("CREATE TABLE IF NOT EXISTS password_resets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
         token_hash TEXT NOT NULL,
@@ -558,16 +638,16 @@ function run_migrations(PDO $pdo): void
         used_at TEXT,
         created_at TEXT DEFAULT (datetime('now','localtime'))
     )");
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_password_resets_hash ON password_resets(token_hash)');
-    $pdo->exec("CREATE TABLE IF NOT EXISTS recovery_codes (
+    $ex('CREATE INDEX IF NOT EXISTS idx_password_resets_hash ON password_resets(token_hash)');
+    $ex("CREATE TABLE IF NOT EXISTS recovery_codes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
         code_hash TEXT NOT NULL,
         used_at TEXT,
         created_at TEXT DEFAULT (datetime('now','localtime'))
     )");
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_recovery_codes_user ON recovery_codes(user_id)');
-    $pdo->exec("CREATE TABLE IF NOT EXISTS login_2fa_codes (
+    $ex('CREATE INDEX IF NOT EXISTS idx_recovery_codes_user ON recovery_codes(user_id)');
+    $ex("CREATE TABLE IF NOT EXISTS login_2fa_codes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
         purpose TEXT NOT NULL DEFAULT 'email',
@@ -575,13 +655,13 @@ function run_migrations(PDO $pdo): void
         expires_at TEXT NOT NULL,
         created_at TEXT DEFAULT (datetime('now','localtime'))
     )");
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_login_2fa_user ON login_2fa_codes(user_id)');
+    $ex('CREATE INDEX IF NOT EXISTS idx_login_2fa_user ON login_2fa_codes(user_id)');
 
     /* TABEL AI DEVELOPER (ronde 41): menyimpan tiap permintaan pengembangan
        (revisi/perbaikan/tambah fitur) beserta RENCANA, PATCH yang diusulkan AI,
        hasil uji di folder staging, dan keadaan penerapan/rollback. Disimpan di
        basis data supaya persetujuan Super Admin & riwayatnya tetap ada. */
-    $pdo->exec("CREATE TABLE IF NOT EXISTS ai_tasks (
+    $ex("CREATE TABLE IF NOT EXISTS ai_tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
         request TEXT NOT NULL,
@@ -618,7 +698,7 @@ function run_migrations(PDO $pdo): void
         created_at TEXT DEFAULT (datetime('now','localtime')),
         updated_at TEXT
     )");
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_tasks_status ON ai_tasks(status)');
+    $ex('CREATE INDEX IF NOT EXISTS idx_ai_tasks_status ON ai_tasks(status)');
     /* RONDE 43: kolom jawaban MENTAH AI + alasan berhenti (finishReason) supaya
        kegagalan seperti "JSON tidak sah"/terpotong dapat ditelusuri pemilik.
        PENTING: ditambahkan DI SINI (setelah tabelnya dibuat), bukan di daftar
@@ -652,12 +732,12 @@ function run_migrations(PDO $pdo): void
     ];
     foreach ($kolomAiTasks as $col => $type) {
         if (!table_has_column($pdo, 'ai_tasks', $col)) {
-            $pdo->exec("ALTER TABLE ai_tasks ADD COLUMN {$col} {$type}");
+            $ex("ALTER TABLE ai_tasks ADD COLUMN {$col} {$type}");
         }
     }
     /* Berkas lampiran tiap permintaan (Excel/PDF/gambar). Isi berkasnya disimpan
        DI LUAR folder aplikasi yang disajikan publik (`naveena_ai/uploads`). */
-    $pdo->exec("CREATE TABLE IF NOT EXISTS ai_task_files (
+    $ex("CREATE TABLE IF NOT EXISTS ai_task_files (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_id INTEGER NOT NULL,
         name TEXT,
@@ -670,10 +750,10 @@ function run_migrations(PDO $pdo): void
         note TEXT,
         created_at TEXT DEFAULT (datetime('now','localtime'))
     )");
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_task_files ON ai_task_files(task_id)');
+    $ex('CREATE INDEX IF NOT EXISTS idx_ai_task_files ON ai_task_files(task_id)');
     /* Catatan PEMAKAIAN TOKEN setiap panggilan AI (untuk menjawab "habis berapa
        token setiap pengerjaan") — satu baris per panggilan, dengan tujuannya. */
-    $pdo->exec("CREATE TABLE IF NOT EXISTS ai_usage_log (
+    $ex("CREATE TABLE IF NOT EXISTS ai_usage_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_id INTEGER,
         provider TEXT,
@@ -686,11 +766,11 @@ function run_migrations(PDO $pdo): void
         tokens_total INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now','localtime'))
     )");
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_usage_task ON ai_usage_log(task_id)');
+    $ex('CREATE INDEX IF NOT EXISTS idx_ai_usage_task ON ai_usage_log(task_id)');
     /* LANGKAH BERJALAN (ronde 45): supaya pemilik dapat MELIHAT prosesnya seperti
        agen — "sedang membaca berkas", "sedang menyusun patch", "sedang diuji".
        Ditulis pekerja AI dari waktu ke waktu dan dibaca halaman lewat polling. */
-    $pdo->exec("CREATE TABLE IF NOT EXISTS ai_steps (
+    $ex("CREATE TABLE IF NOT EXISTS ai_steps (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_id INTEGER NOT NULL,
         kind TEXT DEFAULT 'info',
@@ -698,36 +778,36 @@ function run_migrations(PDO $pdo): void
         detail TEXT,
         created_at TEXT DEFAULT (datetime('now','localtime'))
     )");
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_steps_task ON ai_steps(task_id)');
+    $ex('CREATE INDEX IF NOT EXISTS idx_ai_steps_task ON ai_steps(task_id)');
     /* PERCAKAPAN (ronde 45): pesan pemilik & jawaban AI dalam satu utas, sehingga
        perintah lanjutan dapat melanjutkan pekerjaan yang sama (seperti mengobrol). */
-    $pdo->exec("CREATE TABLE IF NOT EXISTS ai_messages (
+    $ex("CREATE TABLE IF NOT EXISTS ai_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_id INTEGER NOT NULL,
         role TEXT NOT NULL DEFAULT 'user',
         text TEXT,
         created_at TEXT DEFAULT (datetime('now','localtime'))
     )");
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_messages_task ON ai_messages(task_id)');
+    $ex('CREATE INDEX IF NOT EXISTS idx_ai_messages_task ON ai_messages(task_id)');
     /* JEJAK KERJA AI (ronde 50): satu baris per FASE pekerjaan (klasifikasi maksud,
        penelusuran berkas, pembacaan, penelusuran dampak, penyusunan patch, uji,
        hasil akhir). Dipakai agar kegagalan AI Developer dapat ditelusuri sendiri
        oleh pemilik/dev tanpa menebak-nebak — termasuk berkas yang gagal dibaca
        beserta alasannya. */
-    $pdo->exec("CREATE TABLE IF NOT EXISTS ai_traces (
+    $ex("CREATE TABLE IF NOT EXISTS ai_traces (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_id INTEGER NOT NULL,
         phase TEXT,
         data TEXT,
         created_at TEXT DEFAULT (datetime('now','localtime'))
     )");
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_traces_task ON ai_traces(task_id)');
+    $ex('CREATE INDEX IF NOT EXISTS idx_ai_traces_task ON ai_traces(task_id)');
 
     /* JOB ENGINE AI DEVELOPER (ronde 53) — pekerjaan berat berjalan sebagai JOB di
        latar belakang dengan identitas, heartbeat, checkpoint, retry, resume dan
        pembatalan. Status job diturunkan dari status tugas sehingga UI & mesin selalu
        memakai sumber status yang sama. */
-    $pdo->exec("CREATE TABLE IF NOT EXISTS ai_jobs (
+    $ex("CREATE TABLE IF NOT EXISTS ai_jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_id INTEGER NOT NULL,
         job_id TEXT,
@@ -751,12 +831,15 @@ function run_migrations(PDO $pdo): void
         files_skipped INTEGER DEFAULT 0,
         worker_pid INTEGER
     )");
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_jobs_task ON ai_jobs(task_id)');
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_ai_jobs_status ON ai_jobs(status)');
+    $ex('CREATE INDEX IF NOT EXISTS idx_ai_jobs_task ON ai_jobs(task_id)');
+    $ex('CREATE INDEX IF NOT EXISTS idx_ai_jobs_status ON ai_jobs(status)');
 
-    migrate_finance_cost_amounts($pdo);
-    migrate_finance_cost_modes($pdo);
-    migrate_ai_audit_status($pdo);
+    /* Migrasi data GLOBAL (biaya operasional & status audit AI) HANYA di central. */
+    if (!$branch) {
+        migrate_finance_cost_amounts($pdo);
+        migrate_finance_cost_modes($pdo);
+        migrate_ai_audit_status($pdo);
+    }
     /* PELACAKAN DATA DEMO (ronde 54) — seluruh record yang dibuat tombol "Isi Data Demo"
        diberi `demo_batch_id` sehingga dapat dilacak, dilaporkan, dan dihapus per batch
        dengan urutan dependency yang aman. Laporan produksi mengecualikan demo secara
@@ -766,7 +849,7 @@ function run_migrations(PDO $pdo): void
        BELUM ADA membatalkan SELURUH transaksi pembuatan skema (database baru jadi
        kosong). Karena itu setiap tabel diperiksa keberadaannya lebih dulu, dan blok ini
        diletakkan di AKHIR run_migrations() setelah semua tabel selesai dibuat. */
-    $pdo->exec("CREATE TABLE IF NOT EXISTS demo_batches (
+    $ex("CREATE TABLE IF NOT EXISTS demo_batches (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         batch_id TEXT NOT NULL,
         created_by INTEGER,
@@ -775,7 +858,7 @@ function run_migrations(PDO $pdo): void
         status TEXT DEFAULT 'ACTIVE',
         summary TEXT
     )");
-    $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_demo_batches ON demo_batches(batch_id)');
+    $ex('CREATE UNIQUE INDEX IF NOT EXISTS idx_demo_batches ON demo_batches(batch_id)');
     /* Nama tabel HARUS sama dengan yang ada di aplikasi (mis. 'treatment_materials',
        bukan 'materials') — nama yang salah membuat ALTER dilewati sehingga penghapusan
        batch demo gagal dengan "no such column". */
@@ -787,9 +870,9 @@ function run_migrations(PDO $pdo): void
             . $pdo->quote($tbl))->fetchColumn();
         if ($ada === 0) continue;                    // tabel belum ada → lewati (jangan batalkan skema)
         if (!table_has_column($pdo, $tbl, 'demo_batch_id')) {
-            $pdo->exec("ALTER TABLE {$tbl} ADD COLUMN demo_batch_id TEXT");
+            $ex("ALTER TABLE {$tbl} ADD COLUMN demo_batch_id TEXT");
         }
-        $pdo->exec("CREATE INDEX IF NOT EXISTS idx_{$tbl}_demo ON {$tbl}(demo_batch_id)");
+        $ex("CREATE INDEX IF NOT EXISTS idx_{$tbl}_demo ON {$tbl}(demo_batch_id)");
     }
 
 
@@ -1039,13 +1122,57 @@ function seed_icd_dictionary(PDO $pdo, bool $force = false): int
     return $n;
 }
 
+/**
+ * Nama tabel yang dibaca dari sebuah pernyataan DDL (`CREATE TABLE` / `CREATE INDEX`).
+ * Null bila tabelnya tidak dapat dipastikan.
+ */
+function schema_statement_table(string $sql): ?string
+{
+    if (preg_match('/^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\[]?([A-Za-z_][A-Za-z0-9_]*)/i', $sql, $m)) {
+        return $m[1];
+    }
+    if (preg_match('/^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\[]?[A-Za-z_][A-Za-z0-9_]*[`"\]]?\s+ON\s+[`"\[]?([A-Za-z_][A-Za-z0-9_]*)/i', $sql, $m)) {
+        return $m[1];
+    }
+    return null;
+}
+
+/** Daftar tabel OPERASIONAL (milik berkas cabang) — dari satu sumber di db_route.php. */
+function schema_branch_table_list(): array
+{
+    if (function_exists('db_route_branch_tables')) return db_route_branch_tables();
+    /* Cadangan bila modul routing belum dimuat (urutan pemuatan berubah kelak). */
+    return ['patients', 'medical_records', 'medical_record_photos', 'appointments',
+        'appointment_treatments', 'orders', 'order_items', 'payments',
+        'inventory', 'inventory_movements', 'treatments', 'skincare_products',
+        'treatment_materials', 'suppliers', 'doctors', 'therapists', 'packages', 'package_items'];
+}
+
+/**
+ * DDL untuk sebuah ruang lingkup.
+ *
+ * • `central` → SELURUH tabel (global + operasional; tabel operasional tetap dibuat
+ *   sebagai wadah kosong supaya koneksi utama punya definisi tabel yang lengkap —
+ *   datanya sendiri hidup di berkas cabang).
+ * • `branch`  → **HANYA tabel operasional**. Tabel GLOBAL (pengguna, peran, pengaturan,
+ *   kamus ICD, biaya operasional, audit, backup, AI, dsb.) TIDAK dibuat di berkas
+ *   cabang sama sekali — itulah sumber duplikasi yang harus dibersihkan
+ *   (icd_codes 15.966 baris & settings terduplikasi di setiap cabang).
+ *   Klausa foreign key ke tabel global juga dibuang (FK antar berkas tidak didukung).
+ */
 function schema_ddl(string $scope = 'central'): array
 {
     $ddl = schema_ddl_raw();
     if ($scope !== 'branch') return $ddl;
-    /* Berkas cabang: klausa foreign key ke tabel GLOBAL dibuang supaya insert
-       tidak ditolak (FK antar berkas tidak didukung SQLite). */
-    return array_map('db_route_strip_cross_fk', $ddl);
+    $oper = array_flip(array_map('strtolower', schema_branch_table_list()));
+    $out = [];
+    foreach ($ddl as $sql) {
+        $t = schema_statement_table($sql);
+        if ($t === null) continue;                        // tidak dipastikan → jangan buat
+        if (!isset($oper[strtolower($t)])) continue;      // tabel global → bukan milik cabang
+        $out[] = db_route_strip_cross_fk($sql);
+    }
+    return $out;
 }
 
 function schema_ddl_raw(): array
@@ -1378,7 +1505,9 @@ function schema_ddl_raw(): array
 
 function seed_core(PDO $pdo): void
 {
-    $count = (int)$pdo->query('SELECT COUNT(*) FROM branches')->fetchColumn();
+    /* BERKAS CABANG tidak memiliki tabel `branches` (data global) — hitungannya
+       hanya dilakukan di central. */
+    $count = (db_schema_scope() === 'branch') ? 0 : (int)$pdo->query('SELECT COUNT(*) FROM branches')->fetchColumn();
 
     /* BERKAS CABANG: bagian GLOBAL (peran, izin, pengaturan, daftar cabang, akun
        pengguna) DILEWATI — semuanya milik basis data central dan dibaca dari sana.
@@ -1510,6 +1639,11 @@ function seed_core(PDO $pdo): void
            medis) disimpan sebagai berkas di luar basis data, jadi tanpa ini paket
            backup tidak dapat memulihkan gambarnya. */
         'backup_media_max_mb' => '40',
+        /* GAMBAR LATAR WEB (ronde 64): tautan gambar daring (tanpa unggahan) yang
+           dipilih acak setiap halaman dimuat — hemat ruang penyimpanan. */
+        'wallpaper_mode'     => 'off',           // off | login | all
+        'wallpaper_category' => 'campuran',      // campuran | kecantikan | treatment | skincare | kesehatan
+        'wallpaper_urls'     => '',              // tautan sendiri (satu per baris), kosong = bawaan tema
         // Integrasi Satu Sehat (Kemenkes). Status apa adanya: selama kredensial
         // belum diisi, sistem menampilkan "belum dikonfigurasi" dan tidak
         // mengirim/mengklaim apa pun. Verifikasi kode ICD berjalan lokal

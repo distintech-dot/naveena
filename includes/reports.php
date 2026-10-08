@@ -112,7 +112,7 @@ function report_monthly(array $f, ?int $maxMonths = 24): array
                      FROM orders o WHERE {$f['sql']} GROUP BY k ORDER BY k", $f['params']);
         $map = [];
         foreach ($rows as $r) $map[$r['k']] = $r;
-        $labels = []; $labelsFull = []; $total = []; $tr = []; $sk = []; $trx = [];
+        $labels = []; $labelsFull = []; $total = []; $tr = []; $sk = []; $pkg = []; $trx = [];
         $cursor = strtotime($ps);
         $guard = 0;
         while ($cursor <= strtotime($pe) && $guard++ < 400) {
@@ -125,6 +125,7 @@ function report_monthly(array $f, ?int $maxMonths = 24): array
             $total[] = $idx !== false ? $d['total'][$idx] : 0.0;
             $tr[]    = $idx !== false ? $d['tr'][$idx] : 0.0;
             $sk[]    = $idx !== false ? $d['sk'][$idx] : 0.0;
+            $pkg[]   = $idx !== false ? ($d['pkg'][$idx] ?? 0.0) : 0.0;
             $trx[]   = $idx !== false ? $d['trx'][$idx] : 0;
             $cursor = strtotime('+1 day', $cursor);
         }
@@ -204,10 +205,88 @@ function report_monthly(array $f, ?int $maxMonths = 24): array
     ];
 }
 
+/**
+ * RINCIAN "TOTAL PENDAPATAN" — satu sumber untuk semua keterangan grafik.
+ *
+ * Permintaan pemilik: grafik Total Pendapatan harus diberi keterangan asal
+ * angkanya. Yang benar (diverifikasi dari kode, JANGAN dikira-kira):
+ *
+ *   total = pendapatan treatment + skincare + PAKET − diskon manual − diskon member
+ *           + KODE UNIK pembayaran
+ *
+ *   • Kode unik (3 digit) memang DISIMPAN pada `orders.total` oleh order_create()
+ *     (dipakai mencocokkan mutasi transfer/QRIS), jadi ia ikut di grafik ini.
+ *     Berbeda dengan menu Keuangan yang sengaja TIDAK menghitung kode unik
+ *     sebagai omzet (lihat finance_summary()) — perbedaan ini dinyatakan pada
+ *     keterangannya supaya tidak menyesatkan.
+ *   • Baris `package_item` (isi paket) berharga 0 sehingga tidak dihitung dua kali.
+ *   • Bahan treatment tidak dijual (harga 0) sehingga tidak pernah masuk total.
+ *
+ * @return array{tr:float,sk:float,pkg:float,subtotal:float,disc:float,member_disc:float,
+ *               unique:float,before_unique:float,total:float,trx:int,selisih:float,
+ *               selisih_item:float}
+ */
+function report_income_breakdown(array $f): array
+{
+    $items = one("SELECT
+            COALESCE(SUM(CASE WHEN oi.item_type='treatment' THEN oi.subtotal ELSE 0 END),0) tr,
+            COALESCE(SUM(CASE WHEN oi.item_type='skincare'  THEN oi.subtotal ELSE 0 END),0) sk,
+            COALESCE(SUM(CASE WHEN oi.item_type='package'   THEN oi.subtotal ELSE 0 END),0) pkg
+        FROM order_items oi JOIN orders o ON o.id = oi.order_id
+        WHERE {$f['sql']}", $f['params']);
+    $ord = one("SELECT COUNT(*) trx,
+                       COALESCE(SUM(o.subtotal),0) subtotal,
+                       COALESCE(SUM(o.total),0) total,
+                       COALESCE(SUM(o.discount),0) disc,
+                       COALESCE(SUM(o.member_discount),0) member_disc,
+                       COALESCE(SUM(o.unique_code),0) uniq
+                FROM orders o WHERE {$f['sql']}", $f['params']);
+    $tr = (float)$items['tr'];
+    $sk = (float)$items['sk'];
+    $pkg = (float)$items['pkg'];
+    $subtotal = (float)$ord['subtotal'];
+    $disc = (float)$ord['disc'];
+    $memberDisc = (float)$ord['member_disc'];
+    $uniq = (float)$ord['uniq'];
+    $total = (float)$ord['total'];
+    /* `before_unique` dihitung dari SUBTOTAL transaksi (bukan jumlah baris item),
+       karena `orders.total` memang ditulis dari subtotal itu oleh order_create().
+       Selisih antara subtotal dan jumlah baris item dilaporkan terpisah
+       (`selisih_item`) — biasanya 0, dan hanya tidak nol pada data impor/lama. */
+    $sebelumUniq = round($subtotal - $disc - $memberDisc, 2);
+    return ['tr' => $tr, 'sk' => $sk, 'pkg' => $pkg, 'subtotal' => $subtotal,
+        'disc' => $disc, 'member_disc' => $memberDisc,
+        'unique' => $uniq, 'before_unique' => $sebelumUniq, 'total' => $total,
+        'trx' => (int)$ord['trx'],
+        'selisih' => round($total - $sebelumUniq, 2),
+        'selisih_item' => round($subtotal - ($tr + $sk + $pkg), 2)];
+}
+
+/**
+ * Kalimat keterangan rumus Total Pendapatan (dipakai halaman Laporan, dokumen cetak,
+ * dan PDF supaya bunyinya SAMA di semua tempat).
+ */
+function income_formula_text(): string
+{
+    return 'Total Pendapatan = pendapatan treatment + skincare + paket − diskon manual '
+        . '− diskon member + kode unik pembayaran';
+}
+
+/**
+ * Catatan tambahan yang JUJUR bila subtotal transaksi tidak sama dengan jumlah
+ * baris itemnya (hanya mungkin pada data impor/lama). Kosong bila selisihnya nol.
+ */
+function income_breakdown_note(array $inc): string
+{
+    if (abs((float)($inc['selisih_item'] ?? 0)) <= 0.5) return '';
+    return 'Catatan: pada periode ini subtotal transaksi berbeda '
+        . money((float)$inc['selisih_item']) . ' dari jumlah baris itemnya (terjadi pada data '
+        . 'impor/data lama). Grafik & total memakai SUBTOTAL transaksi, jadi angkanya tetap sah.';
+}
+
 /** Komposisi metode pembayaran. */
 function report_payment_methods(array $f): array
-{
-    return all("SELECT pm.method, COUNT(*) n, COALESCE(SUM(pm.amount),0) total
+{    return all("SELECT pm.method, COUNT(*) n, COALESCE(SUM(pm.amount),0) total
                 FROM payments pm JOIN orders o ON o.id=pm.order_id
                 WHERE pm.status='valid' AND {$f['sql']}
                 GROUP BY pm.method ORDER BY total DESC", $f['params']);
@@ -260,22 +339,24 @@ function report_daily(array $f): array
 {
     $rows = all("SELECT date(o.created_at) d, COALESCE(SUM(o.total),0) total, COUNT(DISTINCT o.id) trx,
                         COALESCE(SUM((SELECT COALESCE(SUM(oi.subtotal),0) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type='treatment')),0) tr,
-                        COALESCE(SUM((SELECT COALESCE(SUM(oi.subtotal),0) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type='skincare')),0) sk
+                        COALESCE(SUM((SELECT COALESCE(SUM(oi.subtotal),0) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type='skincare')),0) sk,
+                        COALESCE(SUM((SELECT COALESCE(SUM(oi.subtotal),0) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type='package')),0) pkg
                  FROM orders o WHERE {$f['sql']} GROUP BY d ORDER BY d", $f['params']);
     $map = [];
     foreach ($rows as $r) $map[$r['d']] = $r;
 
     $days = (int)floor((strtotime($f['pe']) - strtotime($f['ps'])) / 86400) + 1;
     $byMonth = $days > 92;   // periode panjang -> ringkas per bulan
-    $labels = []; $total = []; $tr = []; $sk = []; $trx = [];
+    $labels = []; $total = []; $tr = []; $sk = []; $pkg = []; $trx = [];
     if ($byMonth) {
         $agg = [];
         foreach ($rows as $r) {
             $k = substr($r['d'], 0, 7);
-            if (!isset($agg[$k])) $agg[$k] = ['total' => 0, 'tr' => 0, 'sk' => 0, 'trx' => 0];
+            if (!isset($agg[$k])) $agg[$k] = ['total' => 0, 'tr' => 0, 'sk' => 0, 'pkg' => 0, 'trx' => 0];
             $agg[$k]['total'] += (float)$r['total'];
             $agg[$k]['tr'] += (float)$r['tr'];
             $agg[$k]['sk'] += (float)$r['sk'];
+            $agg[$k]['pkg'] += (float)$r['pkg'];
             $agg[$k]['trx'] += (int)$r['trx'];
         }
         $cursor = strtotime(date('Y-m-01', strtotime($f['ps'])));
@@ -286,6 +367,7 @@ function report_daily(array $f): array
             $total[] = $agg[$k]['total'] ?? 0.0;
             $tr[]    = $agg[$k]['tr'] ?? 0.0;
             $sk[]    = $agg[$k]['sk'] ?? 0.0;
+            $pkg[]   = $agg[$k]['pkg'] ?? 0.0;
             $trx[]   = $agg[$k]['trx'] ?? 0;
             $cursor = strtotime('+1 month', $cursor);
         }
@@ -298,11 +380,13 @@ function report_daily(array $f): array
             $total[] = isset($map[$k]) ? (float)$map[$k]['total'] : 0.0;
             $tr[]    = isset($map[$k]) ? (float)$map[$k]['tr'] : 0.0;
             $sk[]    = isset($map[$k]) ? (float)$map[$k]['sk'] : 0.0;
+            $pkg[]   = isset($map[$k]) ? (float)$map[$k]['pkg'] : 0.0;
             $trx[]   = isset($map[$k]) ? (int)$map[$k]['trx'] : 0;
             $cursor = strtotime('+1 day', $cursor);
         }
     }
-    return ['labels' => $labels, 'total' => $total, 'tr' => $tr, 'sk' => $sk, 'trx' => $trx, 'by_month' => $byMonth];
+    return ['labels' => $labels, 'total' => $total, 'tr' => $tr, 'sk' => $sk, 'pkg' => $pkg,
+        'trx' => $trx, 'by_month' => $byMonth];
 }
 
 /**
@@ -332,6 +416,9 @@ function report_bundle_for(array $f, bool $withItems = true): array
         'monthly' => report_monthly($f),
         'methods' => report_payment_methods($f),
         'cashiers' => report_cashier_perf($f),
+        /* Rincian asal "Total Pendapatan" (dipakai keterangan grafik di halaman
+           Laporan, dokumen cetak, dan PDF — supaya bunyinya & angkanya sama). */
+        'income' => report_income_breakdown($f),
     ];
     if ($withItems) {
         $b['treatments'] = report_top_items('treatment', $f);

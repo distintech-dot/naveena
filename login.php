@@ -129,6 +129,7 @@ unset($_SESSION['deny_notice']);
 <title>Masuk · <?= e(clinic_name()) ?> Management System</title>
 <link rel="stylesheet" href="assets/css/app.css">
 <style id="themeVars"><?= theme_css() ?></style>
+<?= function_exists('wallpaper_style_tag') ? wallpaper_style_tag(true) : '' ?>
 </head>
 <body class="auth-body">
 <div class="auth-wrap">

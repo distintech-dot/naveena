@@ -28,10 +28,20 @@ function img_gd(): bool
 /** Batas ukuran & mutu dari pengaturan, dengan nilai aman bila belum diisi. */
 function img_limits(string $kind): array
 {
+    /* `biteMax` = batas UKURAN BERKAS SUMBER yang boleh diunggah (permintaan pemilik):
+       foto orang (pasien/dokter/terapis) maksimal **300 KB**, lampiran foto rekam medis
+       maksimal **500 KB**. Berkas yang lebih besar DITOLAK dengan pesan yang jelas —
+       tujuannya agar setiap foto benar-benar terkompresi maksimal dan penyimpanan hemat
+       (tidak ada berkas besar yang masuk dan baru dikompres belakangan).
+       `square` = foto dipotong otomatis menjadi **1:1** (potong tengah) supaya avatar
+       tampil konsisten bulat/kotak tanpa distorsi. */
     $map = [
-        'patient' => ['dim' => 'photo_max_patient', 'def' => 480,  'max' => 800,  'bytes' => 120 * 1024],
-        'staff'   => ['dim' => 'photo_max_staff',   'def' => 480,  'max' => 800,  'bytes' => 120 * 1024],
-        'medical' => ['dim' => 'photo_max_medical', 'def' => 1400, 'max' => 2000, 'bytes' => 600 * 1024],
+        'patient' => ['dim' => 'photo_max_patient', 'def' => 480,  'max' => 800,  'bytes' => 120 * 1024,
+            'biteMax' => 300 * 1024, 'square' => true],
+        'staff'   => ['dim' => 'photo_max_staff',   'def' => 480,  'max' => 800,  'bytes' => 120 * 1024,
+            'biteMax' => 300 * 1024, 'square' => true],
+        'medical' => ['dim' => 'photo_max_medical', 'def' => 1400, 'max' => 2000, 'bytes' => 600 * 1024,
+            'biteMax' => 500 * 1024],
         'logo'    => ['dim' => 'photo_max_logo',    'def' => 800,  'max' => 2000, 'bytes' => 400 * 1024],
         /* Background kartu member: ukuran kartu standar 85,6 × 54 mm @300dpi = 1012 × 638 px.
            `dim` memakai KUNCI setelan (string) — bukan angka — karena img_limits()
@@ -44,7 +54,27 @@ function img_limits(string $kind): array
     if ($dim > $c['max']) $dim = $c['max'];
     $q = (int)setting('photo_quality', '80');
     if ($q < 40 || $q > 95) $q = 80;
-    return ['dim' => $dim, 'quality' => $q, 'targetBytes' => (int)setting('photo_target_kb', '0') * 1024 ?: $c['bytes']];
+    return ['dim' => $dim, 'quality' => $q,
+        'targetBytes' => (int)setting('photo_target_kb', '0') * 1024 ?: $c['bytes'],
+        'biteMax' => (int)($c['biteMax'] ?? 0),
+        'square' => !empty($c['square'])];
+}
+
+/**
+ * Batas ukuran BERKAS SUMBER unggahan untuk sebuah jenis foto (byte; 0 = tanpa batas).
+ * Dipakai juga oleh formulir/halaman untuk menampilkan keterangan yang SAMA dengan
+ * aturan yang ditegakkan server (jangan pernah menulis angka batas di dua tempat).
+ */
+function img_source_max_bytes(string $kind): int
+{
+    return (int)(img_limits($kind)['biteMax'] ?? 0);
+}
+
+/** Ukuran batas dalam KB (untuk keterangan kepada pengguna). */
+function img_source_max_kb(string $kind): int
+{
+    $b = img_source_max_bytes($kind);
+    return $b > 0 ? (int)round($b / 1024) : 0;
 }
 
 /**
@@ -64,6 +94,21 @@ function img_process_upload(string $tmpPath, string $origName, string $destDir, 
     }
     $origBytes = (int)@filesize($tmpPath);
     $lim = img_limits($kind);
+
+    /* ------------------------------------------------------------------
+     * BATAS UKURAN BERKAS SUMBER (permintaan pemilik)
+     * ------------------------------------------------------------------
+     * Foto orang: maksimal 300 KB. Lampiran foto rekam medis: maksimal 500 KB.
+     * Berkas yang lebih besar DITOLAK SEBELUM diproses — jadi petugas langsung
+     * tahu harus memperkecil fotonya, dan penyimpanan tidak pernah menerima
+     * berkas besar (kompresi jadi maksimal & hemat ruang).
+     * ------------------------------------------------------------------ */
+    if ($lim['biteMax'] > 0 && $origBytes > $lim['biteMax']) {
+        $kbAsli = num(round($origBytes / 1024), 0);
+        throw new RuntimeException('Ukuran foto melebihi ' . num((int)round($lim['biteMax'] / 1024)) . ' KB — '
+            . 'berkas yang diunggah ' . $kbAsli . ' KB. Mohon perkecil/kompres fotonya terlebih dahulu '
+            . '(mis. dengan aplikasi pengolah foto atau tangkapan layar) lalu unggah kembali.');
+    }
 
     // --- Bila GD tidak ada: simpan apa adanya, tetapi batasi ukuran berkas ---
     if (!img_gd()) {
@@ -133,9 +178,22 @@ function img_process_upload(string $tmpPath, string $origName, string $destDir, 
 
     // --- Hitung ukuran tujuan (jangan pernah memperbesar) ---
     $dim = $lim['dim'];
-    $scale = min(1.0, $dim / max($sw, $sh));
-    $dw = max(1, (int)round($sw * $scale));
-    $dh = max(1, (int)round($sh * $scale));
+    /* POTONG 1:1 OTOMATIS (permintaan pemilik): untuk foto orang, bagian tengah
+       gambar diambil sebagai bujur sangkar lalu dikecilkan menjadi `dim × dim`.
+       Dengan begitu avatar selalu berbentuk sama (tidak gepeng) dan penampakan di
+       daftar, detail, dan kartu konsisten — tanpa perlu petugas memotong manual. */
+    $sq = !empty($lim['square']);
+    if ($sq) {
+        $side = min($sw, $sh);
+        $sx = (int)max(0, floor(($sw - $side) / 2));
+        $sy = (int)max(0, floor(($sh - $side) / 2));
+        $dw = $dh = min($dim, $side);
+    } else {
+        $sx = 0; $sy = 0; $side = 0;
+        $scale = min(1.0, $dim / max($sw, $sh));
+        $dw = max(1, (int)round($sw * $scale));
+        $dh = max(1, (int)round($sh * $scale));
+    }
 
     $dst = imagecreatetruecolor($dw, $dh);
     if ($hasAlpha) {
@@ -147,7 +205,11 @@ function img_process_upload(string $tmpPath, string $origName, string $destDir, 
         // latar putih supaya JPEG tidak menjadi hitam pada area transparan
         imagefilledrectangle($dst, 0, 0, $dw, $dh, imagecolorallocate($dst, 255, 255, 255));
     }
-    imagecopyresampled($dst, $src, 0, 0, 0, 0, $dw, $dh, $sw, $sh);
+    if ($sq) {
+        imagecopyresampled($dst, $src, 0, 0, $sx, $sy, $dw, $dh, $side, $side);
+    } else {
+        imagecopyresampled($dst, $src, 0, 0, 0, 0, $dw, $dh, $sw, $sh);
+    }
     imagedestroy($src);
 
     // --- Encode & cari ukuran terkecil yang masih memenuhi target ---

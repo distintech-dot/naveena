@@ -468,12 +468,8 @@ if ($mode === 'plan') {
     }
     ai_trace($id, 'standar-audit', ['areas' => $auditArea['areas'], 'wajib' => $auditArea['wajib'],
         'lampiran_gagal' => $lampiranGagal, 'gagal_baca' => $gagalBacaDetail]);
-    /* Langkah job: discovery + audit selesai → checkpoint (titik resume). */
-    ai_job_beat($id, 'discovery', 'done', ['files_found' => count($pilih), 'files_read' => count($isi)]);
-    ai_job_beat($id, 'audit', ($auditStatus === 'lengkap' ? 'done' : 'running'),
-        ['files_skipped' => count($lampiranGagal) + count($gagalBacaDetail)]);
-    ai_job_checkpoint($id, ['next_mode' => 'plan', 'tahap' => 'audit',
-        'audit_status' => $auditStatus, 'berkas_dibaca' => count($isi)]);
+    /* Langkah job (discovery + audit) dicatat SETELAH status audit dihitung —
+       lihat blok di bawah: nilai $auditStatus baru ada di sana. */
 
     /* Berkas SASARAN yang tidak ikut terkirim ke model = belum benar-benar diperiksa. */
     foreach ($sasaran as $rel) {
@@ -492,6 +488,16 @@ if ($mode === 'plan') {
         'area' => $auditArea, 'ai_ragu' => false,
     ]);
     $auditStatus = (string)$auditState['status'];
+    /* Langkah job: discovery + audit selesai → checkpoint (titik resume).
+       Ditempatkan SETELAH status audit dihitung: sebelumnya baris ini berada di atas
+       perhitungan itu sehingga $auditStatus belum ada (PHP menulis peringatan
+       "Undefined variable $auditStatus" di log pekerja, dan langkah 'audit' selalu
+       dilaporkan 'running' walau auditnya sudah lengkap). */
+    ai_job_beat($id, 'discovery', 'done', ['files_found' => count($pilih), 'files_read' => count($isi)]);
+    ai_job_beat($id, 'audit', ($auditStatus === 'lengkap' ? 'done' : 'running'),
+        ['files_skipped' => count($lampiranGagal) + count($gagalBacaDetail) + count($sasaranBermasalah)]);
+    ai_job_checkpoint($id, ['next_mode' => 'plan', 'tahap' => 'audit',
+        'audit_status' => $auditStatus, 'berkas_dibaca' => count($isi)]);
     ai_task_update($id, [
         'audit_status' => $auditStatus,
         'files_read' => json_encode($dlmTerbaca, JSON_UNESCAPED_UNICODE),

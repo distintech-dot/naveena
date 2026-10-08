@@ -55,8 +55,8 @@ $_SERVER['HTTPS'] = 'on';
    dalam `databases/`, jadi yang harus ditunjuk adalah AKARNYA (NAVEENA_DB_ROOT).
    Tanpa itu halaman pratinjau membaca basis data PRODUKSI. */
 $appDir = realpath($app) ?: $app;
-putenv('NAVEENA_DB=' . dirname($appDir) . '/naveena_data/data-identitas.sqlite');
-putenv('NAVEENA_DB_ROOT=' . dirname($appDir) . '/naveena_data');
+putenv('NAVEENA_DB=' . dirname($appDir) . '/dbroot/data-identitas.sqlite');
+putenv('NAVEENA_DB_ROOT=' . dirname($appDir) . '/dbroot');
 putenv('NAVEENA_UPLOAD_DIR=' . dirname($appDir) . '/naveena_uploads');
 putenv('NAVEENA_BACKUP_DIR=' . dirname($appDir) . '/naveena_backups');
 

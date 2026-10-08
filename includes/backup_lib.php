@@ -611,17 +611,15 @@ function backup_db_inventory(): array
     $out = [];
     /* Basis data CENTRAL — SATU-SATUNYA sumber data global/sistem pada arsitektur
        central + satu berkas per cabang.
-       JEBAKAN YANG PERNAH TERJADI (dan merusak data): di sini dulu dipakai `DB_PATH`,
-       padahal `DB_PATH` sekarang hanya JALUR IDENTITAS pemasangan (menunjuk
-       `naveena_data/data.sqlite` yang dibekukan saat pemisahan). Akibatnya paket
-       backup menyimpan berkas LAMA itu dengan label "central.sqlite", dan saat
-       paket dipulihkan berkas warisan itu MENIMPA central yang sebenarnya —
-       seluruh perubahan data global sesudah pemisahan (jejak audit, setelan, dsb.)
-       hilang. Karena itu central WAJIB diambil dari `db_central_path()`.
-       `DB_PATH` hanya dipakai sebagai cadangan bila central belum ada (pemasangan
-       lama yang belum dipisah). */
-    $centralPath = function_exists('db_central_path') ? db_central_path() : DB_PATH;
-    if (!is_file($centralPath) && is_file(DB_PATH)) $centralPath = DB_PATH;
+       JEBAKAN YANG PERNAH TERJADI (dan merusak data): di sini dulu dipakai `DB_PATH`
+       yang saat itu menunjuk berkas `naveena_data/data.sqlite` (jalur lama). Akibatnya
+       paket backup menyimpan berkas LAMA itu dengan label "central.sqlite", dan saat
+       paket dipulihkan berkas warisan itu MENIMPA central yang sebenarnya — seluruh
+       perubahan data global sesudah pemisahan (jejak audit, setelan, dsb.) hilang.
+       Karena itu central WAJIB diambil dari `db_central_path()`. */
+    /* Basis data central — SATU-SATUNYA sumber data global. Tidak ada lagi fallback
+       ke jalur lama `data.sqlite`: berkas itu sudah dihapus dari instalasi. */
+    $centralPath = db_central_path();
     $out[] = ['kind' => 'central', 'branch_id' => null, 'label' => 'central.sqlite',
         'path' => $centralPath, 'ada' => is_file($centralPath)];
     /* Basis data per cabang (arsitektur central/branch). */
@@ -913,9 +911,13 @@ function backup_create_package(string $note, ?int $userId = null, array $opts = 
     $entries = [];
     $manifest = [];
     $checks = [];
+    /* PENTING (WAL): tulis isi WAL ke berkas utama untuk central DAN setiap berkas
+       cabang SEBELUM disalin. Tanpa ini, berkas cabang yang disalin bisa kehilangan
+       transaksi terbaru (masih di `-wal`) — paket backup tampak "berhasil" tetapi
+       isinya basi. */
+    if (function_exists('db_checkpoint_all')) db_checkpoint_all();
+    elseif (function_exists('ai_db_checkpoint')) ai_db_checkpoint();
     foreach ($ada as $db) {
-        /* Basis data WAL: checkpoint dulu supaya isi terbaru ikut terbawa. */
-        if (function_exists('ai_db_checkpoint') && $db['kind'] === 'central') ai_db_checkpoint();
         $isi = @file_get_contents($db['path']);
         if ($isi === false) continue;
         $nama = 'backup/' . $db['label'];

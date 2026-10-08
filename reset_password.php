@@ -53,6 +53,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <title>Ganti Kata Sandi · <?= e(clinic_name()) ?></title>
 <link rel="stylesheet" href="assets/css/app.css">
 <style id="themeVars"><?= theme_css() ?></style>
+<?= function_exists('wallpaper_style_tag') ? wallpaper_style_tag(true) : '' ?>
 </head>
 <body class="auth-body">
 <div class="auth-wrap">

@@ -375,9 +375,13 @@ page_head('Data Pasien', 'pasien');
             <input type="hidden" name="back" value="<?= e(gp('back', '')) ?>">
             <input type="hidden" name="id" id="photoId" value="0">
             <div class="field"><label>Unggah Foto</label>
-              <input class="input" type="file" name="photo" accept="image/*" required>
-              <span class="hint">Foto otomatis diperkecil &amp; dikompres (maks <?= num((int)setting('photo_max_patient', '480')) ?> px,
-                mutu <?= e(setting('photo_quality', '80')) ?>) supaya hemat penyimpanan meski dipakai untuk ribuan pasien.</span></div>
+              <input class="input" type="file" name="photo" accept="image/*"
+                   data-max-kb="<?= img_source_max_kb('patient') ?>" required>
+              <span class="hint">JPG/PNG/WebP, <strong>maksimal <?= num(img_source_max_kb('patient')) ?> KB</strong> —
+                berkas yang lebih besar <strong>ditolak</strong> agar penyimpanan tetap hemat.
+                Foto <strong>otomatis dipotong 1:1</strong> (bagian tengah) lalu dikompres menjadi maks
+                <?= num((int)setting('photo_max_patient', '480')) ?>×<?= num((int)setting('photo_max_patient', '480')) ?> px,
+                mutu <?= e(setting('photo_quality', '80')) ?>.</span></div>
             <button class="btn btn-primary btn-sm" type="submit"><?= icon('upload') ?> Simpan Foto</button>
           </form>
           <form method="post" class="mt-1" id="photoDeleteForm" style="display:none"

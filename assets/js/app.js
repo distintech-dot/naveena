@@ -508,6 +508,71 @@
   });
 
   /* ============================================================================
+   BATAS UKURAN BERKAS YANG DIPILIH (sisi peramban) — permintaan pemilik
+   ============================================================================
+   Kolom berkas yang punya `data-max-kb` (foto pasien/dokter/terapis = 300 KB,
+   foto rekam medis = 500 KB) DIPERIKSA saat berkas dipilih. Bila ada berkas yang
+   terlalu besar: pilihannya dikosongkan (tidak diunggah) dan muncul pesan jelas
+   di bawah kolomnya. Aturan angkanya berasal dari PHP (`img_source_max_kb()`),
+   jadi tidak ada angka batas yang ditulis dua kali.
+   `data-image-only-kb="1"` dipakai kolom yang juga menerima dokumen (rekam medis):
+   batas hanya berlaku untuk berkas GAMBAR, dokumen mengikuti batas lain.
+   ========================================================================== */
+  (function () {
+    const pesan = (input, teks) => {
+      const field = input.closest('.field') || input.parentElement;
+      if (!field) return;
+      let el = field.querySelector('.file-error');
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'file-error';
+        el.setAttribute('role', 'alert');
+        field.appendChild(el);
+      }
+      el.textContent = teks;
+    };
+    const bersihkan = (input) => {
+      const field = input.closest('.field') || input.parentElement;
+      if (!field) return;
+      const el = field.querySelector('.file-error');
+      if (el) el.remove();
+    };
+    document.querySelectorAll('input[type=file][data-max-kb]').forEach((input) => {
+      input.addEventListener('change', function () {
+        bersihkan(input);
+        const maxKb = parseInt(input.getAttribute('data-max-kb'), 10);
+        if (!maxKb || !input.files || !input.files.length) return;
+        const hanyaGambar = input.getAttribute('data-image-only-kb') === '1';
+        const besar = Array.from(input.files).filter((f) => {
+          if (hanyaGambar && !/^image\//.test(f.type || '')) return false;
+          return f.size > maxKb * 1024;
+        });
+        if (!besar.length) return;
+        const daftar = besar.map((f) => f.name + ' (' + Math.round(f.size / 1024) + ' KB)').join(', ');
+        pesan(input, 'Ukuran foto melebihi ' + maxKb + ' KB: ' + daftar
+          + ' — berkas tidak diunggah. Perkecil/kompres dulu lalu pilih kembali.');
+        try { input.value = ''; } catch (e) { /* sebagian peramban menolak */ }
+        if (input.files && input.files.length) {
+          /* Peramban yang tidak mengizinkan pengosongan: jangan lanjutkan. */
+          input.setAttribute('data-too-big', '1');
+        }
+      });
+      /* Cegah formulir terkirim selagi berkasnya masih terlalu besar. */
+      const form = input.form;
+      if (form) {
+        form.addEventListener('submit', function (ev) {
+          if (input.getAttribute('data-too-big') === '1') {
+            ev.preventDefault();
+            pesan(input, 'Pilih foto lain yang lebih kecil dulu (maksimal '
+              + input.getAttribute('data-max-kb') + ' KB) sebelum menyimpan.');
+          }
+        });
+      }
+      input.addEventListener('input', () => input.removeAttribute('data-too-big'));
+    });
+  })();
+
+  /* ============================================================================
    FOTO DIPERBESAR (lightbox) — permintaan pemilik
    ============================================================================
    Foto pasien / dokter / terapis / lampiran klinis dapat DIKLIK untuk dilihat
@@ -719,6 +784,62 @@
 
     // Print buttons
     $$('[data-print]').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); window.print(); }));
+
+    /* Push GitHub memakai POST AJAX; kredensial tidak pernah dikirim ke browser. */
+    $$('[data-github-push]').forEach((button) => button.addEventListener('click', async () => {
+      const form = button.form;
+      const status = form && form.querySelector('[data-github-status]');
+      if (!form || !status) return;
+      const repo = form.querySelector('[name="github_repo"]');
+      const token = form.querySelector('[name="github_token"]');
+      if (!repo || !repo.value.trim() || !token || (!token.value.trim() && !form.querySelector('[name="github_token"]').placeholder.includes('tersimpan'))) {
+        status.className = 'alert alert-warning mt-2';
+        status.textContent = 'Simpan repository dan token GitHub terlebih dahulu.';
+        status.style.display = '';
+        return;
+      }
+      const csrf = form.querySelector('[name="_csrf"]');
+      const once = form.querySelector('[name="_once"]');
+      const body = new FormData();
+      if (csrf) body.append('_csrf', csrf.value);
+      if (once) body.append('_once', once.value);
+      /* Kolom yang baru diisi ikut dikirim supaya SATU klik sudah cukup:
+         server menyimpan pengaturan ini lebih dulu, baru menjalankan push.
+         (Dulu pengguna harus menekan "Simpan" dulu — kalau tidak, push memakai
+         setelan lama yang masih kosong dan selalu gagal.) */
+      const branch = form.querySelector('[name="github_branch"]');
+      body.append('github_repo', repo.value.trim());
+      if (branch && branch.value.trim()) body.append('github_branch', branch.value.trim());
+      if (token.value.trim()) body.append('github_token', token.value.trim());
+      button.disabled = true;
+      const label = button.textContent;
+      button.textContent = 'Memproses push…';
+      status.className = 'alert alert-info mt-2';
+      status.textContent = 'Mengirim perubahan ke GitHub…';
+      status.style.display = '';
+      window.Naveena.loading(true);
+      try {
+        const res = await fetch(button.dataset.endpoint || 'api.php?a=push_github', {
+          method: 'POST', body, credentials: 'same-origin',
+          headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' }
+        });
+        const data = await res.json();
+        if (data._once) {
+          const nextOnce = form.querySelector('[name="_once"]');
+          if (nextOnce) nextOnce.value = data._once;
+        }
+        if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+        status.className = 'alert alert-success mt-2';
+        status.textContent = data.message || 'Push GitHub berhasil.';
+      } catch (err) {
+        status.className = 'alert alert-error mt-2';
+        status.textContent = 'Push GitHub gagal: ' + (err.message || 'kesalahan tidak diketahui');
+      } finally {
+        window.Naveena.loading(false);
+        button.disabled = false;
+        button.textContent = label;
+      }
+    }));
 
     // Auto-submit filter selects
     $$('select[data-autosubmit]').forEach((s) => s.addEventListener('change', () => s.form.submit()));

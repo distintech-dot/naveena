@@ -57,6 +57,12 @@ $qty = one("SELECT
       COALESCE(SUM(CASE WHEN oi.item_type='material'  THEN oi.quantity ELSE 0 END),0) mat_qty
     FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.patient_id=? AND o.status='paid'", [$id]);
 $last = one("SELECT MAX(created_at) last FROM orders WHERE patient_id=? AND status='paid'", [$id]);
+/* INFO LEVEL MEMBER (permintaan pemilik): ditampilkan di kartu Profil Pasien tepat di
+   bawah Nomor Member. Level & akumulasi dihitung dari transaksi berstatus dibayar pada
+   periode yang berlaku (aturan yang SAMA dengan kartu member & diskon) — bukan dari
+   kolom yang bisa basi. Bila pasien belum pemegang kartu, keadaannya dinyatakan apa adanya. */
+$isMemberNow = patient_is_member($p);
+$memberInfo = $isMemberNow ? member_status($p) : null;
 
 /* ------------------------------------------------------------------ *
  * DAFTAR BERHALAMAN PER KARTU (permintaan pemilik)
@@ -225,6 +231,29 @@ function pd_period_bar(int $patientId, string $period, string $ps, string $pe): 
         <dt>Nama Lengkap</dt><dd><?= e($p['name']) ?></dd>
         <dt>No. Pasien</dt><dd><?= e($p['patient_number']) ?></dd>
         <dt>Nomor Member</dt><dd><?= e($p['member_number'] ?: '-') ?></dd>
+        <dt>Level Member</dt>
+        <dd>
+          <?php if ($memberInfo): ?>
+            <strong><?= e($memberInfo['level']['label']) ?></strong>
+            · diskon <?= num((float)$memberInfo['level']['pct'], (float)$memberInfo['level']['pct'] == (int)$memberInfo['level']['pct'] ? 0 : 1) ?>%
+            <div class="small muted">
+              Akumulasi <?= e(member_period_label()) ?>: <?= money((float)$memberInfo['year_total']) ?>
+              (<?= num((int)$memberInfo['trx']) ?> transaksi)
+              <?php if ($memberInfo['next']): ?>
+                · menuju <?= e($memberInfo['next']['label']) ?>:
+                kurang <?= money(max(0, (float)$memberInfo['next']['min_year'] - (float)$memberInfo['year_total'])) ?>
+              <?php else: ?>
+                · sudah di level tertinggi
+              <?php endif; ?>
+            </div>
+          <?php elseif (!member_card_enabled()): ?>
+            <span class="muted">fitur kartu member sedang tidak aktif</span>
+          <?php else: ?>
+            <span class="muted">belum ada kartu member</span>
+            <div class="small muted">Kartu otomatis diberikan bila transaksi ≥ <?= money(member_activate_amount()) ?>
+              atau akumulasi <?= e(member_period_label()) ?> ≥ <?= money(member_base_level()['min_year']) ?>.</div>
+          <?php endif; ?>
+        </dd>
         <dt>NIK</dt><dd><?= e($p['nik'] ?: '-') ?></dd>
         <dt>Jenis Kelamin</dt><dd><?= e($p['gender'] ?: '-') ?></dd>
         <dt>Tanggal Lahir</dt><dd><?= e($p['birth_date'] ? tgl($p['birth_date']) : '-') ?></dd>

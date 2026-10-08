@@ -288,7 +288,6 @@ function report_charts(array $B): array
     $f = $B['filters'];
     $tot = $B['totals'];
     $monthly = $B['monthly'];
-    $daily = $B['daily'];
     $out = [];
     $t = theme_current();
 
@@ -310,6 +309,27 @@ function report_charts(array $B): array
     $png = chart_line(['labels' => $monthly['labels'], 'data' => $monthly['total']],
         'Progres ' . ($monthly['granularity'] === 'harian' ? 'Harian' : 'Bulanan') . ' — Total Pendapatan');
     if ($png) $out['progres_total'] = ['title' => 'Progres Pendapatan — Total', 'png' => $png];
+
+    /* Grafik "Asal Total Pendapatan": komposisi angka total (treatment, skincare,
+       paket, diskon manual, diskon member, kode unik) — supaya keterangan rumusnya
+       JUGA terlihat pada berkas gambar (Excel/PDF/email), bukan hanya di layar. */
+    /* Fungsi rincian berasal dari reports.php; penjagaan ini menghindari fatal error
+       bila suatu saat berkas ini dipakai tanpa memuat reports.php lebih dulu. */
+    $inc = $B['income'] ?? null;
+    if ($inc === null && $f && function_exists('report_income_breakdown')) {
+        $inc = report_income_breakdown($f);
+    }
+    if ($inc) {
+        $komp = [['label' => 'Treatment', 'value' => (float)$inc['tr']],
+                 ['label' => 'Skincare', 'value' => (float)$inc['sk']]];
+        if ((float)$inc['pkg'] > 0) $komp[] = ['label' => 'Paket', 'value' => (float)$inc['pkg']];
+        if ((float)$inc['unique'] > 0) $komp[] = ['label' => 'Kode unik', 'value' => (float)$inc['unique']];
+        $png = chart_bar([
+            'labels' => array_column($komp, 'label'),
+            'series' => [['label' => 'Pendapatan', 'data' => array_column($komp, 'value')]],
+        ], 'Asal Total Pendapatan: treatment + skincare + paket - diskon - diskon member + kode unik');
+        if ($png) $out['income_breakdown'] = ['title' => 'Asal Total Pendapatan', 'png' => $png];
+    }
 
     if (!empty($monthly['branches']) && count($monthly['branches']) > 1) {
         $series = [];
@@ -355,18 +375,10 @@ function report_charts(array $B): array
         if ($png) $out['metode'] = ['title' => 'Metode Pembayaran', 'png' => $png];
     }
 
-    $png = chart_bar([
-        'labels' => $daily['labels'],
-        'series' => [
-            ['label' => 'Treatment', 'data' => $daily['tr'], 'color' => chart_hex2rgb($t['brand'])],
-            ['label' => 'Skincare', 'data' => $daily['sk'], 'color' => chart_hex2rgb($t['accent'])],
-        ],
-    ], 'Pergerakan Pendapatan — Treatment vs Skincare');
-    if ($png) $out['periode'] = ['title' => 'Pergerakan Periode — Treatment vs Skincare', 'png' => $png];
-
-    $png = chart_line(['labels' => $daily['labels'], 'data' => $daily['total']],
-        'Pergerakan Pendapatan — Total Pendapatan');
-    if ($png) $out['periode_total'] = ['title' => 'Pergerakan Periode — Total Pendapatan', 'png' => $png];
+    /* CATATAN (permintaan pemilik): pasangan grafik "Pergerakan Periode" DIHAPUS karena
+       pada periode panjang ia memakai ringkasan bulanan — sama persis dengan grafik
+       "Progres" di atas. Kini hanya ada SATU pasang grafik periode (progres), baik di
+       layar, dokumen cetak, Excel, PDF, maupun lampiran email. */
 
     $topTr = array_slice($B['treatments'] ?? [], 0, 5);
     if ($topTr) {

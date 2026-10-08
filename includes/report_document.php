@@ -23,8 +23,10 @@ function render_report_document(array $B, array $user): void
     $perTr = $B['treatments'];
     $perSk = $B['skincares'];
     $perMat = $B['materials'] ?? [];   // pemakaian bahan treatment (tidak dijual)
-    $daily = $B['daily'];
     $monthly = $B['monthly'];
+    /* Rincian asal "Total Pendapatan" — satu sumber bersama (includes/reports.php)
+       supaya keterangan di dokumen cetak sama dengan di halaman Laporan & PDF. */
+    $income = $B['income'] ?? report_income_breakdown($f);
     $methods = $B['methods'];
     $cashiers = $B['cashiers'];
     $topTr = array_slice($perTr, 0, 5);
@@ -203,10 +205,23 @@ function render_report_document(array $B, array $user): void
   </div>
   <div class="chart-grid mt-2">
     <div class="chart-card"><h3>Treatment vs Skincare per Cabang</h3><div class="cbox"><canvas id="cBranchBar" data-chart="Perbandingan Cabang"></canvas></div></div>
-    <div class="chart-card"><h3><?= $daily['by_month'] ? 'Pendapatan Bulanan' : 'Pendapatan Harian' ?> — Treatment vs Skincare</h3>
-      <div class="cbox tall"><canvas id="cDaily" data-chart="Pergerakan Treatment &amp; Skincare"></canvas></div>
+    <?php /* Dulu kartu ini memakai seri `daily` yang pada periode panjang menghasilkan
+             ringkasan BULANAN — sama persis dengan bab "Progres" di atas (duplikat).
+             Sekarang memakai seri `monthly` yang sama dengan bab 2 supaya tidak ada
+             dua grafik kembar, disertai keterangan asal angka Total Pendapatan. */ ?>
+    <div class="chart-card"><h3>Progres <?= $monthly['granularity'] === 'harian' ? 'Harian' : 'Bulanan' ?> — Treatment vs Skincare</h3>
+      <div class="cbox tall"><canvas id="cDaily" data-chart="Progres Treatment &amp; Skincare"></canvas></div>
       <h3 style="margin-top:10px">Total Pendapatan pada Periode Ini</h3>
-      <div class="cbox"><canvas id="cDailyTotal" data-chart="Pergerakan Total"></canvas></div></div>
+      <div class="cbox"><canvas id="cDailyTotal" data-chart="Progres Total"></canvas></div>
+      <p class="muted small" style="margin-top:8px">Asal angka: <strong><?= e(income_formula_text()) ?></strong>.
+        Rinciannya treatment <?= money($income['tr']) ?> + skincare <?= money($income['sk']) ?><?= $income['pkg'] > 0
+          ? ' + paket ' . money($income['pkg']) : '' ?> − diskon manual <?= money($income['disc']) ?>
+        − diskon member <?= money($income['member_disc']) ?><?= (float)$income['unique'] > 0
+          ? ' + kode unik ' . money($income['unique']) : '' ?>
+        = <strong><?= money($income['total']) ?></strong>.
+        Bahan treatment tidak dihitung (tidak dijual), isi paket tidak dihitung dua kali.
+        <?php $incNote = income_breakdown_note($income); ?>
+        <?= $incNote !== '' ? ' ' . e($incNote) : '' ?></p></div>
   </div>
   <div class="table-wrap mt-2">
     <table class="tbl">
@@ -621,10 +636,10 @@ $perMemberDoc = $B['member_usage'] ?? []; ?>
      berlipat dan garisnya keluar dari area grafik (tidak terlihat). */
   NaveenaIncome({
     bars: 'cDaily', total: 'cDailyTotal',
-    labels: <?= js_json($daily['labels']) ?>,
-    tr: <?= js_json($daily['tr']) ?>,
-    sk: <?= js_json($daily['sk']) ?>,
-    totalData: <?= js_json($daily['total']) ?>,
+    labels: <?= js_json($monthly['labels']) ?>,
+    tr: <?= js_json($monthly['tr']) ?>,
+    sk: <?= js_json($monthly['sk']) ?>,
+    totalData: <?= js_json($monthly['total']) ?>,
     trColor: SER.treatment, skColor: SER.skincare, totalColor: SER.total, totalFill: rgba(SER.total, .14),
     money: money, animation: false
   });

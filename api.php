@@ -23,6 +23,54 @@ $term = '%' . gp('q') . '%';
 $branch = is_owner_level() ? (int)gp('branch', (int)(user_branch() ?? 0)) : (int)user_branch();
 $out = ['ok' => true, 'items' => []];
 
+if ($a === 'push_github') {
+    try {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') throw new RuntimeException('Push GitHub harus dikirim dengan POST.');
+        verify_csrf();
+        if (!is_super()) deny('Push GitHub hanya dapat dijalankan oleh Super Admin.');
+        /* PENGATURAN YANG BARU DIISI LANGSUNG DIPAKAI (perbaikan keluhan "tombol Push
+           tidak bisa"): dulu pengguna harus menekan "Simpan Pengaturan GitHub" lebih
+           dulu — kalau tidak, tombol Push memakai setelan LAMA (kosong) dan gagal.
+           Sekarang kolom repository/branch/token yang ikut terkirim dari halaman
+           disimpan lebih dulu (validasinya sama dengan form Simpan), jadi SATU klik
+           pada "Push GitHub" sudah cukup. Token yang dikosongkan tidak diubah. */
+        $repoIn = trim((string)($_POST['github_repo'] ?? ''));
+        $branchIn = trim((string)($_POST['github_branch'] ?? ''));
+        $tokenIn = trim((string)($_POST['github_token'] ?? ''));
+        if ($repoIn !== '') {
+            if (!preg_match('~^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?/?$~i', $repoIn)) {
+                throw new RuntimeException('URL repository harus berupa https://github.com/pemilik/repository.');
+            }
+            set_setting('github_repo', rtrim($repoIn, '/'));
+        }
+        if ($branchIn !== '') {
+            if (!preg_match('~^[A-Za-z0-9._/-]{1,120}$~', $branchIn) || strpos($branchIn, '..') !== false) {
+                throw new RuntimeException('Nama branch GitHub tidak valid.');
+            }
+            set_setting('github_branch', $branchIn);
+        }
+        if ($tokenIn !== '') set_setting('github_token', $tokenIn);
+        require_once __DIR__ . '/includes/github_push.php';
+        $result = github_push_execute();
+        audit('Push GitHub Berhasil', 'Developer Settings', null, null,
+            ['commit' => $result['commit'], 'files' => $result['files']], 'Perubahan aplikasi dikirim ke repository GitHub');
+        echo json_encode(['ok' => true, 'message' => $result['message'], '_once' => once_token()], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $ex) {
+        http_response_code(400);
+        $error = $ex->getMessage();
+        $savedToken = (string)setting('github_token', '');
+        if ($savedToken !== '') $error = str_replace($savedToken, '[token disamarkan]', $error);
+        try {
+            audit('Push GitHub Gagal', 'Developer Settings', null, null,
+                ['error' => short_text($error, 180)], 'Push ke repository GitHub gagal');
+        } catch (Throwable $auditEx) {
+            /* Kegagalan audit tidak boleh menghilangkan respons untuk pengguna. */
+        }
+        echo json_encode(['ok' => false, 'error' => $error, '_once' => once_token()], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 try {
     switch ($a) {
         case 'patient':

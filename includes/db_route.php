@@ -29,9 +29,9 @@
  *      pemanggil → nilai `branch_id` pada pernyataan → letak barisnya (UPDATE/DELETE
  *      dicari ke seluruh berkas cabang) → cakupan akun.
  *
- * Fail-safe: bila penanda pengalihan tidak ada, seluruh fungsi di berkas ini
- * mengembalikan koneksi LAMA (`data.sqlite`) sehingga perilaku aplikasi tidak
- * berubah sama sekali. Penanda dibuat HANYA setelah migrasi data diverifikasi.
+ * ARSITEKTUR INI ADALAH SATU-SATUNYA YANG DIPAKAI: tidak ada mode "legacy", tidak ada
+ * fallback ke satu berkas `data.sqlite`, dan berkas itu sudah dihapus dari instalasi.
+ * Bila central belum ada, ia DIBUAT lalu skema diterapkan (lihat db_route_conn()).
  */
 
 /** Tabel yang hanya boleh hidup di basis data CENTRAL (data global/sistem). */
@@ -95,10 +95,9 @@ function db_route_scope_of(string $table): string
 /* ------------------------------------------------------------------ *
  * MODE: SELALU CENTRAL + SATU BASIS DATA PER CABANG
  * ------------------------------------------------------------------ *
- * Tidak ada lagi mode "legacy" (satu berkas `data.sqlite`): seluruh baca/tulis
- * aplikasi memakai central (data global/sistem) + berkas cabang (data operasional).
- * `DB_PATH` yang lama hanya tersisa sebagai JALUR IDENTITAS/gambar lama — tidak
- * pernah dibuka oleh aplikasi.
+ * Seluruh baca/tulis aplikasi memakai central (data global/sistem) + berkas cabang
+ * (data operasional). `DB_PATH` (konstanta lama) kini MENUNJUK central — tidak ada
+ * satu pun jalur yang dapat kembali ke `data.sqlite`.
  */
 
 /* ------------------------------------------------------------------ *
@@ -267,6 +266,25 @@ function db_route_attach_all(PDO $pdo): void
 }
 
 /** Cabang yang berhasil di-ATTACH pada permintaan ini: [id => alias]. */
+/**
+ * Tulis isi WAL ke berkas utama untuk SEMUA basis data: central (main) DAN setiap
+ * berkas cabang yang ter-ATTACH.
+ *
+ * KENAPA WAJIB: aplikasi memakai mode WAL, sehingga perubahan terbaru bisa masih
+ * berada di berkas `-wal` dan BELUM masuk berkas utamanya. Penyalinan berkas
+ * (backup, pratinjau, migrasi) yang hanya membaca berkas utama akan KEHILANGAN
+ * data terbaru. `PRAGMA wal_checkpoint` biasa hanya mengenai basis data `main`
+ * (central), sedangkan berkas cabang perlu `PRAGMA <alias>.wal_checkpoint`.
+ * Bug ini nyata: backup paket sempat berisi berkas cabang TANPA data terbaru.
+ */
+function db_checkpoint_all(): void
+{
+    try { db()->exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (Throwable $e) { /* lanjut */ }
+    foreach (db_route_attached() as $alias) {
+        try { db()->exec('PRAGMA ' . $alias . '.wal_checkpoint(TRUNCATE)'); } catch (Throwable $e) { /* lanjut */ }
+    }
+}
+
 function db_route_attached(): array
 {
     if (!isset($GLOBALS['DB_ROUTE_ATTACHED']) || !is_array($GLOBALS['DB_ROUTE_ATTACHED'])) {

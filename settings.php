@@ -158,6 +158,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'Ukuran tampilan diubah menjadi ' . $v . '%');
             flash('Ukuran tampilan disimpan: ' . $v . '%.');
         }
+        if ($act === 'wallpaper') {
+            /* GAMBAR LATAR WEB (permintaan pemilik): tautan gambar DARING (tanpa unggahan,
+               hemat ruang), dipilih acak setiap halaman dimuat, dengan pilihan tempat
+               pemakaian & tema gambar. */
+            if (!has_perm('settings.manage')) {
+                deny('Pengaturan gambar latar web hanya dapat diubah pemegang izin Pengaturan Sistem.');
+            }
+            $mode = (string)($_POST['wallpaper_mode'] ?? 'off');
+            if (!isset(wallpaper_modes()[$mode])) $mode = 'off';
+            $kat = (string)($_POST['wallpaper_category'] ?? 'campuran');
+            if (!isset(wallpaper_categories()[$kat])) $kat = 'campuran';
+            $urls = trim((string)($_POST['wallpaper_urls'] ?? ''));
+            $was = wallpaper_mode();
+            set_setting('wallpaper_mode', $mode);
+            set_setting('wallpaper_category', $kat);
+            set_setting('wallpaper_urls', $urls);
+            $kustom = wallpaper_custom_urls();
+            $terpakai = $kustom ? count($kustom) : count(wallpaper_default_urls($kat));
+            audit('Ubah Gambar Latar Web', 'Pengaturan', null, ['mode' => $was],
+                ['mode' => $mode, 'tema' => $kat, 'tautan' => count($kustom)],
+                'Gambar latar web (tautan daring, acak tiap halaman dimuat)');
+            $pesan = 'Pengaturan gambar latar disimpan: ' . wallpaper_modes()[$mode]
+                . ' · tema ' . wallpaper_categories()[$kat] . ' · ' . num($terpakai) . ' gambar dipakai'
+                . ($kustom ? ' (dari tautan Anda)' : ' (gambar bawaan)') . '.';
+            if ($urls !== '' && !$kustom) {
+                $pesan .= ' Catatan: tautan yang Anda isi tidak ada yang sah — hanya alamat http/https, '
+                    . 'satu tautan per baris, yang diterima.';
+                flash($pesan, 'warning');
+            } else {
+                flash($pesan);
+            }
+        }
         if ($act === 'member') {
             if (!has_perm('settings.manage')) {
                 deny('Pengaturan Kartu Member hanya dapat diubah pemegang izin Pengaturan Sistem.');
@@ -872,7 +904,19 @@ foreach ([2, 7, 12, 24] as $cgN) {
               logo berlatar putih tetap tampil di dalam kotak putih.</span></div>
             <button class="btn btn-primary btn-sm" type="submit"><?= icon('upload') ?> Simpan Logo</button>
           </form>
-          <?php if ($logoDim && !$logoCached && ($logoDim['width'] > 2000 || $logoDim['height'] > 2000)): ?>
+          <?php
+          /* JEBAKAN YANG SUDAH DIPERBAIKI: ukuran & status cache logo dihitung DI SINI
+             (sebelum tombol "Siapkan Versi Kecil" diperiksa). Dulu perhitungannya berada
+             SESUDAH pemeriksaan tombol itu sehingga variabelnya belum ada — tombol
+             tersebut tidak pernah tampil, dan PHP menulis peringatan
+             "Undefined variable $logoDim" pada setiap halaman Pengaturan dibuka. */
+          $logoPath = logo_local_path();
+          $logoDim = $logoPath !== '' ? png_dimensions((string)file_get_contents($logoPath)) : null;
+          /* Peringatan hanya bila gambar besar DAN versi kecilnya belum tersimpan
+             (cache). Bila cache sudah ada, semua dokumen memakai versi kecil itu
+             sehingga tidak ada masalah kecepatan. */
+          $logoCached = $logoPath !== '' && png_cache_exists($logoPath, 192);
+          if ($logoDim && !$logoCached && ($logoDim['width'] > 2000 || $logoDim['height'] > 2000)): ?>
           <form method="post" class="mt-1"
                 data-confirm="Siapkan versi kecil dari logo yang sudah terunggah? Proses ini memerlukan waktu sekitar 1–3 menit dan berjalan sekali saja.">
             <?= csrf_field() ?><input type="hidden" name="action" value="logo_warm">
@@ -886,15 +930,7 @@ foreach ([2, 7, 12, 24] as $cgN) {
           </form>
           <?php endif; ?>
           <div class="notice mt-2">Logo ini otomatis dipakai di sidebar, halaman login, struk, dan dokumen laporan.</div>
-          <?php
-          $logoPath = logo_local_path();
-          $logoDim = $logoPath !== '' ? png_dimensions((string)file_get_contents($logoPath)) : null;
-          /* Peringatan hanya bila gambar besar DAN versi kecilnya belum tersimpan
-             (cache). Bila cache sudah ada, semua dokumen memakai versi kecil itu
-             sehingga tidak ada masalah kecepatan. */
-          $logoCached = $logoPath !== '' && png_cache_exists($logoPath, 192);
-          if ($logoDim && !$logoCached && ($logoDim['width'] > 2000 || $logoDim['height'] > 2000)):
-          ?>
+          <?php if ($logoDim && !$logoCached && ($logoDim['width'] > 2000 || $logoDim['height'] > 2000)): ?>
             <div class="alert alert-warning mt-2">
               Logo saat ini berukuran <strong><?= num($logoDim['width']) ?>×<?= num($logoDim['height']) ?> px</strong> —
               jauh lebih besar dari yang dibutuhkan (600×600 px sudah sangat cukup). Gambar sebesar ini membuat
@@ -930,6 +966,80 @@ foreach ([2, 7, 12, 24] as $cgN) {
       <div class="modal-foot" style="border-radius:0 0 var(--radius) var(--radius)"><button class="btn btn-primary" type="submit">Simpan Identitas</button></div>
     </form>
   </div>
+
+<?php /* ================= GAMBAR LATAR WEB (ronde 64) =================
+   Permintaan pemilik: di bawah kartu Identitas Klinik, dapat mengubah gambar latar
+   web yang OTOMATIS BERUBAH setiap halaman dimuat ulang. Gambar memakai TAUTAN
+   DARING (bukan unggahan) supaya tidak memakai ruang penyimpanan aplikasi. */
+$wpMode = wallpaper_mode();
+$wpKat = wallpaper_category();
+$wpCustom = wallpaper_custom_urls();
+$wpPool = wallpaper_pool();
+$wpContoh = array_slice($wpPool, 0, 6);
+?>
+<div class="card" id="wallpaper">
+  <div class="card-head">
+    <h3>Gambar Latar Web</h3>
+    <span class="muted small">tautan gambar daring · berganti setiap halaman dimuat</span>
+  </div>
+  <form method="post">
+    <?= csrf_field() ?><input type="hidden" name="action" value="wallpaper">
+    <div class="card-body">
+      <div class="notice">
+        Gambar latar diambil dari <strong>tautan gambar daring</strong> (bukan diunggah) sehingga
+        <strong>tidak memakai ruang penyimpanan</strong> aplikasi. Setiap kali halaman dimuat ulang, gambar
+        dipilih <strong>acak</strong> dari daftar — tampilannya berganti-ganti. Bila Anda mengisi tautan
+        sendiri di bawah, tautan itulah yang dipakai.
+      </div>
+      <div class="form-grid g2 mt-2">
+        <div class="field"><label>Tampilkan Gambar Latar Di</label>
+          <select class="input" name="wallpaper_mode">
+            <?php foreach (wallpaper_modes() as $k => $v): ?>
+              <option value="<?= e($k) ?>"<?= $wpMode === $k ? ' selected' : '' ?>><?= e($v) ?></option>
+            <?php endforeach; ?>
+          </select>
+          <span class="hint">“Halaman login &amp; ubah kata sandi” = hanya pada halaman masuk, lupa kata sandi,
+            dan reset kata sandi. “Semua halaman web” juga berlaku untuk seluruh halaman aplikasi.</span></div>
+        <div class="field"><label>Tema Gambar</label>
+          <select class="input" name="wallpaper_category">
+            <?php foreach (wallpaper_categories() as $k => $v): ?>
+              <option value="<?= e($k) ?>"<?= $wpKat === $k ? ' selected' : '' ?>><?= e($v) ?></option>
+            <?php endforeach; ?>
+          </select>
+          <span class="hint">Tema menentukan kumpulan gambar bawaan (khusus Treatment, khusus Skincare, dst).
+            “Kecantikan + Treatment + Skincare” menggabungkan ketiganya.</span></div>
+        <div class="field" style="grid-column:1/-1"><label>Tautan Gambar Sendiri <span class="muted small">(opsional)</span></label>
+          <textarea class="input" name="wallpaper_urls" rows="4"
+            placeholder="https://contoh.com/gambar-1.jpg&#10;https://contoh.com/gambar-2.jpg"><?= e((string)setting('wallpaper_urls', '')) ?></textarea>
+          <span class="hint">Satu tautan per baris. Hanya alamat <strong>http/https</strong> yang diterima
+            (tautan lain diabaikan). Bila kolom ini diisi, gambar bawaan tema tidak dipakai — isi minimal
+            dua tautan agar pergantiannya terasa. Kosongkan untuk kembali memakai gambar bawaan.</span></div>
+      </div>
+      <?php if ($wpContoh): ?>
+      <div class="section-title">Contoh gambar yang dipakai sekarang
+        (<?= num(count($wpPool)) ?> gambar · <?= $wpCustom ? 'dari tautan Anda' : 'bawaan tema ' . e(wallpaper_categories()[$wpKat]) ?>)</div>
+      <div class="flex flex-wrap gap-sm">
+        <?php foreach ($wpContoh as $u): ?>
+          <img src="<?= e($u) ?>" alt="Contoh gambar latar" loading="lazy"
+               style="width:150px;height:84px;object-fit:cover;border-radius:10px;border:1px solid var(--line)">
+        <?php endforeach; ?>
+      </div>
+      <p class="muted small mt-1">Pratinjau memuat <?= num(count($wpContoh)) ?> dari <?= num(count($wpPool)) ?> gambar
+        (dimuat langsung dari sumbernya — bila tidak muncul, kemungkinan tautannya sedang tidak dapat diakses).</p>
+      <?php else: ?>
+        <div class="alert alert-warning mt-2">Belum ada gambar yang dapat dipakai pada tema ini.</div>
+      <?php endif; ?>
+      <div class="notice mt-2">
+        Gambar bawaan berasal dari <strong>Unsplash</strong> dan dipakai lewat tautan langsung ke CDN mereka
+        (gratis dipakai, tanpa mengunduh). Karena berasal dari luar, tampilannya bergantung pada koneksi
+        internet pengguna — bila ingin sepenuhnya mandiri, isi kolom tautan sendiri dengan gambar dari server Anda.
+      </div>
+    </div>
+    <div class="modal-foot" style="border-radius:0 0 var(--radius) var(--radius)">
+      <button class="btn btn-primary" type="submit"><?= icon('save') ?> Simpan Gambar Latar</button>
+    </div>
+  </form>
+</div>
 
 <?php /* CATATAN (ronde 37): dulu di sini ada </div> penutup grid 2 kolom yang
    membungkus Identitas Klinik + Pengaturan Umum. Setelah Pengaturan Umum pindah

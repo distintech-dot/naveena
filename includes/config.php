@@ -36,38 +36,20 @@ const SEQ_START = 1001001;
 const SEQ_DIGITS = 7;
 define('APP_DIR', dirname(__DIR__));
 
-/**
- * The database must live OUTSIDE the publicly served app folder — a .sqlite
- * file inside it would be downloadable as a static file by anyone who knows
- * the URL. Prefer the sibling folder (not served by the platform), keep any
- * already-existing database where it is, fall back to a writable location.
+/* ------------------------------------------------------------------ *
+ * JALUR BASIS DATA = CENTRAL + SATU BERKAS PER CABANG
+ * ------------------------------------------------------------------ *
+ * Arsitektur aplikasi ini HANYA memakai `central.sqlite` (data global/sistem) +
+ * satu `branch_XXX.sqlite` per cabang (data operasional) — lihat includes/db_route.php.
+ * Tidak ada lagi satu berkas `data.sqlite`: jalur lamanya sudah DIHAPUS dari kode
+ * supaya tidak ada satu pun jalur runtime yang dapat jatuh kembali ke sana.
+ *
+ * `DB_PATH` (konstanta lama yang masih dipakai beberapa tempat untuk
+ * "identitas pemasangan" & nama berkas kunci pekerja) kini menunjuk basis data
+ * CENTRAL — didefinisikan SETELAH modul manajer basis data dimuat (di bawah),
+ * karena jalurnya berasal dari sana.
  */
-function resolve_db_path(): string
-{
-    /* `NAVEENA_DB` = JALUR IDENTITAS pemasangan ini (dipakai skrip uji & pemeriksaan
-       "jangan sentuh basis data produksi"). Basis data aplikasi sendiri sekarang
-       adalah central + satu berkas per cabang (lihat db_store_root()). */
-    $env = getenv('NAVEENA_DB');
-    if ($env) return $env;
-    /* Bila folder penyimpanan basis data diatur (mis. oleh skrip uji), identitas
-       mengikutinya supaya tidak menunjuk folder produksi. */
-    $root = getenv('NAVEENA_DB_ROOT');
-    if ($root) return rtrim($root, '/') . '/data-identitas.sqlite';
-    $candidates = [
-        dirname(APP_DIR) . '/naveena_data/data.sqlite',
-        APP_DIR . '/data.sqlite',            // legacy location
-        APP_DIR . '/storage/data.sqlite',
-    ];
-    foreach ($candidates as $c) {
-        if (is_file($c)) return $c;
-    }
-    foreach ([dirname(APP_DIR) . '/naveena_data', APP_DIR . '/storage', APP_DIR] as $dir) {
-        if (!is_dir($dir)) @mkdir($dir, 0770, true);
-        if (is_dir($dir) && is_writable($dir)) return rtrim($dir, '/') . '/data.sqlite';
-    }
-    return $candidates[0];
-}
-define('DB_PATH', resolve_db_path());
+
 
 /**
  * AKAR PROSES TERISOLASI (pengaman anti-kontaminasi produksi).
@@ -89,7 +71,13 @@ function nv_isolated_root(): string
     if ($akar !== null) return $akar;
     $akar = '';
     $db = (string)getenv('NAVEENA_DB');
-    if ($db === '') return $akar;
+    if ($db === '') {
+        /* Sebagian skrip uji hanya mengatur folder basis data (NAVEENA_DB_ROOT).
+           Proses seperti itu juga TERISOLASI — jangan sampai dianggap pemasangan
+           terbit (penjaga produksi pada skrip seed bergantung pada nilai ini). */
+        $root = (string)getenv('NAVEENA_DB_ROOT');
+        return $root !== '' ? rtrim($root, '/') : '';
+    }
     $akar = rtrim(dirname($db), '/') . '/dbroot-' . preg_replace('/[^A-Za-z0-9_.-]/', '_', basename($db));
     if (!is_dir($akar)) @mkdir($akar, 0770, true);
     return $akar;
@@ -121,11 +109,19 @@ require_once __DIR__ . '/ai_playbook.php';
 require_once __DIR__ . '/ai.php';
 require_once __DIR__ . '/ai_jobs.php';
 require_once __DIR__ . '/db_manager.php';
+/* `DB_PATH` = basis data UTAMA pemasangan ini = central.sqlite (lihat catatan di atas). */
+define('DB_PATH', db_central_path());
 require_once __DIR__ . '/template_default.php';
+/* Gambar latar web (wallpaper daring, acak tiap halaman dimuat) — ronde 64. */
+require_once __DIR__ . '/wallpaper.php';
 require_once __DIR__ . '/db_route.php';
-require_once __DIR__ . '/db_route_migrate.php';
+/* Modul migrasi lama (`db_migrate.php` & `db_route_migrate.php`) sudah DIHAPUS:
+   keduanya hanya bertugas memindahkan data dari satu berkas `data.sqlite` yang kini
+   tidak ada lagi, dan tidak dipanggil dari mana pun setelah arsitektur central+branch
+   menjadi satu-satunya arsitektur. */
+/* Pembersih tabel GLOBAL dari berkas cabang (migrasi arsitektur central+branch). */
+require_once __DIR__ . '/branch_cleanup.php';
 require_once __DIR__ . '/db_audit.php';
-require_once __DIR__ . '/db_migrate.php';
 require_once __DIR__ . '/demo_filter.php';
 /* Keamanan login: "ingat saya", batas tidak aktif, 2FA, lupa password, dan
    kode pemulihan. Dimuat lebih awal karena penjaga sesinya dijalankan di bawah. */

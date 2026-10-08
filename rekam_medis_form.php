@@ -507,7 +507,11 @@ page_head($isNew ? 'Rekam Medis Baru' : 'Rekam Medis ' . ($rec['record_number'] 
     <?php if (!$readonly): ?>
     <div class="card-body" style="border-top:1px solid var(--line)">
       <div class="form-grid g2">
-        <div class="field"><label>Foto / Lampiran</label><input class="input" type="file" name="photos[]" multiple accept="image/*,application/pdf"></div>
+        <div class="field"><label>Foto / Lampiran</label><input class="input" type="file" name="photos[]" multiple accept="image/*,application/pdf"
+                 data-max-kb="<?= img_source_max_kb('medical') ?>" data-image-only-kb="1">
+          <span class="hint">Foto: JPG/PNG/WebP, <strong>maksimal <?= num(img_source_max_kb('medical')) ?> KB per foto</strong>
+            (berkas yang lebih besar <strong>ditolak</strong>) — foto otomatis dikompres supaya penyimpanan hemat.
+            Dokumen (PDF) dibatasi 50 MB.</span></div>
         <div class="notice">Format: JPG/PNG/WebP/PDF. Foto klinis hanya dapat diakses oleh user yang berhak melalui sistem.</div>
       </div>
     </div>
@@ -569,7 +573,11 @@ $canPhotoManage = ($mode !== 'view') && !$locked && has_perm('medical.manage');
     <?php if ($canPhotoManage): ?>
       <form method="post" enctype="multipart/form-data" class="flex flex-wrap gap-lg mt-2">
         <?= csrf_field() ?><input type="hidden" name="action" value="photo_upload"><input type="hidden" name="id" value="<?= $id ?>">
-        <div class="field"><label>Tambah Foto</label><input class="input" type="file" name="photos[]" multiple required accept="image/*"></div>
+        <div class="field"><label>Tambah Foto</label><input class="input" type="file" name="photos[]" multiple required accept="image/*"
+                 data-max-kb="<?= img_source_max_kb('medical') ?>" data-image-only-kb="1">
+          <span class="hint">JPG/PNG/WebP, <strong>maksimal <?= num(img_source_max_kb('medical')) ?> KB per foto</strong> —
+            berkas yang lebih besar ditolak. Foto otomatis dikompres (maks
+            <?= num((int)setting('photo_max_medical', '1400')) ?> px, mutu <?= e(setting('photo_quality', '80')) ?>).</span></div>
         <div class="field"><label>Keterangan</label><input class="input" name="caption" placeholder="mis. kondisi sebelum treatment">
           <span class="hint">Keterangan ini akan tampil di bawah fotonya dan ikut tersimpan di rekam medis.</span></div>
         <button class="btn btn-primary" type="submit">Upload</button>

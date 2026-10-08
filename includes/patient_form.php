@@ -62,10 +62,13 @@ function patient_form_modal(?array $edit = null, string $back = '', bool $open =
           <div class="grow">
             <div class="field"><label>Foto Profil <span class="muted small">(opsional)</span></label>
               <input class="input" type="file" name="photo" id="p_photo" accept="image/*"
+                     data-max-kb="<?= img_source_max_kb('patient') ?>"
                      onchange="nvPatientPhotoPreview(this)">
-              <span class="hint">JPG/PNG/WebP. Foto otomatis diperkecil &amp; dikompres (maks <?= num($maxPx) ?> px,
-                mutu <?= e(setting('photo_quality', '80')) ?>) supaya hemat penyimpanan. Foto yang sudah ada
-                akan diganti; dapat diklik untuk dilihat lebih besar.</span></div>
+              <span class="hint">JPG/PNG/WebP, <strong>maksimal <?= num(img_source_max_kb('patient')) ?> KB</strong>
+                (berkas yang lebih besar ditolak agar penyimpanan hemat). Foto <strong>otomatis dipotong 1:1</strong>
+                (bagian tengah) lalu dikompres menjadi maks <?= num($maxPx) ?>×<?= num($maxPx) ?> px,
+                mutu <?= e(setting('photo_quality', '80')) ?>. Foto yang sudah ada akan diganti;
+                dapat diklik untuk dilihat lebih besar.</span></div>
             <?php if ($isEdit && $photo !== ''): ?>
               <p class="muted small">Foto saat ini ditampilkan di kiri — klik untuk memperbesar.
                 Mengunggah berkas baru akan menggantinya.</p>

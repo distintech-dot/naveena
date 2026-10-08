@@ -52,7 +52,7 @@ function ai_preview_dir(int $taskId): string
 function ai_preview_db_root(int $taskId): ?string
 {
     $dir = ai_preview_dir($taskId);
-    $akar = $dir . '/naveena_data';
+    $akar = $dir . '/dbroot';
     if (!is_dir($akar)) @mkdir($akar, 0770, true);
     $tujuan = $akar . '/databases';
     $central = $tujuan . '/central.sqlite';

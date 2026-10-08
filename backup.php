@@ -141,6 +141,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             header('Location: backup.php#database');
             exit;
         }
+        if ($act === 'db_branch_cleanup') {
+            /* BERSIHKAN TABEL GLOBAL DARI BERKAS CABANG (migrasi arsitektur):
+               berkas cabang hanya boleh memuat data OPERASIONAL. Berkas buatan versi
+               lama ikut membuat tabel global (kamus ICD 15.966 baris + pengaturan di
+               setiap cabang) — tombol ini membuangnya. Snapshot pengaman dibuat lebih
+               dulu dan penghapusan DITOLAK bila ada isi yang tidak ada di central. */
+            if (!is_super()) deny('Hanya Super Admin.');
+            $laporan = branch_globals_clean();
+            if ($laporan['bersih']) {
+                flash('Berkas cabang sudah ramping — tidak ada tabel global yang perlu dibuang.');
+                header('Location: backup.php#database');
+                exit;
+            }
+            $snap = backup_create_package('Snapshot sebelum membersihkan tabel global di berkas cabang',
+                (int)$user['id'], ['enforce' => false]);
+            if (!$snap['ok']) throw new RuntimeException('Snapshot pengaman gagal dibuat: ' . $snap['error']);
+            $res = branch_global_purge(true);
+            if (!$res['ok']) throw new RuntimeException($res['error'] . ' Snapshot pengaman: ' . $snap['file']);
+            audit('Bersihkan Tabel Global di Berkas Cabang', 'Database', null,
+                ['berkas_cabang' => count($res['cabang']), 'tabel_dibuang' => (int)$res['dibuang']],
+                ['ukuran' => $res['ukuran'], 'snapshot' => $snap['file']],
+                'Duplikasi data global (kamus ICD, pengaturan, biaya operasional) dibuang dari berkas cabang');
+            flash('Berkas cabang dibersihkan: ' . num((int)$res['dibuang']) . ' tabel global dibuang · '
+                . $res['ukuran'] . '. Snapshot pengaman: ' . $snap['file'] . '.', 'success');
+            header('Location: backup.php#database');
+            exit;
+        }
         if ($act === 'db_health') {
             if (!is_super()) deny('Hanya Super Admin.');
             $h = db_health_all();
@@ -800,6 +827,34 @@ $routeRep = db_route_report();
         </form>
         <p class="muted small mt-1">Memeriksa keutuhan berkas (<code>integrity_check</code>) dan pelanggaran
           relasi (<code>foreign_key_check</code>) central + setiap cabang. Hanya memeriksa, tidak mengubah.</p>
+
+        <?php
+        /* KEADAAN BERKAS CABANG: apakah masih memuat tabel GLOBAL (duplikasi)?
+           Berkas cabang seharusnya HANYA memuat data operasional — kamus ICD,
+           pengaturan, biaya operasional, dsb. hanya ada di central. */
+        try { $bcClean = branch_globals_clean(); }
+        catch (Throwable $e) { $bcClean = ['bersih' => true, 'bermasalah' => []]; }
+        ?>
+        <div class="mt-1">
+          <?php if ($bcClean['bersih']): ?>
+            <p class="muted small"><?= icon('check') ?> <strong>Berkas cabang sudah ramping</strong> — hanya memuat data
+              operasional cabang. Tabel global (pengguna, pengaturan, kamus ICD, biaya operasional) hanya ada di central.</p>
+          <?php else: ?>
+            <div class="alert alert-warning">
+              <strong>Berkas cabang masih memuat <?= num(count($bcClean['bermasalah'])) ?> tabel GLOBAL</strong>
+              (mis. <?= e(implode(', ', array_slice($bcClean['bermasalah'], 0, 6))) ?>).
+              Data itu DUPLIKASI — tabel global seharusnya hanya ada di central, sedangkan berkas cabang hanya
+              memuat data operasional. Duplikasi ini membengkakkan berkas cabang (kamus ICD 15.966 baris per cabang).
+              <div class="mt-1">Tekan tombol di bawah untuk membuangnya: snapshot pengaman dibuat lebih dulu dan
+                penghapusan DITOLAK bila ada isi yang tidak ada di central.</div>
+            </div>
+            <form method="post" class="mt-1"
+                  data-confirm="Buang tabel GLOBAL (pengaturan, kamus ICD, biaya operasional, dst.) dari SELURUH berkas cabang? Tabel operasional (pasien, transaksi, rekam medis, stok) TIDAK disentuh. Snapshot pengaman dibuat lebih dulu.">
+              <?= csrf_field() ?><input type="hidden" name="action" value="db_branch_cleanup">
+              <button class="btn btn-primary" type="submit"><?= icon('layers') ?> Bersihkan Tabel Global di Berkas Cabang</button>
+            </form>
+          <?php endif; ?>
+        </div>
       </div>
     </div>
 

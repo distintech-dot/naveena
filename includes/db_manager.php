@@ -7,23 +7,27 @@
  * cabang OTOMATIS saat cabang baru dibuat (schema + migrasi + PRAGMA + integrity/FK +
  * registrasi + health check).
  *
- * PRINSIP AMAN (penting):
- *   1. `data.sqlite` yang ADA tetap SOURCE OF TRUTH. Mode bawaan tetap `legacy`
- *      (satu basis data) sehingga aplikasi produksi TIDAK berubah perilakunya sampai
- *      pemilik menekan TERAPKAN dan mengaktifkan mode central/branch.
- *   2. Berkas baru dibuat di folder terpisah (`storage/databases/...`) — tidak ada
- *      pemindahan/penghapusan data yang dilakukan otomatis.
+ * ARSITEKTUR YANG BERLAKU: central + satu basis data per cabang adalah SATU-SATUNYA
+ * arsitektur. Berkas tunggal `data.sqlite` sudah DIHAPUS — tidak ada mode `legacy`
+ * dan tidak ada jalur mundur.
+ *
+ * Prinsip:
+ *   1. Data GLOBAL/sistem (pengguna, peran & izin, pengaturan, cabang, kamus ICD,
+ *      biaya operasional, audit, backup, AI) hanya ada di `central.sqlite`.
+ *   2. Data OPERASIONAL cabang hanya ada di `branch_XXX.sqlite` masing-masing.
  *   3. Seluruh fungsi di sini bersifat idempoten & aman diulang.
  */
 require_once __DIR__ . '/config.php';
 
-/** Mode arsitektur basis data: `legacy` (bawaan) atau `central_branch`. */
+/**
+ * Mode arsitektur basis data. Nilainya SELALU `central_branch`.
+ *
+ * Fungsi ini dipertahankan karena pemeriksaan kesehatan basis data, laporan, dan
+ * uji otomatis membacanya — tetapi tidak ada lagi mode lain: berkas tunggal
+ * `data.sqlite` sudah dihapus dan tidak ada jalur mundur.
+ */
 function db_arch_mode(): string
 {
-    /* Arsitektur yang berlaku sekarang: central.sqlite (data global) + satu basis data
-       per cabang (data operasional). Tidak ada lagi mode "legacy" satu berkas —
-       fungsi ini dipertahankan supaya pemeriksaan/ekspor lama tetap membaca nilai
-       yang benar. */
     return 'central_branch';
 }
 
@@ -140,7 +144,7 @@ function db_branch_path(int $branchId): string
 
 /**
  * Buka koneksi SQLite dengan PRAGMA yang benar (busy_timeout, FK, WAL, synchronous).
- * Dipakai untuk basis data BARU (central/branch) — `db()` tetap untuk `data.sqlite`.
+ * Dipakai saat menyiapkan skema basis data (central atau berkas cabang).
  */
 function db_open(string $path): PDO
 {
@@ -390,7 +394,7 @@ function db_branch_purge_foreign_rows(int $branchId): array
     return $out;
 }
 
-/** Apakah berkas ini berkas basis data CABANG (bukan central/legacy)? */
+/** Apakah berkas ini berkas basis data CABANG (bukan central)? */
 function db_health_is_branch_file(string $path): bool
 {
     return strpos($path, '/databases/branches/') !== false || strpos($path, '/branches/') !== false;
@@ -577,10 +581,7 @@ function db_status_summary(): array
  * ------------------------------------------------------------------ */
 
 /**
- * Koneksi basis data untuk sebuah cabang.
- *
- * Mode `legacy`: mengembalikan koneksi utama (`db()`) — perilaku aplikasi TIDAK berubah.
- * Mode `central_branch`: membuka (dan membuat bila perlu) basis data cabang.
+ * Koneksi basis data untuk sebuah cabang (membuka, dan membuat berkasnya bila perlu).
  */
 function db_for_branch(int $branchId): PDO
 {
@@ -596,8 +597,7 @@ function db_for_branch(int $branchId): PDO
 /**
  * Koneksi operasional untuk sebuah CABANG.
  *
- * Mode `legacy` (bawaan) mengembalikan koneksi utama, sehingga perilaku aplikasi TIDAK
- * berubah. Mode `central_branch` mengembalikan basis data cabang itu.
+ * Selalu mengembalikan koneksi basis data CABANG tersebut (dibuat bila belum ada).
  *
  * Dipakai modul yang cabangnya sudah diketahui (mis. dari induk record) supaya cakupan
  * cabang EKSPLISIT dan dikenali alat audit isolasi (includes/db_audit.php).
@@ -694,8 +694,7 @@ function db_scope_check(string $sql, ?int $branchId): array
 
 /**
  * Pastikan SEMUA cabang memiliki basis data (dipanggil dari Developer Settings /
- * setelah menambah cabang). Hanya berjalan pada mode central_branch — pada mode legacy
- * fungsi ini tidak melakukan apa pun supaya produksi tidak tersentuh.
+ * setelah menambah cabang).
  *
  * @return array{ok:bool,dibuat:int,diperiksa:int,hasil:array<int,array>}
  */

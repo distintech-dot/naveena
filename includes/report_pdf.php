@@ -173,6 +173,22 @@ function report_pdf_render(MiniPdf $p, array $B, array $user, array $charts, arr
         $p->textRight($p->W - $p->margin, money($monthly['total'][$i]), 8.2, true);
         $p->gap(10.5);
     }
+    /* Keterangan ASAL ANGKA kolom "Total" di atas — supaya dokumen cetak tidak
+       menampilkan angka tanpa penjelasan (permintaan pemilik). Sumbernya sama
+       dengan halaman Laporan (report_income_breakdown). */
+    $inc = $B['income'] ?? report_income_breakdown($f);
+    $p->ensure(30);
+    $p->gap(3);
+    $p->paragraph('Catatan: ' . income_formula_text() . '.', 8.0);
+    $p->gap(1);
+    $rinci = 'Treatment ' . money($inc['tr']) . ' + Skincare ' . money($inc['sk']);
+    if ($inc['pkg'] > 0) $rinci .= ' + Paket ' . money($inc['pkg']);
+    $rinci .= ' - Diskon ' . money($inc['disc']) . ' - Diskon member ' . money($inc['member_disc']);
+    if ($inc['unique'] > 0) $rinci .= ' + Kode unik ' . money($inc['unique']);
+    $rinci .= ' = ' . money($inc['total']) . '.';
+    $p->paragraph($rinci . ' Bahan treatment tidak dihitung (tidak dijual); isi paket tidak dihitung dua kali.', 8.0);
+    $incNote = income_breakdown_note($inc);
+    if ($incNote !== '') { $p->gap(1); $p->paragraph($incNote, 8.0); }
     $p->gap(8);
 
     /* ---------- 4. Metode pembayaran ---------- */

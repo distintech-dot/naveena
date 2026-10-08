@@ -709,6 +709,11 @@ table.tbl tbody tr.o-over .qty-hint,table.tbl tbody tr.o-over .o-stock-warn{colo
   .mcard{box-shadow:none;border-color:#999}
 }
 
+/* PILIHAN BERKAS YANG DITOLAK DI SISI PERAMBAN (mis. foto melebihi batas KB).
+   Petugas langsung tahu tanpa menunggu unggahan selesai; server tetap memeriksa
+   hal yang sama (aturan sesungguhnya ada di server). */
+.field .file-error{font-size:.75rem;color:var(--danger,#c62828);font-weight:600;margin-top:4px}
+
 /* Kolom pemilih warna (<input type=color>) dibuat setinggi kontrol lain
    (minimal 40px) supaya nyaman disentuh di HP dan tidak mengecilkan tata letak. */
 .chart-color{min-height:40px;padding:4px 6px;cursor:pointer}
