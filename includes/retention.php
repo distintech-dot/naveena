@@ -199,6 +199,10 @@ function retention_targets(): array
                  'sql' => 'DELETE FROM medical_record_photos WHERE medical_record_id IN (SELECT id FROM medical_records WHERE patient_id IN ({PAT}))'],
                 ['label' => 'Rekam medis',
                  'sql' => 'DELETE FROM medical_records WHERE patient_id IN ({PAT})'],
+                /* Riwayat naik level kartu member menunjuk `patients.id` → dihapus
+                   sebelum pasiennya supaya penghapusan tidak ditolak FK. */
+                ['label' => 'Riwayat naik level member',
+                 'sql' => 'DELETE FROM member_upgrades WHERE patient_id IN ({PAT})'],
                 ['label' => 'Pasien tidak aktif',
                  'sql' => 'DELETE FROM patients WHERE id IN ({PAT})'],
             ],

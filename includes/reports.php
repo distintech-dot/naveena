@@ -52,6 +52,58 @@ function report_totals(array $f): array
         FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE {$f['sql']}", $f['params']);
     $pay = one("SELECT COALESCE(SUM(pm.amount),0) total, COUNT(*) n FROM payments pm
                 JOIN orders o ON o.id=pm.order_id WHERE pm.status='valid' AND {$f['sql']}", $f['params']);
+
+    /* ---- FAN-OUT untuk 10–15 CABANG (ronde 65) -------------------------------
+       Batas ATTACH SQLite hanya 10 basis data per koneksi (central + 9 cabang) dan
+       tidak dapat dinaikkan saat berjalan. Bila pemilik klinik membuka laporan
+       "Semua Cabang" sedangkan cabangnya lebih banyak daripada slot ATTACH, cabang
+       sisanya TIDAK terlihat oleh view — tanpa penambahan di bawah, angka laporan
+       akan tampak lebih kecil dari kenyataan (data hilang diam-diam).
+       Karena itu query yang SAMA dijalankan pada tiap cabang yang tidak ter-ATTACH
+       (satu berkas pada satu waktu, koneksi terpisah) lalu dijumlahkan DI SINI.
+       Data transaksi tidak dipindahkan ke central sama sekali. */
+    $tambahan = ['trx' => 0, 'subtotal' => 0.0, 'disc' => 0.0, 'total' => 0.0, 'member_disc' => 0.0,
+        'member_trx' => 0, 'tr' => 0.0, 'sk' => 0.0, 'pkg' => 0.0, 'tr_q' => 0.0, 'sk_q' => 0.0,
+        'pkg_q' => 0.0, 'pay_total' => 0.0, 'pay_n' => 0];
+    if (function_exists('db_route_missing_branches') && db_route_missing_branches()) {
+        $a = db_cross_sum("SELECT COUNT(*) trx, COALESCE(SUM(o.subtotal),0) subtotal,
+                                  COALESCE(SUM(o.discount),0) disc, COALESCE(SUM(o.total),0) total,
+                                  COALESCE(SUM(o.member_discount),0) member_disc,
+                                  COALESCE(SUM(CASE WHEN o.member_card = 1 THEN 1 ELSE 0 END),0) member_trx
+                           FROM orders o WHERE {$f['sql']}",
+            $f['params'], ['trx', 'subtotal', 'disc', 'total', 'member_disc', 'member_trx']);
+        $b = db_cross_sum("SELECT
+                 COALESCE(SUM(CASE WHEN oi.item_type='treatment' THEN oi.subtotal ELSE 0 END),0) tr,
+                 COALESCE(SUM(CASE WHEN oi.item_type='skincare'  THEN oi.subtotal ELSE 0 END),0) sk,
+                 COALESCE(SUM(CASE WHEN oi.item_type='package'   THEN oi.subtotal ELSE 0 END),0) pkg,
+                 COALESCE(SUM(CASE WHEN oi.item_type='treatment' THEN oi.quantity ELSE 0 END),0) tr_q,
+                 COALESCE(SUM(CASE WHEN oi.item_type='skincare'  THEN oi.quantity ELSE 0 END),0) sk_q,
+                 COALESCE(SUM(CASE WHEN oi.item_type='package'   THEN oi.quantity ELSE 0 END),0) pkg_q
+               FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE {$f['sql']}",
+            $f['params'], ['tr', 'sk', 'pkg', 'tr_q', 'sk_q', 'pkg_q']);
+        $c = db_cross_sum("SELECT COALESCE(SUM(pm.amount),0) total, COUNT(*) n FROM payments pm
+                           JOIN orders o ON o.id=pm.order_id WHERE pm.status='valid' AND {$f['sql']}",
+            $f['params'], ['total', 'n']);
+        foreach (['trx', 'subtotal', 'disc', 'total', 'member_disc', 'member_trx'] as $k) $tambahan[$k] = $a[$k];
+        foreach (['tr', 'sk', 'pkg', 'tr_q', 'sk_q', 'pkg_q'] as $k) $tambahan[$k] = $b[$k];
+        $tambahan['pay_total'] = $c['total'];
+        $tambahan['pay_n'] = (int)$c['n'];
+        $tot['trx'] = (int)$tot['trx'] + (int)$tambahan['trx'];
+        $tot['subtotal'] = (float)$tot['subtotal'] + $tambahan['subtotal'];
+        $tot['disc'] = (float)$tot['disc'] + $tambahan['disc'];
+        $tot['total'] = (float)$tot['total'] + $tambahan['total'];
+        $tot['member_disc'] = (float)$tot['member_disc'] + $tambahan['member_disc'];
+        $tot['member_trx'] = (int)$tot['member_trx'] + (int)$tambahan['member_trx'];
+        $items['tr'] = (float)$items['tr'] + $b['tr'];
+        $items['sk'] = (float)$items['sk'] + $b['sk'];
+        $items['pkg'] = (float)$items['pkg'] + $b['pkg'];
+        $items['tr_q'] = (float)$items['tr_q'] + $b['tr_q'];
+        $items['sk_q'] = (float)$items['sk_q'] + $b['sk_q'];
+        $items['pkg_q'] = (float)$items['pkg_q'] + $b['pkg_q'];
+        $pay['total'] = (float)$pay['total'] + $c['total'];
+        $pay['n'] = (int)$pay['n'] + (int)$c['n'];
+    }
+
     return [
         'trx' => (int)$tot['trx'], 'subtotal' => (float)$tot['subtotal'], 'disc' => (float)$tot['disc'],
         'total' => (float)$tot['total'], 'tr' => (float)$items['tr'], 'sk' => (float)$items['sk'],
@@ -68,25 +120,49 @@ function report_member_usage(array $f): array
 {
     /* Dikelompokkan per LEVEL + CAKUPAN diskon yang dipilih kasir pada tiap
        transaksi (both/treatment/skincare) supaya terlihat mana yang dipakai. */
-    return all("SELECT COALESCE(NULLIF(o.member_tier,''), 'Tanpa tier') tier,
+    return db_cross_group("SELECT COALESCE(NULLIF(o.member_tier,''), 'Tanpa tier') tier,
                        COALESCE(NULLIF(o.member_scope,''), 'both') scope,
                        COUNT(*) trx, COALESCE(SUM(o.member_discount),0) disc,
                        COALESCE(SUM(o.subtotal),0) subtotal
                 FROM orders o WHERE {$f['sql']} AND o.member_card = 1
-                GROUP BY tier, scope ORDER BY disc DESC", $f['params']);
+                GROUP BY tier, scope", $f['params'], ['tier', 'scope'], 'disc');
+}
+
+/**
+ * Potongan SQL: nilai item per ORDER (satu baris per `order_id`).
+ *
+ * MENGGANTIKAN subquery berkorelasi `SUM((SELECT SUM(oi.subtotal) … WHERE oi.order_id=o.id))`
+ * yang dijalankan ULANG untuk setiap baris `orders`. Terukur pada data nyata: dua rekap
+ * (per cabang & per kasir) masing-masing 109 ms + 91 ms — setelah diganti satu agregasi
+ * `order_items` + JOIN, keduanya di bawah 5 ms. Angka yang dihasilkan IDENTIK.
+ *
+ * `$pkg` hanya dipakai sebagian pemanggil (kolomnya tetap dihitung karena murah —
+ * satu agregasi yang sama).
+ */
+function report_items_join_sql(string $alias = 'oit'): string
+{
+    return "LEFT JOIN (SELECT oi2.order_id,
+                    SUM(CASE WHEN oi2.item_type='treatment' THEN oi2.subtotal ELSE 0 END) tr,
+                    SUM(CASE WHEN oi2.item_type='skincare'  THEN oi2.subtotal ELSE 0 END) sk,
+                    SUM(CASE WHEN oi2.item_type='package'   THEN oi2.subtotal ELSE 0 END) pkg
+              FROM order_items oi2 GROUP BY oi2.order_id) {$alias} ON {$alias}.order_id = o.id";
 }
 
 /** Rekap per cabang (termasuk rincian treatment & skincare). */
 function report_per_branch(array $f): array
 {
-    $rows = all("SELECT b.id branch_id, b.name, b.code,
+    /* `db_cross_group()` memastikan SELURUH cabang ikut terhitung — cabang di luar
+       batas ATTACH SQLite dilayani fan-out (satu berkas pada satu waktu) lalu
+       barisnya digabung per cabang. Tanpa ini, tabel "per cabang" kehilangan
+       cabang ke-10 dan seterusnya tanpa pesan kesalahan. */
+    return db_cross_group("SELECT b.id branch_id, b.name, b.code,
                         COUNT(DISTINCT o.id) trx, COALESCE(SUM(o.total),0) total,
                         COALESCE(SUM(o.discount),0) disc,
-                        COALESCE(SUM((SELECT COALESCE(SUM(oi.subtotal),0) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type='treatment')),0) tr,
-                        COALESCE(SUM((SELECT COALESCE(SUM(oi.subtotal),0) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type='skincare')),0) sk
-                 FROM orders o JOIN branches b ON b.id=o.branch_id
-                 WHERE {$f['sql']} GROUP BY b.id ORDER BY total DESC", $f['params']);
-    return $rows;
+                        COALESCE(SUM(oit.tr),0) tr,
+                        COALESCE(SUM(oit.sk),0) sk
+                 FROM orders o " . report_items_join_sql() . "
+                 JOIN branches b ON b.id=o.branch_id
+                 WHERE {$f['sql']} GROUP BY b.id", $f['params'], ['branch_id'], 'total');
 }
 
 /**
@@ -108,10 +184,6 @@ function report_monthly(array $f, ?int $maxMonths = 24): array
 
     if ($daily) {
         $d = report_daily($f);
-        $rows = all("SELECT date(o.created_at) k, COALESCE(SUM(o.total),0) total, COUNT(DISTINCT o.id) trx
-                     FROM orders o WHERE {$f['sql']} GROUP BY k ORDER BY k", $f['params']);
-        $map = [];
-        foreach ($rows as $r) $map[$r['k']] = $r;
         $labels = []; $labelsFull = []; $total = []; $tr = []; $sk = []; $pkg = []; $trx = [];
         $cursor = strtotime($ps);
         $guard = 0;
@@ -131,12 +203,25 @@ function report_monthly(array $f, ?int $maxMonths = 24): array
         }
         $branchesSeries = [];
         if ($f['scope'] === null) {
+            /* SATU query untuk semua cabang (bukan satu query per cabang): hasilnya
+               dikelompokkan per (cabang, tanggal) lalu disusun menjadi seri.
+               Dengan 20–30 cabang cara lama berarti 20–30 query — dan untuk cabang di
+               luar batas ATTACH hasilnya NOL karena view tidak memuatnya. */
+            $perBranchDay = db_cross_group("SELECT o.branch_id bid, date(o.created_at) d,
+                                              COALESCE(SUM(o.total),0) total
+                                       FROM orders o WHERE {$f['sql']} GROUP BY bid, d",
+                $f['params'], ['bid', 'd']);
+            $peta = [];
+            foreach ($perBranchDay as $r) $peta[(int)$r['bid']][$r['d']] = (float)$r['total'];
+            /* Urutan label HARUS sama dengan `report_daily()` (menyusuri hari dari ps s/d pe). */
+            $tanggal = [];
+            $cur = strtotime($ps);
+            $g = 0;
+            while ($cur <= strtotime($pe) && $g++ < 400) { $tanggal[] = date('Y-m-d', $cur); $cur = strtotime('+1 day', $cur); }
             foreach (branches() as $b) {
-                $bf = $f;
-                $bf['sql'] .= ' AND o.branch_id = ?';
-                $bf['params'][] = (int)$b['id'];
-                $bd = report_daily($bf);
-                $branchesSeries[$b['name']] = $bd['total'];
+                $seri = [];
+                foreach ($tanggal as $t) $seri[] = $peta[(int)$b['id']][$t] ?? 0.0;
+                $branchesSeries[$b['name']] = $seri;
             }
         }
         $granularity = 'harian';
@@ -151,15 +236,15 @@ function report_monthly(array $f, ?int $maxMonths = 24): array
         }
         if (!$months) $months = [date('Y-m', $endTs)];
 
-        $rows = all("SELECT strftime('%Y-%m', o.created_at) m, COALESCE(SUM(o.total),0) total, COUNT(DISTINCT o.id) trx
-                     FROM orders o WHERE {$f['sql']} GROUP BY m", $f['params']);
+        $rows = db_cross_group("SELECT strftime('%Y-%m', o.created_at) m, COALESCE(SUM(o.total),0) total, COUNT(DISTINCT o.id) trx
+                     FROM orders o WHERE {$f['sql']} GROUP BY m", $f['params'], ['m']);
         $byMonth = [];
         foreach ($rows as $r) $byMonth[$r['m']] = $r;
 
-        $itemRows = all("SELECT strftime('%Y-%m', o.created_at) m, oi.item_type,
+        $itemRows = db_cross_group("SELECT strftime('%Y-%m', o.created_at) m, oi.item_type,
                                 COALESCE(SUM(oi.subtotal),0) s
                          FROM order_items oi JOIN orders o ON o.id = oi.order_id
-                         WHERE {$f['sql']} GROUP BY m, oi.item_type", $f['params']);
+                         WHERE {$f['sql']} GROUP BY m, oi.item_type", $f['params'], ['m', 'item_type']);
         $items = [];
         foreach ($itemRows as $r) $items[$r['m']][$r['item_type']] = (float)$r['s'];
 
@@ -175,16 +260,17 @@ function report_monthly(array $f, ?int $maxMonths = 24): array
         }
         $branchesSeries = [];
         if ($f['scope'] === null) {
+            /* Satu query untuk SEMUA cabang (bukan satu per cabang) — cabang di luar
+               batas ATTACH tidak akan terlihat oleh view, jadi fan-out ikut dipakai. */
+            $perBranchMonth = db_cross_group("SELECT o.branch_id bid, strftime('%Y-%m', o.created_at) m,
+                                                COALESCE(SUM(o.total),0) total
+                                         FROM orders o WHERE {$f['sql']} GROUP BY bid, m",
+                $f['params'], ['bid', 'm']);
+            $peta = [];
+            foreach ($perBranchMonth as $r) $peta[(int)$r['bid']][$r['m']] = (float)$r['total'];
             foreach (branches() as $b) {
-                $bf = $f;
-                $bf['sql'] .= ' AND o.branch_id = ?';
-                $bf['params'][] = (int)$b['id'];
-                $bRows = all("SELECT strftime('%Y-%m', o.created_at) m, COALESCE(SUM(o.total),0) total
-                              FROM orders o WHERE {$bf['sql']} GROUP BY m", $bf['params']);
-                $bMap = [];
-                foreach ($bRows as $r) $bMap[$r['m']] = (float)$r['total'];
                 $series = [];
-                foreach ($months as $m) $series[] = $bMap[$m] ?? 0.0;
+                foreach ($months as $m) $series[] = $peta[(int)$b['id']][$m] ?? 0.0;
                 $branchesSeries[$b['name']] = $series;
             }
         }
@@ -286,21 +372,22 @@ function income_breakdown_note(array $inc): string
 
 /** Komposisi metode pembayaran. */
 function report_payment_methods(array $f): array
-{    return all("SELECT pm.method, COUNT(*) n, COALESCE(SUM(pm.amount),0) total
+{    return db_cross_group("SELECT pm.method, COUNT(*) n, COALESCE(SUM(pm.amount),0) total
                 FROM payments pm JOIN orders o ON o.id=pm.order_id
                 WHERE pm.status='valid' AND {$f['sql']}
-                GROUP BY pm.method ORDER BY total DESC", $f['params']);
+                GROUP BY pm.method", $f['params'], ['method'], 'total');
 }
 
 /** Kinerja per kasir (untuk perbandingan internal). */
 function report_cashier_perf(array $f): array
 {
-    return all("SELECT COALESCE(u.name, o.cashier_name, '-') nama, COUNT(DISTINCT o.id) trx,
+    return db_cross_group("SELECT COALESCE(u.name, o.cashier_name, '-') nama, COUNT(DISTINCT o.id) trx,
                        COALESCE(SUM(o.total),0) total,
-                       COALESCE(SUM((SELECT COALESCE(SUM(oi.subtotal),0) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type='treatment')),0) tr,
-                       COALESCE(SUM((SELECT COALESCE(SUM(oi.subtotal),0) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type='skincare')),0) sk
-                FROM orders o LEFT JOIN users u ON u.id = o.user_id
-                WHERE {$f['sql']} GROUP BY COALESCE(u.name, o.cashier_name) ORDER BY total DESC", $f['params']);
+                       COALESCE(SUM(oit.tr),0) tr,
+                       COALESCE(SUM(oit.sk),0) sk
+                FROM orders o " . report_items_join_sql() . "
+                LEFT JOIN users u ON u.id = o.user_id
+                WHERE {$f['sql']} GROUP BY COALESCE(u.name, o.cashier_name)", $f['params'], ['nama'], 'total');
 }
 
 /** Peringkat item (treatment / skincare) lengkap dengan kategori. */
@@ -309,14 +396,13 @@ function report_top_items(string $type, array $f, int $limit = 0): array
     $isSk = $type === 'skincare';
     $cat  = $isSk ? 's.category' : 't.category';
     $join = $isSk ? 'LEFT JOIN skincare_products s ON s.id = oi.skincare_id' : 'LEFT JOIN treatments t ON t.id = oi.treatment_id';
-    $lim  = $limit > 0 ? ' LIMIT ' . (int)$limit : '';
-    return all("SELECT oi.item_name nama, oi.item_code kode, COALESCE({$cat},'-') kategori,
+    return db_cross_group("SELECT oi.item_name nama, oi.item_code kode, COALESCE({$cat},'-') kategori,
                        COALESCE(SUM(oi.quantity),0) q, COALESCE(SUM(oi.subtotal),0) s,
                        COUNT(DISTINCT o.id) trx
                 FROM order_items oi JOIN orders o ON o.id=oi.order_id {$join}
                 WHERE {$f['sql']} AND oi.item_type = ?
-                GROUP BY oi.item_name ORDER BY s DESC{$lim}",
-        array_merge($f['params'], [$type]));
+                GROUP BY oi.item_name",
+        array_merge($f['params'], [$type]), ['nama'], 's', $limit);
 }
 
 /**
@@ -326,22 +412,22 @@ function report_top_items(string $type, array $f, int $limit = 0): array
  */
 function report_material_usage(array $f, int $limit = 0): array
 {
-    $lim = $limit > 0 ? ' LIMIT ' . (int)$limit : '';
-    return all("SELECT oi.item_name nama, oi.item_code kode, oi.material_id,
+    return db_cross_group("SELECT oi.item_name nama, oi.item_code kode, oi.material_id,
                        COALESCE(SUM(oi.quantity),0) q, COUNT(DISTINCT o.id) trx
                 FROM order_items oi JOIN orders o ON o.id = oi.order_id
                 WHERE {$f['sql']} AND oi.item_type = 'material'
-                GROUP BY oi.item_name ORDER BY q DESC{$lim}", $f['params']);
+                GROUP BY oi.item_name", $f['params'], ['nama'], 'q', $limit);
 }
 
 /** Pergerakan harian dalam rentang filter (untuk grafik garis). */
 function report_daily(array $f): array
 {
-    $rows = all("SELECT date(o.created_at) d, COALESCE(SUM(o.total),0) total, COUNT(DISTINCT o.id) trx,
-                        COALESCE(SUM((SELECT COALESCE(SUM(oi.subtotal),0) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type='treatment')),0) tr,
-                        COALESCE(SUM((SELECT COALESCE(SUM(oi.subtotal),0) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type='skincare')),0) sk,
-                        COALESCE(SUM((SELECT COALESCE(SUM(oi.subtotal),0) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type='package')),0) pkg
-                 FROM orders o WHERE {$f['sql']} GROUP BY d ORDER BY d", $f['params']);
+    $rows = db_cross_group("SELECT date(o.created_at) d, COALESCE(SUM(o.total),0) total, COUNT(DISTINCT o.id) trx,
+                        COALESCE(SUM(oit.tr),0) tr,
+                        COALESCE(SUM(oit.sk),0) sk,
+                        COALESCE(SUM(oit.pkg),0) pkg
+                 FROM orders o " . report_items_join_sql() . "
+                 WHERE {$f['sql']} GROUP BY d", $f['params'], ['d']);
     $map = [];
     foreach ($rows as $r) $map[$r['d']] = $r;
 
@@ -387,6 +473,88 @@ function report_daily(array $f): array
     }
     return ['labels' => $labels, 'total' => $total, 'tr' => $tr, 'sk' => $sk, 'pkg' => $pkg,
         'trx' => $trx, 'by_month' => $byMonth];
+}
+
+/**
+ * TOP PASIEN — SATU SUMBER ANGKA untuk SEMUA tempat.
+ *
+ * Dipakai: halaman "Top 10 Pasien", lampiran isi email laporan bulanan, dokumen
+ * cetak/PDF laporan lengkap, dan ekspor Excel/CSV. Sebelum dipusatkan di sini,
+ * keempat tempat itu memakai query masing-masing sehingga **kolomnya berbeda-beda**
+ * (ada yang menaruh JUMLAH TRANSAKSI pada kolom berlabel "Kunjungan", ada yang
+ * mencetak jumlah transaksi dua kali, dan ada yang kehilangan kolom kunjungan sama
+ * sekali) — akibatnya urutan 1–10 tampak tidak sesuai dengan angka yang tertera.
+ *
+ * URUTAN BAWAAN (KEPUTUSAN PEMILIK: peringkat menurut NILAI RUPIAH TERTINGGI):
+ *   1) **TOTAL TRANSAKSI (Rp) TERBESAR**,        ← penentu UTAMA
+ *   2) jumlah transaksi terbanyak,                ← penentu kedua
+ *   3) nama pasien A→Z  ← penentu terakhir agar hasilnya SELALU sama (tanpa ini
+ *      pasien dengan nilai sama bisa bergeser-geser sehingga daftar tampak
+ *      "salah urut").
+ *
+ * Karena itu kolom **"Total Transaksi"** diletakkan SEBELUM "Jumlah Transaksi"
+ * pada tabel (`top_patients_columns()`) supaya angka yang menentukan peringkat
+ * langsung terlihat di sebelah kiri — mudah diperiksa pemilik: nilainya selalu
+ * menurun 1 → 10.
+ * `$urut = 'transaksi'` tetap tersedia bila suatu saat ingin diurutkan menurut
+ * jumlah transaksi — satu tempat, semua pemakai ikut berubah.
+ *
+ * Cabang yang dilaporkan = cabang PASIEN (`p.branch_id`), sama dengan daftar
+ * pasien di aplikasi (sebelumnya ada tempat yang memakai cabang transaksi
+ * sehingga satu pasien bisa muncul dengan cabang berbeda).
+ *
+ * @param string $urut 'total' (bawaan: NILAI Rp TERBESAR) atau 'transaksi' (jumlah terbanyak)
+ * @return array<int,array{id:int,name:string,patient_number:string,member_number:string,
+ *                         phone:string,patient_type:string,branch_name:string,
+ *                         trx:int,visits:int,total:float,last_visit:string}>
+ */
+function report_top_patients(array $f, int $limit = 10, string $urut = 'total'): array
+{
+    $lim = $limit > 0 ? ' LIMIT ' . (int)$limit : '';
+    /* BAWAAN = NILAI TRANSAKSI TERBESAR (keputusan pemilik). Jumlah transaksi dipakai
+       sebagai penentu kedua, lalu nama pasien agar hasilnya deterministik. */
+    $order = $urut === 'transaksi' ? 'trx DESC, total DESC' : 'total DESC, trx DESC';
+    /* KUNJUNGAN memakai definisi bersama patient_visits_sql() — jumlah HARI berbeda
+       pasien datang (transaksi non-void ATAU rekam medis) — dan DIBATASI pada periode
+       yang sedang dilihat supaya sebanding dengan kolom lain (Total & Jumlah
+       Transaksi). Kartu "Total Kunjungan" di Detail Pasien tetap memakai seluruh
+       riwayat (namanya memang TOTAL). */
+    $visitsSql = patient_visits_sql('p', (string)($f['ps'] ?? ''), (string)($f['pe'] ?? ''));
+    /* `db_cross_group()`: peringkat Top 10 dihitung dari SELURUH cabang (termasuk cabang
+       di luar batas ATTACH SQLite). Urutan & pembatasan diulang setelah digabung supaya
+       urutannya tetap benar — dulu peringkatnya hanya berasal dari 9 cabang pertama. */
+    $rows = db_cross_group("SELECT p.id, p.name, p.patient_number, p.member_number, p.phone, p.patient_type,
+                       b.name AS branch_name,
+                       COUNT(DISTINCT o.id) trx,
+                       {$visitsSql} visits,
+                       COALESCE(SUM(o.total),0) total,
+                       MAX(o.created_at) last_visit
+                FROM orders o JOIN patients p ON p.id = o.patient_id
+                JOIN branches b ON b.id = p.branch_id
+                WHERE {$f['sql']}
+                GROUP BY p.id", $f['params'], ['id']);
+    usort($rows, function ($a, $b) use ($urut) {
+        if ($urut === 'transaksi') {
+            if ((int)$b['trx'] !== (int)$a['trx']) return (int)$b['trx'] <=> (int)$a['trx'];
+            if ((float)$b['total'] !== (float)$a['total']) return (float)$b['total'] <=> (float)$a['total'];
+        } else {
+            if ((float)$b['total'] !== (float)$a['total']) return (float)$b['total'] <=> (float)$a['total'];
+            if ((int)$b['trx'] !== (int)$a['trx']) return (int)$b['trx'] <=> (int)$a['trx'];
+        }
+        return strcmp((string)$a['name'], (string)$b['name']);
+    });
+    return $limit > 0 ? array_slice($rows, 0, $limit) : $rows;
+}
+
+/**
+ * KEPALA KOLOM Top Pasien — SATU definisi agar halaman, dokumen cetak, dan
+ * ekspor Excel tidak pernah menyebut kolom yang berbeda untuk data yang sama.
+ */
+function top_patients_columns(): array
+{
+    /* "Total Transaksi" (penentu peringkat) sengaja diletakkan SEBELUM "Jumlah
+       Transaksi" supaya angka yang menentukan urutan terlihat lebih dulu. */
+    return ['#', 'Nama Pasien', 'No. Member', 'Kunjungan', 'Total Transaksi', 'Jumlah Transaksi', 'Cabang'];
 }
 
 /**

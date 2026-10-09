@@ -1976,6 +1976,22 @@ function ai_prune_temp(int $simpan = 3): array
         arsort($daftar);
         $i = 0;
         foreach ($daftar as $path => $t) {
+            /* SALINAN TUGAS YANG SUDAH TIDAK ADA dibuang LEBIH DULU, tanpa ikut
+               hitungan "simpan N terbaru". Alasan: bila tiga folder terbaru kebetulan
+               semuanya milik tugas yang sudah dihapus, aturan "simpan 3" akan
+               mempertahankannya SELAMANYA (pemeriksaan tugas tidak pernah tercapai
+               karena baris `if ($i <= $simpan) continue` di bawah). Kejadian nyata:
+               156 MB salinan uji tertinggal di `naveena_ai/staging` padahal tugasnya
+               sudah tidak ada di basis data. */
+            if ($jenis === 'staging' && strpos(basename($path), 'task-') === 0) {
+                $idTugas = (int)substr(basename($path), 5);
+                if ($idTugas > 0
+                    && (string)scalar('SELECT status FROM ai_tasks WHERE id = ?', [$idTugas], '') === '') {
+                    ai_rmdir($path);
+                    $hasil[$jenis]++;
+                    continue;
+                }
+            }
             $i++;
             if ($i <= $simpan) continue;
             /* JANGAN hapus salinan yang SEDANG DIPAKAI (ronde 48).
@@ -4076,6 +4092,10 @@ function ai_status_label(string $status): array
         'blocked'    => ['Terhenti — butuh keputusan Anda', 'yellow'],
         /* RONDE 51: AI sedang memperbaiki error yang ditemukan uji (self-healing). */
         'healing'    => ['AI memperbaiki error sendiri lalu menguji ulang', 'yellow'],
+        /* RONDE 64c: pekerjaan yang dihentikan (tombol Berhenti) ATAU yang
+           terputus di tengah jalan. Tanpa label ini, kartu riwayat menampilkan
+           kata mentah "cancelled" dalam huruf kecil. */
+        'cancelled'  => ['Dihentikan — pekerjaan tidak dilanjutkan', 'gray'],
     ][$status] ?? [$status, 'gray'];
 }
 
@@ -4107,6 +4127,10 @@ function ai_workflow_status(string $status): array
         'failed'     => ['FAILED', 'Gagal', 'red', 'FAILED'],
         'rejected'   => ['REJECTED', 'Ditolak', 'gray', 'CLOSED'],
         'rolledback' => ['ROLLEDBACK', 'Dibatalkan', 'gray', 'CLOSED'],
+        /* RONDE 64c: pekerja yang dihentikan pemilik (atau terputus) — dulu jatuh ke
+           cabang bawaan sehingga lencananya berbunyi "CANCELLED" dengan label
+           "cancelled" (huruf kecil). */
+        'cancelled'  => ['CANCELLED', 'Dihentikan — tidak dilanjutkan', 'gray', 'CLOSED'],
     ];
     $p = $peta[$status] ?? [strtoupper($status), $status, 'gray', '-'];
     return ['kode' => $p[0], 'label' => $p[1], 'tone' => $p[2], 'fase' => $p[3]];

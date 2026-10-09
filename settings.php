@@ -62,7 +62,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!in_array($ext, $allowed, true)) {
                 throw new RuntimeException('Format logo harus PNG, JPG, WEBP, GIF, atau SVG.');
             }
-            if ($size > 10 * 1024 * 1024) throw new RuntimeException('Ukuran logo maksimal 10 MB.');
+            /* BATAS UKURAN LOGO (permintaan pemilik): maksimal 800 KB dan
+               angkanya diambil dari aturan yang sama dengan yang ditegakkan
+               `img_process_upload()` — jangan menulis angka batas di dua tempat. */
+            $logoMax = img_source_max_bytes('logo');
+            if ($logoMax > 0 && $size > $logoMax) {
+                throw new RuntimeException('Ukuran logo melebihi ' . num((int)round($logoMax / 1024)) . ' KB — '
+                    . 'berkas yang diunggah ' . num((int)round($size / 1024)) . ' KB. Mohon perkecil berkasnya '
+                    . 'lalu unggah kembali.');
+            }
             $oldFile = (string)setting('logo_file');
             $oldUrl  = (string)setting('logo_url');
 
@@ -479,8 +487,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!in_array($ext, ['png', 'jpg', 'jpeg', 'webp'], true)) {
                 throw new RuntimeException('Gambar QRIS harus PNG, JPG, atau WEBP.');
             }
-            if ((int)$_FILES['qris']['size'] > 5 * 1024 * 1024) throw new RuntimeException('Ukuran gambar QRIS maksimal 5 MB.');
-            $res = img_process_upload((string)$_FILES['qris']['tmp_name'], $name, local_upload_dir(), 'qris', 'logo');
+            /* Batas sama dengan logo (800 KB) dan disimpan sebagai PNG agar kode QR
+               tetap tajam untuk dipindai (lihat img_limits()). */
+            $qrisMax = img_source_max_bytes('qris');
+            if ($qrisMax > 0 && (int)$_FILES['qris']['size'] > $qrisMax) {
+                throw new RuntimeException('Ukuran gambar QRIS melebihi ' . num((int)round($qrisMax / 1024)) . ' KB — '
+                    . 'berkas yang diunggah ' . num((int)round((int)$_FILES['qris']['size'] / 1024)) . ' KB. '
+                    . 'Mohon perkecil berkasnya lalu unggah kembali.');
+            }
+            $res = img_process_upload((string)$_FILES['qris']['tmp_name'], $name, local_upload_dir(), 'qris', 'qris');
             $oldQris = (string)setting('pay_qris_file');
             if ($oldQris !== '' && $oldQris !== $res['file']) {
                 $oldPath = local_upload_dir() . '/' . basename($oldQris);
@@ -900,8 +915,10 @@ foreach ([2, 7, 12, 24] as $cgN) {
             <?= csrf_field() ?><input type="hidden" name="action" value="logo">
             <div class="field"><label>Unggah Logo Baru</label>
               <input class="input" type="file" name="logo" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" required>
-              <span class="hint">PNG/JPG/WEBP/SVG, maksimal 5 MB. Disarankan PNG <strong>latar transparan</strong> agar rapi di sidebar berwarna —
-              logo berlatar putih tetap tampil di dalam kotak putih.</span></div>
+              <span class="hint">PNG/JPG/WEBP/SVG, maksimal <strong><?= num(img_source_max_kb('logo')) ?> KB</strong>
+              (berkas lebih besar ditolak). Disarankan PNG <strong>latar transparan</strong> agar rapi di sidebar berwarna —
+              logo berlatar putih tetap tampil di dalam kotak putih. Gambar dikecilkan otomatis
+              <strong>secukupnya saja</strong> (paling banyak 30%) supaya tetap tajam saat dicetak.</span></div>
             <button class="btn btn-primary btn-sm" type="submit"><?= icon('upload') ?> Simpan Logo</button>
           </form>
           <?php
@@ -1440,7 +1457,10 @@ $payInfo = pay_clinic_info();
         <form method="post" enctype="multipart/form-data" class="flex gap-sm flex-wrap" style="align-items:flex-end">
           <?= csrf_field() ?><input type="hidden" name="action" value="qris">
           <div class="field"><label>Unggah Gambar QRIS</label>
-            <input class="input input-sm" type="file" name="qris" accept="image/png,image/jpeg,image/webp" required></div>
+            <input class="input input-sm" type="file" name="qris" accept="image/png,image/jpeg,image/webp" required>
+            <span class="hint">PNG/JPG/WEBP, maksimal <strong><?= num(img_source_max_kb('qris')) ?> KB</strong>
+            (berkas lebih besar ditolak). Disimpan sebagai PNG dan dikecilkan secukupnya (paling banyak 30%)
+            supaya kode QR tetap tajam saat dipindai pasien.</span></div>
           <button class="btn btn-sm btn-primary" type="submit">Unggah QRIS</button>
         </form>
         <?php if ($payInfo['qris_file'] !== ''): ?>

@@ -60,6 +60,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $ok = twofa_check_totp($u, $kode);
         }
         if ($ok) {
+            /* LOGIN MANAGEMENT: perangkat yang diblokir DITOLAK juga di tahap 2FA
+               (kalau tidak, blokir perangkat bisa dilewati dengan lolos kata sandi). */
+            $blk = '';
+            try { $blk = device_blocked_reason((int)$u['id']); } catch (Throwable $e) { $blk = ''; }
+            if ($blk !== '') {
+                audit('Login 2FA Ditolak (perangkat diblokir)', 'Auth', (int)$u['id'], null, null, $blk);
+                $err = $blk;
+                $ok = false;
+            }
+        }
+        if ($ok) {
             /* Kode benar → sesi penuh dijalankan. */
             session_regenerate_id(true);
             $_SESSION['user_id'] = (int)$u['id'];
@@ -68,6 +79,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             q("UPDATE users SET last_login = datetime('now','localtime') WHERE id = ?", [(int)$u['id']]);
             audit('Login 2FA', 'Auth', (int)$u['id'], null, ['metode' => $metode],
                 'Verifikasi 2 langkah berhasil (' . $metode . ')');
+            /* LOGIN MANAGEMENT: catat sesi setelah verifikasi 2 langkah berhasil. */
+            try { session_register((int)$u['id'], '2fa' . (($metode ?? '') !== '' ? '/' . $metode : '')); } catch (Throwable $e) { /* abaikan */ }
             /* Halaman tujuan (bila pengguna diarahkan ke halaman masuk karena
                sesinya berakhir saat membuka halaman tertentu). */
             $tujuan = trim((string)($_SESSION['login_next'] ?? ''));
@@ -104,7 +117,7 @@ unset($_SESSION['logout_notice']);
 <html lang="id">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover">
 <title>Verifikasi 2 Langkah · <?= e(clinic_name()) ?></title>
 <link rel="stylesheet" href="assets/css/app.css">
 <style id="themeVars"><?= theme_css() ?></style>

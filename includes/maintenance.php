@@ -14,10 +14,65 @@
  * sehingga tidak ada halaman yang bisa "lolos" hanya karena lupa diperiksa.
  */
 
-/** Apakah mode pemeliharaan sedang aktif? */
+/** Apakah mode pemeliharaan sedang aktif? (SAKELAR UTAMA — lihat cakupannya) */
 function maintenance_on(): bool
 {
     return setting('maintenance_mode') === '1';
+}
+
+/* ------------------------------------------------------------------ *
+ * CAKUPAN PEMELIHARAAN: GLOBAL ATAU SATU CABANG
+ * ------------------------------------------------------------------ *
+ * Permintaan pemilik: pemeliharaan dapat dibatasi pada SATU cabang (mis. hanya
+ * Kaliwungu yang sedang diperbaiki) atau berlaku GLOBAL untuk semua cabang.
+ * Setelan `maintenance_branch` menyimpan: '' / '0' = GLOBAL (semua cabang),
+ * atau id cabang. Daftar cabangnya dibaca langsung dari tabel `branches()`
+ * sehingga **cabang baru otomatis muncul** di pemilih tanpa perubahan kode.
+ * ------------------------------------------------------------------ */
+
+/** Id cabang yang sedang dipelihara; 0 = GLOBAL (semua cabang). */
+function maintenance_branch_id(): int
+{
+    $v = (int)setting('maintenance_branch', '0');
+    return $v > 0 ? $v : 0;
+}
+
+/** Nama cabang yang dipelihara ('' bila global/cabang tidak ditemukan). */
+function maintenance_branch_name(): string
+{
+    $b = maintenance_branch_id();
+    if ($b <= 0) return '';
+    return (string)scalar('SELECT name FROM branches WHERE id = ?', [$b], '');
+}
+
+/** Keterangan cakupan untuk ditampilkan ("Semua cabang" / nama cabang). */
+function maintenance_scope_text(): string
+{
+    $b = maintenance_branch_id();
+    if ($b <= 0) return 'Semua Cabang (global)';
+    $n = maintenance_branch_name();
+    return $n !== '' ? $n : ('Cabang #' . $b);
+}
+
+/**
+ * Apakah mode pemeliharaan BERLAKU bagi pengguna ini?
+ *
+ *   • sakelar utama mati → tidak berlaku untuk siapa pun;
+ *   • cakupan GLOBAL → berlaku untuk semua (Super Admin tetap bebas);
+ *   • cakupan SATU CABANG → berlaku bagi pengguna yang dipin ke cabang itu
+ *     (termasuk pemilik yang sedang memilih cabang tersebut lewat pemilih cabang).
+ *     Pengguna lintas cabang yang sedang melihat "Semua Cabang" TIDAK dibatasi,
+ *     supaya pekerjaan cabang lain tetap dapat berjalan.
+ */
+function maintenance_applies_to(?array $u = null): bool
+{
+    if (!maintenance_on()) return false;
+    $b = maintenance_branch_id();
+    if ($b <= 0) return true;
+    $u = $u ?: current_user();
+    if (!$u) return false;                                  // pengunjung belum login
+    $ub = function_exists('user_branch') ? user_branch($u) : (int)($u['branch_id'] ?? 0);
+    return $ub !== null && (int)$ub === $b;
 }
 
 /** Isi pengumuman pemeliharaan (judul, pesan, perkiraan selesai, kontak). */
@@ -44,7 +99,8 @@ function maintenance_readonly(?array $u = null): bool
     if (!maintenance_on()) return false;
     $u = $u ?: current_user();
     if ($u && ($u['role_code'] ?? '') === 'super_admin') return false;
-    return true;
+    /* Cakupan per cabang: hanya pengguna cabang itu yang dibatasi. */
+    return maintenance_applies_to($u);
 }
 
 /** Halaman (dan daftar aksi) yang tetap boleh diakses saat pemeliharaan. */
@@ -101,6 +157,8 @@ function maintenance_gate(): void
     if (!maintenance_on()) return;
     $u = current_user();
     if ($u && ($u['role_code'] ?? '') === 'super_admin') return;   // Super Admin bebas
+    /* Cakupan per cabang: cabang lain tetap dapat bekerja seperti biasa. */
+    if (!maintenance_applies_to($u)) return;
 
     $script = basename((string)($_SERVER['SCRIPT_NAME'] ?? ''));
     if (in_array($script, maintenance_allowed_scripts(), true)) return;
@@ -186,6 +244,13 @@ function maintenance_page(string $reason = '', int $code = 503): void
 
     <div class="maint-grid">
       <div class="maint-box">
+        <div class="maint-box-h">Cakupan</div>
+        <div class="maint-box-v"><?= e(maintenance_scope_text()) ?></div>
+        <div class="maint-box-s"><?= maintenance_branch_id() > 0
+            ? 'Pemeliharaan hanya untuk cabang ini — cabang lain tetap dapat bekerja.'
+            : 'Berlaku untuk seluruh cabang.' ?></div>
+      </div>
+      <div class="maint-box">
         <div class="maint-box-h">Dimulai</div>
         <div class="maint-box-v"><?= e($info['started'] !== '' ? tgl($info['started'], true) : '-') ?></div>
       </div>
@@ -257,7 +322,11 @@ function maintenance_page(string $reason = '', int $code = 503): void
   setInterval(function () {
     fetch('api.php?a=maintenance_status', { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
       .then(function (r) { return r.json(); })
-      .then(function (d) { if (d && d.maintenance === false) location.href = target; })
+      .then(function (d) {
+        /* Lepas pengguna bila mode dimatikan ATAU cakupannya tidak lagi berlaku
+           untuknya (mis. pemeliharaan dipindah ke cabang lain). */
+        if (d && (d.maintenance === false || d.applies === false)) location.href = target;
+      })
       .catch(function () {});
   }, 60000);
   <?php endif; ?>

@@ -33,11 +33,12 @@ function monthly_report_data(string $month = ''): array
     $methods = report_payment_methods($f);
     $treatments = report_top_items('treatment', $f, 10);
     $skincares = report_top_items('skincare', $f, 10);
+    $patients = report_top_patients($f, 10);
 
     return [
         'month' => $month, 'first' => $first, 'last' => $last,
         'totals' => $tot, 'branches' => $branches, 'methods' => $methods,
-        'treatments' => $treatments, 'skincares' => $skincares,
+        'treatments' => $treatments, 'skincares' => $skincares, 'patients' => $patients,
     ];
 }
 
@@ -80,22 +81,47 @@ function monthly_report_email(string $month = ''): array
         . '</strong> untuk periode <strong>' . e(tglIndo($d['first'])) . ' — ' . e(tglIndo($d['last'])) . '</strong>.</p>';
     $html = email_wrap_html('Laporan Bulanan ' . tglIndo($d['first']), $body, $rows);
 
-    // Top 5 treatment & skincare
-    $topTr = array_slice($d['treatments'], 0, 5);
-    $topSk = array_slice($d['skincares'], 0, 5);
+    /* Rincian yang dilampirkan di isi email: **TOP 10 PASIEN** (permintaan pemilik —
+       bagian "Top 5 Treatment" & "Top 5 Skincare" di bagian bawah DIGANTI, karena
+       rincian treatment/skincare sudah tersedia lebih lengkap di lampiran PDF/Excel
+       dan yang lebih berguna dilihat cepat dari email adalah pasien teratas). */
     $extra = '';
-    if ($topTr) {
-        $extra .= '<h3 style="font-size:14px;color:' . theme_current()['brand'] . ';margin-top:22px">Top 5 Treatment</h3><ol style="font-size:13px;padding-left:20px">';
-        foreach ($topTr as $r) $extra .= '<li>' . e($r['nama']) . ' — ' . qty_text($r['q']) . 'x · <strong>' . money($r['s']) . '</strong></li>';
-        $extra .= '</ol>';
-    }
-    if ($topSk) {
-        $extra .= '<h3 style="font-size:14px;color:' . theme_current()['brand'] . ';margin-top:18px">Top 5 Skincare</h3><ol style="font-size:13px;padding-left:20px">';
-        foreach ($topSk as $r) $extra .= '<li>' . e($r['nama']) . ' — ' . qty_text($r['q']) . 'x · <strong>' . money($r['s']) . '</strong></li>';
-        $extra .= '</ol>';
+    $topPx = array_slice(array_values($d['patients'] ?? []), 0, 10);
+    if ($topPx) {
+        $extra .= '<h3 style="font-size:14px;color:' . theme_current()['brand'] . ';margin-top:22px">Top 10 Pasien</h3>'
+            . '<p style="font-size:12px;color:#6B5A65;margin:0 0 6px">Diurutkan dari total transaksi (Rp) terbesar.</p>'
+            . '<table cellpadding="6" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;font-size:13px">'
+            /* Urutan kolom MENGIKUTI tabel di aplikasi: Total Transaksi (penentu
+               peringkat) lebih dulu, lalu Jumlah Transaksi. */
+            . '<tr style="background:#F7F7F9"><th align="left">Pasien</th><th align="right">Kunjungan</th>'
+            . '<th align="right">Total Transaksi</th><th align="right">Jumlah Transaksi</th></tr>';
+        foreach ($topPx as $r) {
+            $extra .= '<tr>'
+                . '<td style="border-bottom:1px solid #EDEDED">' . e((string)$r['name'])
+                . '<span style="color:#6B5A65"> · ' . e((string)$r['patient_number']) . '</span></td>'
+                . '<td align="right" style="border-bottom:1px solid #EDEDED">' . num((int)$r['visits']) . '</td>'
+                . '<td align="right" style="border-bottom:1px solid #EDEDED"><strong>' . money((float)$r['total']) . '</strong></td>'
+                . '<td align="right" style="border-bottom:1px solid #EDEDED">' . num((int)$r['trx']) . '</td>'
+                . '</tr>';
+        }
+        $extra .= '</table>';
     }
     if ($extra !== '') {
-        $html = str_replace('</div></div>', $extra . '</div></div>', $html);
+        /* PENTING: blok tambahan disisipkan pada kemunculan TERAKHIR `</div></div>`
+           saja. Sebelumnya memakai `str_replace()` yang mengganti SEMUA kemunculan,
+           sehingga daftar pasien tampil BERKALI-KALI di dalam satu email (pemilik
+           melihat "isi masih ada yang sama" di pratinjau). */
+        /* Sisipkan SEBELUM catatan kaki ("Dikirim otomatis oleh …") supaya bacanya
+           runtut: ringkasan → per cabang → metode bayar → Top 10 Pasien → catatan kaki.
+           Bila penandanya tidak ditemukan, jatuh ke sebelum penutup terakhir. */
+        $kaki = '<p style="font-size:12px;color:#6B5A65';
+        $pos = strrpos($html, $kaki);
+        if ($pos === false) $pos = strrpos($html, '</div></div>');
+        if ($pos !== false) {
+            $html = substr($html, 0, $pos) . $extra . substr($html, $pos);
+        } else {
+            $html .= $extra;
+        }
     }
 
     return [

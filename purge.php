@@ -39,6 +39,11 @@ function purge_specs(): array
                 ['label' => 'Transaksi', 'sql' => 'DELETE FROM orders WHERE patient_id IN (SELECT id FROM patients{BR})'],
                 ['label' => 'Foto rekam medis', 'sql' => 'DELETE FROM medical_record_photos WHERE medical_record_id IN (SELECT id FROM medical_records WHERE patient_id IN (SELECT id FROM patients{BR}))'],
                 ['label' => 'Rekam medis', 'sql' => 'DELETE FROM medical_records WHERE patient_id IN (SELECT id FROM patients{BR})'],
+                /* RIWAYAT NAIK LEVEL KARTU MEMBER (ronde 64d) menunjuk `patients.id`,
+                   jadi WAJIB dihapus sebelum pasiennya — tanpa itu seluruh transaksi
+                   penghapusan DIBATALKAN dengan "FOREIGN KEY constraint failed" dan
+                   data tidak terhapus walau pratinjau menunjukkan ada yang akan dihapus. */
+                ['label' => 'Riwayat naik level member', 'sql' => 'DELETE FROM member_upgrades WHERE patient_id IN (SELECT id FROM patients{BR})'],
                 ['label' => 'Pasien', 'sql' => 'DELETE FROM patients{BR}'],
             ],
         ],
@@ -149,6 +154,9 @@ function purge_specs(): array
                 ['label' => 'Paket treatment & produk', 'sql' => 'DELETE FROM packages'],
                 ['label' => 'Pembayaran', 'sql' => 'DELETE FROM payments'],
                 ['label' => 'Transaksi', 'sql' => 'DELETE FROM orders'],
+                /* Riwayat naik level kartu member menunjuk `patients.id` → dihapus
+                   sebelum pasiennya (lihat catatan pada menu 'pasien'). */
+                ['label' => 'Riwayat naik level member', 'sql' => 'DELETE FROM member_upgrades'],
                 ['label' => 'Pasien', 'sql' => 'DELETE FROM patients'],
                 ['label' => 'Pergerakan stok', 'sql' => 'DELETE FROM inventory_movements'],
                 ['label' => 'Baris stok', 'sql' => 'DELETE FROM inventory'],

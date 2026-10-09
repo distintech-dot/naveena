@@ -26,6 +26,8 @@ require_once __DIR__ . '/includes/login_hint.php';
 require_once __DIR__ . '/includes/mailer.php';
 require_once __DIR__ . '/includes/login_security.php';
 require_once __DIR__ . '/includes/twofa_ui.php';
+require_once __DIR__ . '/includes/medphoto_gc.php';
+require_once __DIR__ . '/includes/login_manage.php';
 $user = require_login();
 if (!is_super() && !has_perm('backup.manage') && !has_perm('maintenance.manage')
     && !has_perm('system.integration')) {
@@ -348,6 +350,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $on = ($_POST['maintenance_mode'] ?? '') === '1';
             $was = maintenance_on();
+            /* CAKUPAN (ronde 66): kosong / '0' = GLOBAL (semua cabang), atau id cabang.
+               Daftar cabangnya dibaca dari tabel `branches` sehingga cabang BARU
+               otomatis ikut muncul di pemilih tanpa perubahan kode. Nilai yang tidak
+               dikenal (cabang sudah dihapus) dianggap GLOBAL supaya tidak ada cabang
+               yang "terkunci" tanpa cara membukanya lewat antarmuka. */
+            $mBranchBaru = (int)($_POST['maintenance_branch'] ?? 0);
+            if ($mBranchBaru > 0 && !one('SELECT id FROM branches WHERE id = ?', [$mBranchBaru])) {
+                $mBranchBaru = 0;
+            }
+            $mBranchLama = maintenance_branch_id();
             set_setting('maintenance_title', trim((string)($_POST['maintenance_title'] ?? '')));
             set_setting('maintenance_message', trim((string)($_POST['maintenance_message'] ?? '')));
             $until = trim((string)($_POST['maintenance_until'] ?? ''));
@@ -362,12 +374,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 set_setting('maintenance_started_at', date('Y-m-d H:i:s'));
             }
             set_setting('maintenance_mode', $on ? '1' : '0');
+            set_setting('maintenance_branch', (string)$mBranchBaru);
+            $cakupanTxt = $mBranchBaru > 0
+                ? (string)scalar('SELECT name FROM branches WHERE id = ?', [$mBranchBaru], 'Cabang #' . $mBranchBaru)
+                : 'Semua Cabang';
             audit('Ubah Mode Pemeliharaan', 'Pemeliharaan', null,
-                ['aktif' => $was], ['aktif' => $on, 'sampai' => $until],
-                $on ? 'Mode pemeliharaan DIAKTIFKAN — level selain Super Admin hanya dapat melihat data'
+                ['aktif' => $was, 'cakupan' => $mBranchLama],
+                ['aktif' => $on, 'sampai' => $until, 'cakupan' => $mBranchBaru],
+                $on ? 'Mode pemeliharaan DIAKTIFKAN untuk: ' . $cakupanTxt
                     : 'Mode pemeliharaan dimatikan');
             flash($on
-                ? 'Mode pemeliharaan AKTIF. Kasir & Admin/Dokter kini hanya bisa melihat data; Anda (Super Admin) tetap bebas.'
+                ? 'Mode pemeliharaan AKTIF untuk ' . $cakupanTxt . '. Pengguna di cakupan itu hanya bisa melihat data; '
+                    . 'Anda (Super Admin) tetap bebas' . ($mBranchBaru > 0 ? ', dan cabang lain tetap normal.' : '.')
                 : 'Mode pemeliharaan dimatikan — semua level dapat kembali mengelola data.');
         }
         if ($act === 'satu_sehat' || $act === 'satu_sehat_test' || $act === 'icd_reload') {
@@ -406,6 +424,119 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             flash($ok
                 ? 'Koneksi Satu Sehat berhasil — server menerima access token (berlaku sementara, tidak disimpan).'
                 : 'Uji koneksi gagal: ' . $err, $ok ? 'success' : 'warning');
+        }
+        if ($act === 'login_revoke') {
+            /* LOGIN MANAGEMENT: keluarkan SATU perangkat (sesi). */
+            if (!is_super()) deny('Kontrol sesi login hanya untuk Super Admin.');
+            require_once __DIR__ . '/includes/login_manage.php';
+            $sid = (int)($_POST['session_id'] ?? 0);
+            $s = $sid > 0 ? one('SELECT * FROM user_sessions WHERE id = ?', [$sid]) : null;
+            if (!$s) throw new RuntimeException('Sesi tidak ditemukan.');
+            $alasan = trim((string)($_POST['reason'] ?? ''));
+            $teks = 'Dikeluarkan oleh Super Admin' . ($alasan !== '' ? ': ' . $alasan : '.');
+            session_revoke_with_remember($sid, (int)$user['id'], $teks);
+            audit('Keluarkan Perangkat', 'Login Management', (int)$s['user_id'],
+                ['sesi' => $sid, 'perangkat' => $s['device_label']], ['revoked' => 1], $teks);
+            flash('Perangkat dikeluarkan: ' . (string)($s['device_label'] ?: '-') . '.'
+                . ' Sesi itu akan langsung berakhir pada permintaan berikutnya.', 'success');
+        }
+        if ($act === 'login_revoke_user') {
+            /* LOGIN MANAGEMENT: keluarkan SEMUA perangkat milik satu pengguna. */
+            if (!is_super()) deny('Kontrol sesi login hanya untuk Super Admin.');
+            require_once __DIR__ . '/includes/login_manage.php';
+            $uid = (int)($_POST['user_id'] ?? 0);
+            if ($uid <= 0) throw new RuntimeException('Pengguna belum dipilih.');
+            $n = session_revoke_user($uid, (int)$user['id'], 'Semua perangkat dikeluarkan oleh Super Admin.');
+            $nama = (string)scalar('SELECT name FROM users WHERE id = ?', [$uid], 'Pengguna');
+            audit('Keluarkan Semua Perangkat', 'Login Management', $uid, ['sesi_aktif' => $n],
+                ['revoked' => $n], 'Semua perangkat pengguna dikeluarkan');
+            flash($n > 0
+                ? 'Semua perangkat ' . $nama . ' dikeluarkan (' . num($n) . ' sesi aktif).'
+                : 'Tidak ada sesi aktif untuk ' . $nama . ' (token "ingat saya" tetap dibuang).',
+                $n > 0 ? 'success' : 'warning');
+        }
+        if ($act === 'login_block') {
+            /* LOGIN MANAGEMENT: blokir PERANGKAT. */
+            if (!is_super()) deny('Kontrol sesi login hanya untuk Super Admin.');
+            require_once __DIR__ . '/includes/login_manage.php';
+            $sid = (int)($_POST['session_id'] ?? 0);
+            $s = $sid > 0 ? one('SELECT * FROM user_sessions WHERE id = ?', [$sid]) : null;
+            if (!$s) throw new RuntimeException('Sesi tidak ditemukan.');
+            $semua = (string)($_POST['semua_akun'] ?? '') === '1';
+            $alasan = trim((string)($_POST['reason'] ?? ''));
+            $uidBlock = $semua ? 0 : (int)$s['user_id'];
+            $dev = (string)$s['device_id'];
+            if ($dev === '') throw new RuntimeException('Sidik perangkat sesi ini tidak tersedia sehingga tidak dapat diblokir.');
+            device_block_add($dev, $uidBlock, $alasan, (int)$user['id']);
+            /* Perangkat yang baru diblokir juga langsung dikeluarkan. */
+            session_revoke_with_remember($sid, (int)$user['id'],
+                'Perangkat diblokir oleh Super Admin' . ($alasan !== '' ? ': ' . $alasan : '.'));
+            audit('Blokir Perangkat', 'Login Management', (int)$s['user_id'],
+                ['perangkat' => $s['device_label']],
+                ['perangkat' => $dev, 'untuk' => $semua ? 'semua akun' : 'akun ini'], $alasan);
+            flash('Perangkat DIBLOKIR' . ($semua ? ' untuk semua akun' : ' untuk akun ini')
+                . ' dan langsung dikeluarkan. Percobaan masuk berikutnya dari perangkat itu akan ditolak.',
+                'success');
+        }
+        if ($act === 'login_unblock') {
+            if (!is_super()) deny('Kontrol sesi login hanya untuk Super Admin.');
+            require_once __DIR__ . '/includes/login_manage.php';
+            $bid = (int)($_POST['block_id'] ?? 0);
+            $b = one('SELECT * FROM login_blocks WHERE id = ?', [$bid]);
+            if (!$b) throw new RuntimeException('Blokir tidak ditemukan.');
+            device_block_remove($bid, (int)$user['id']);
+            audit('Buka Blokir Perangkat', 'Login Management', (int)$b['user_id'],
+                ['perangkat' => $b['device_id']], ['active' => 0], 'Blokir perangkat dibuka');
+            flash('Blokir perangkat dibuka — perangkat itu dapat masuk kembali.', 'success');
+        }
+        if ($act === 'login_stale') {
+            /* Batas "sesi masih dianggap aktif" (menit) — hanya keterangan tampilan. */
+            if (!is_super()) deny('Kontrol sesi login hanya untuk Super Admin.');
+            $m = (int)($_POST['login_stale_minutes'] ?? 15);
+            if ($m < 1 || $m > 240) throw new RuntimeException('Batas menit harus antara 1 dan 240.');
+            set_setting('login_stale_minutes', (string)$m);
+            audit('Ubah Batas Sesi Aktif', 'Login Management', null, null,
+                ['menit' => $m], 'Batas sesi dianggap aktif diubah');
+            flash('Sesi dianggap aktif bila aktivitas terakhirnya dalam ' . num($m) . ' menit terakhir.', 'success');
+        }
+        if ($act === 'medphoto_gc') {
+            /* PEMBERSIH FOTO REKAM MEDIS (ronde 64e) — hanya Super Admin, wajib
+               password + konfirmasi 2 tahap (dilakukan di sisi tampilan lewat
+               `data-heavy-confirm`, diperiksa ulang di server lewat `confirm`). */
+            if (!is_super()) deny('Pembersih foto rekam medis hanya dapat dijalankan Super Admin.');
+            require_once __DIR__ . '/includes/medphoto_gc.php';
+            $mode = (string)($_POST['mode'] ?? 'sekarang');
+            if (!isset(medphoto_gc_modes()[$mode])) $mode = 'sekarang';
+            $years = (int)($_POST['years'] ?? 0);
+            if ($mode === 'periode' && !isset(medphoto_gc_periods()[$years])) $years = 3;
+            $pass = (string)($_POST['admin_pass'] ?? '');
+            $dohapus = ($_POST['confirm'] ?? '') === '1';
+            if (!$dohapus) {
+                throw new RuntimeException('Konfirmasi tidak lengkap — tidak ada berkas yang dihapus.');
+            }
+            if ($pass === '' || !password_verify($pass, (string)$user['password_hash'])) {
+                audit('Bersihkan Foto Rekam Medis Ditolak', 'Developer Settings', null, null,
+                    ['mode' => $mode, 'tahun' => $years], 'Password Super Admin salah');
+                throw new RuntimeException('Password Super Admin tidak sesuai — pembersihan DIBATALKAN '
+                    . 'dan tidak ada berkas maupun catatan yang dihapus.');
+            }
+            $prabu = medphoto_gc_scan($mode, $years);
+            $hasil = medphoto_gc_purge($mode, $years, (int)$user['id']);
+            audit('Bersihkan Foto Rekam Medis', 'Developer Settings', null,
+                ['catatan' => $prabu['rows'], 'berkas' => $prabu['files']],
+                ['catatan_dihapus' => $hasil['rows'], 'berkas_dihapus' => $hasil['files'],
+                 'ukuran_mb' => round($hasil['bytes'] / 1048576, 2), 'mode' => $mode, 'tahun' => $years],
+                'Pembersih foto rekam medis: ' . $hasil['catatan']);
+            flash($hasil['catatan'] . ' Terhapus ' . num($hasil['rows']) . ' catatan dan '
+                . num($hasil['files']) . ' berkas (' . num(round($hasil['bytes'] / 1048576, 2), 2) . ' MB).',
+                ($hasil['rows'] + $hasil['files']) > 0 ? 'success' : 'warning');
+        }
+        if ($act === 'medphoto_preview') {
+            /* Pratinjau saja (tidak menghapus apa pun) — supaya pemilik melihat jumlahnya dulu. */
+            if (!is_super()) deny('Pratinjau pembersih foto hanya untuk Super Admin.');
+            $mode = (string)($_POST['mode'] ?? 'sekarang');
+            if (!isset(medphoto_gc_modes()[$mode])) $mode = 'sekarang';
+            $_SESSION['medphoto_preview'] = ['mode' => $mode, 'years' => (int)($_POST['years'] ?? 3)];
         }
         if ($act === 'icd_reload') {
             $n = 0;
@@ -464,6 +595,38 @@ $wipeCounts = [
 ];
 $wipeTotal = array_sum($wipeCounts);
 
+/* ---- PEMBERSIH FOTO REKAM MEDIS (ronde 64e) ------------------------------
+   Pratinjau dihitung untuk SEMUA pilihan sekaligus supaya pemilik melihat
+   jumlahnya lebih dulu (tidak ada berkas yang dihapus di tahap ini). */
+$mpTotals = medphoto_gc_totals();
+$mpMode = (string)($_SESSION['medphoto_preview']['mode'] ?? 'sekarang');
+if (!isset(medphoto_gc_modes()[$mpMode])) $mpMode = 'sekarang';
+$mpYears = (int)($_SESSION['medphoto_preview']['years'] ?? 3);
+if (!isset(medphoto_gc_periods()[$mpYears])) $mpYears = 3;
+$mpScan = medphoto_gc_scan($mpMode, $mpYears);
+$mpSemua = [];
+foreach (array_keys(medphoto_gc_periods()) as $y) {
+    $sc = medphoto_gc_scan('periode', $y);
+    $mpSemua[$y] = ['rows' => $sc['rows'], 'files' => $sc['files'], 'bytes' => $sc['bytes']];
+}
+$mpSisa = medphoto_gc_scan('tak_terpakai', 3);
+$mpAll = medphoto_gc_scan('sekarang', 3);
+
+/* ---- LOGIN MANAGEMENT (ronde 64e) ---------------------------------------
+   Daftar sesi: 60 terakhir + penyaring sederhana. Ringkasan angka dipakai di
+   kartu. Semuanya GLOBAL (tabelnya ada di basis data central). */
+$lmFilter = [
+    'aktif' => ((string)gp('lm', '') === 'aktif'),
+    'q' => trim((string)gp('lmq', '')),
+    'user' => (int)gp('lmu', 0),
+];
+$lmRows = session_list($lmFilter, 60);
+$lmSum = session_summary();
+$lmBlocks = device_block_list();
+$lmUsers = login_manage_users();
+$lmCurrent = session_current_id();
+$lmStale = login_stale_minutes();
+
 page_head('Developer Settings', 'developer');
 ?>
 <div class="page-head">
@@ -482,6 +645,241 @@ page_head('Developer Settings', 'developer');
   <strong>Halaman khusus Super Admin.</strong> Semua tindakan di bawah menyentuh seluruh sistem (semua cabang dan
   semua pengguna). Tindakan berisiko wajib melalui <strong>konfirmasi bertahap (2x)</strong> dan sebagian meminta
   <strong>password Super Admin</strong>. Setiap tindakan tercatat di Audit Log.
+</div>
+
+<div class="card" id="loginmanage">
+  <div class="card-head">
+    <h3>Login Management</h3>
+    <span><?= badge('Khusus Super Admin', 'pink') ?></span>
+  </div>
+  <div class="card-body">
+    <p class="muted">Siapa saja yang sedang masuk ke aplikasi, dari perangkat mana, dan sejak kapan.
+      Super Admin dapat <strong>mengeluarkan perangkat tertentu</strong>, <strong>memblokir perangkat</strong>,
+      atau <strong>mengeluarkan semua perangkat milik satu pengguna</strong>.</p>
+    <div class="notice small">
+      <strong>Tipe perangkat</strong> dibaca dari keterangan yang dikirim peramban:
+      ponsel Android menyebut kode modelnya (mis. <span class="mono">SM-S931B</span> → ditampilkan
+      <em>Samsung Galaxy S25</em>; kode merek lain ditampilkan apa adanya), sedangkan
+      <strong>iPhone/iPad hanya menyebut "iPhone"/"iPad"</strong> — Apple sengaja tidak
+      mengirim model perangkat kerasnya ke situs web, jadi iPhone 14 Pro dan iPhone 15
+      tidak dapat dibedakan dari aplikasi ini. Perangkat tanpa keterangan model
+      ditampilkan sebagai sistem + peramban saja (tidak dikarang).
+    </div>
+    <div class="grid g4">
+      <div class="stat stat-ok"><span class="lbl">Sesi Aktif</span><span class="val"><?= num($lmSum['aktif']) ?></span>
+        <span class="sub"><?= num($lmSum['pengguna_aktif']) ?> pengguna berbeda</span></div>
+      <div class="stat"><span class="lbl">Sesi Diam</span><span class="val"><?= num($lmSum['diam']) ?></span>
+        <span class="sub">tidak ada aktivitas &gt; <?= num($lmStale) ?> menit</span></div>
+      <div class="stat"><span class="lbl">Sudah Keluar</span><span class="val"><?= num($lmSum['keluar']) ?></span>
+        <span class="sub">total tercatat <?= num($lmSum['total']) ?> sesi</span></div>
+      <div class="stat stat-warn"><span class="lbl">Perangkat Diblokir</span><span class="val"><?= num($lmSum['blokir']) ?></span>
+        <span class="sub">tidak dapat masuk</span></div>
+    </div>
+  </div>
+
+  <form class="filter-bar" method="get" action="developer.php#loginmanage">
+    <div class="field"><label>Cari</label>
+      <input class="input" type="search" name="lmq" value="<?= e($lmFilter['q']) ?>" placeholder="nama / email / IP / perangkat"></div>
+    <div class="field"><label>Pengguna</label>
+      <select class="input" name="lmu">
+        <option value="">Semua pengguna</option>
+        <?php foreach ($lmUsers as $uu): ?>
+          <option value="<?= (int)$uu['id'] ?>"<?= $lmFilter['user'] === (int)$uu['id'] ? ' selected' : '' ?>>
+            <?= e($uu['name']) ?><?= $uu['status'] !== 'active' ? ' (nonaktif)' : '' ?></option>
+        <?php endforeach; ?>
+      </select></div>
+    <div class="field"><label>Keadaan</label>
+      <select class="input" name="lm">
+        <option value="">Semua sesi</option>
+        <option value="aktif"<?= $lmFilter['aktif'] ? ' selected' : '' ?>>Hanya yang masih aktif</option>
+      </select></div>
+    <div class="field" style="align-self:flex-end"><button class="btn btn-primary" type="submit"><?= icon('search') ?> Filter</button></div>
+    <div class="field" style="align-self:flex-end"><a class="btn btn-sm" href="developer.php">Reset</a></div>
+  </form>
+
+  <div class="card-body">
+    <?php if (!$lmRows): ?>
+      <p class="muted">Belum ada sesi yang tercatat<?= $lmFilter['aktif'] || $lmFilter['q'] || $lmFilter['user'] ? ' pada filter ini' : '' ?>.
+        Pencatatan dimulai sejak fitur ini dipasang — sesi lama (sebelum itu) tidak terdata.</p>
+    <?php else: ?>
+    <div class="table-wrap">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>User</th><th>Level</th><th>Cabang</th><th>Perangkat</th><th>Browser</th>
+            <th>IP</th><th>Login</th><th>Aktivitas Terakhir</th><th>Status</th><th>Aksi</th>
+          </tr>
+        </thead>
+        <tbody>
+        <?php foreach ($lmRows as $s):
+            $aktif = ((string)$s['logout_at'] === '' || $s['logout_at'] === null)
+                && (int)$s['revoked'] === 0;
+            $stamp = strtotime((string)($s['last_activity'] ?: $s['login_at']));
+            $segar = $aktif && $stamp >= time() - $lmStale * 60;
+            $diblokir = device_block_for((int)$s['user_id'], (string)$s['device_id']) !== null;
+        ?>
+          <tr>
+            <td><strong><?= e((string)$s['name']) ?></strong>
+              <?php if ((int)$s['id'] === $lmCurrent): ?><span class="small muted">(Anda)</span><?php endif; ?>
+              <div class="small muted"><?= e((string)$s['email']) ?></div></td>
+            <td><?= e((string)($s['role_name'] ?? '-')) ?></td>
+            <td><?= e((string)($s['branch_name'] ?? 'Semua Cabang')) ?></td>
+            <td><?= e((string)($s['device_label'] ?: 'tidak dikenal')) ?>
+              <div class="small muted"><?= e((string)($s['jenis'] ?? '')) ?>
+                <?php if ((string)($s['jenis'] ?? '') !== ''): ?> · <?= e((string)($s['platform'] ?? '')) ?><?php endif; ?></div></td>
+            <td class="small"><?= e((string)($s['browser'] ?? '-')) ?></td>
+            <td class="mono small"><?= e((string)($s['ip'] ?? '-')) ?></td>
+            <td class="small"><?= e(tglIndo(substr((string)$s['login_at'], 0, 10))) ?>
+              <div class="muted"><?= e(substr((string)$s['login_at'], 11, 5)) ?></div></td>
+            <td class="small"><?= $stamp > 0 ? e(tglIndo(date('Y-m-d', $stamp))) : '-' ?>
+              <div class="muted"><?= $stamp > 0 ? e(date('H:i', $stamp)) : '' ?></div></td>
+            <td>
+              <?php if ($diblokir): ?>
+                <span class="pill bad">Diblokir</span>
+              <?php elseif ((int)$s['revoked'] === 1): ?>
+                <span class="pill warn">Dikeluarkan</span>
+              <?php elseif (!$aktif): ?>
+                <span class="pill off">Sudah keluar</span>
+              <?php elseif ($segar): ?>
+                <span class="pill ok">Aktif</span>
+              <?php else: ?>
+                <span class="pill off">Diam</span>
+              <?php endif; ?>
+              <?php if ((string)$s['revoke_reason'] !== ''): ?>
+                <div class="small muted"><?= e(short_text((string)$s['revoke_reason'], 70)) ?></div>
+              <?php endif; ?>
+            </td>
+            <?php /* SATU BARIS AKSI (permintaan pemilik): tombol "Blokir" di KIRI dan
+               "Keluarkan" di KANAN, bentuknya ringkas (ikon + label) sehingga tinggi
+               baris tabel tidak memanjang ke bawah. Penjelasan & isian alasan
+               dipindahkan ke modal `#blockModal` (dibuka oleh tombol Blokir) supaya
+               kolom aksi tetap satu baris. */ ?>
+            <td class="lm-actions">
+              <?php if ($aktif): ?>
+                <?php if ((int)$s['id'] === $lmCurrent): ?>
+                  <span class="small muted">sesi Anda</span>
+                <?php else: ?>
+                  <?php if (!$diblokir && (string)$s['device_id'] !== ''): ?>
+                    <button class="btn btn-sm btn-danger" type="button"
+                            data-block-open="<?= (int)$s['id'] ?>"
+                            data-block-device="<?= e((string)$s['device_label']) ?>"
+                            title="Blokir perangkat ini"><?= icon('lock') ?> Blokir</button>
+                  <?php endif; ?>
+                  <form method="post" data-confirm="Keluarkan perangkat ini? Sesi itu langsung berakhir dan pengguna harus masuk lagi.">
+                    <?= csrf_field() ?><input type="hidden" name="action" value="login_revoke">
+                    <input type="hidden" name="_anchor" value="loginmanage">
+                    <input type="hidden" name="session_id" value="<?= (int)$s['id'] ?>">
+                    <button class="btn btn-sm" type="submit" title="Keluarkan perangkat ini"><?= icon('logout') ?> Keluarkan</button>
+                  </form>
+                <?php endif; ?>
+              <?php else: ?>
+                <span class="small muted">—</span>
+              <?php endif; ?>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+    <p class="small muted mt-2">Menampilkan maksimal 60 sesi terbaru. Sesi yang sudah keluar/dikeluarkan tetap
+      tersimpan sebagai riwayat.</p>
+    <?php endif; ?>
+  </div>
+
+  <div class="card-body" style="border-top:1px solid var(--line)">
+    <div class="section-title" style="margin-top:0">Keluarkan Semua Perangkat Seorang Pengguna</div>
+    <form method="post" class="flex flex-wrap gap-sm" style="align-items:flex-end"
+          data-heavy-confirm="KELUARKAN SEMUA PERANGKAT"
+          data-heavy-warning="Semua sesi aktif pengguna yang dipilih akan diakhiri dan token “ingat saya”-nya dibuang, sehingga ia harus masuk lagi dari awal."
+          data-heavy-confirm2="PERINGATAN KEDUA: keluarkan semua perangkat pengguna ini?">
+      <?= csrf_field() ?><input type="hidden" name="action" value="login_revoke_user">
+      <input type="hidden" name="_anchor" value="loginmanage">
+      <div class="field" style="margin:0;min-width:240px"><label>Pengguna</label>
+        <select class="input" name="user_id" required>
+          <option value="">— pilih pengguna —</option>
+          <?php foreach ($lmUsers as $uu): ?>
+            <option value="<?= (int)$uu['id'] ?>"><?= e($uu['name']) ?> · <?= e((string)($uu['role_name'] ?? '')) ?>
+              (<?= num(user_session_active_count((int)$uu['id'])) ?> sesi aktif)</option>
+          <?php endforeach; ?>
+        </select></div>
+      <button class="btn btn-danger" type="submit"><?= icon('logout') ?> Keluarkan Semua Perangkat</button>
+    </form>
+
+    <div class="section-title mt-3">Batas Sesi Dianggap Aktif</div>
+    <form method="post" class="flex flex-wrap gap-sm" style="align-items:flex-end">
+      <?= csrf_field() ?><input type="hidden" name="action" value="login_stale">
+      <input type="hidden" name="_anchor" value="loginmanage">
+      <div class="field" style="margin:0;min-width:160px"><label>Menit</label>
+        <input class="input" type="number" name="login_stale_minutes" min="1" max="240"
+               value="<?= (int)$lmStale ?>" required></div>
+      <button class="btn" type="submit">Simpan</button>
+      <span class="muted small" style="align-self:center">Sesi dengan aktivitas lebih lama dari ini ditandai
+        <strong>Diam</strong> (bukan dianggap aktif). Batas tidak aktif yang memaksa keluar diatur di kartu
+        <a href="#keamanan">Keamanan Login</a>.</span>
+    </form>
+  </div>
+
+  <?php /* MODAL BLOKIR PERANGKAT (permintaan pemilik): penjelasan + isian alasan
+     dipindah ke sini supaya kolom Aksi pada tabel tetap SATU BARIS. Modal ini
+     memakai pengiriman berbentuk konfirmasi bertahap (BLOKIR PERANGKAT) yang sudah
+     ada sehingga pengamannya tidak berkurang. */ ?>
+  <div class="modal" id="blockModal">
+    <div class="modal-box">
+      <form method="post" id="blockForm"
+            data-heavy-confirm="BLOKIR PERANGKAT"
+            data-heavy-warning="Perangkat ini tidak akan bisa masuk lagi sampai blokirnya dibuka. Centang &quot;untuk semua akun&quot; bila ingin memblokir untuk seluruh akun, bukan hanya akun ini."
+            data-heavy-confirm2="PERINGATAN KEDUA: blokir perangkat ini sekarang?">
+        <?= csrf_field() ?><input type="hidden" name="action" value="login_block">
+        <input type="hidden" name="_anchor" value="loginmanage">
+        <input type="hidden" name="session_id" id="blockSession" value="">
+        <div class="modal-head"><h3>Blokir Perangkat</h3>
+          <button type="button" class="icon-btn" data-modal-close="blockModal"><?= icon('x') ?></button></div>
+        <div class="modal-body">
+          <div class="notice">Perangkat: <strong id="blockDevice">-</strong></div>
+          <div class="field mt-2"><label>Alasan (opsional)</label>
+            <input class="input" name="reason" autocomplete="off" placeholder="mis. perangkat tidak dikenal / permintaan pemilik perangkat"></div>
+          <label class="flex gap-sm mt-2" style="align-items:center">
+            <input type="checkbox" name="semua_akun" value="1">
+            <span>Blokir untuk <strong>SEMUA AKUN</strong> di perangkat ini (tanpa centang = hanya akun ini)</span>
+          </label>
+        </div>
+        <div class="modal-foot">
+          <button type="button" class="btn" data-modal-close="blockModal">Batal</button>
+          <button class="btn btn-danger" type="submit"><?= icon('lock') ?> Blokir Perangkat</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <?php if ($lmBlocks): ?>
+  <div class="card-body" style="border-top:1px solid var(--line)">
+    <div class="section-title" style="margin-top:0">Perangkat yang Diblokir</div>
+    <div class="table-wrap">
+      <table class="tbl">
+        <thead><tr><th>Perangkat</th><th>Untuk</th><th>Alasan</th><th>Diblokir oleh</th><th>Waktu</th><th>Aksi</th></tr></thead>
+        <tbody>
+        <?php foreach ($lmBlocks as $b): ?>
+          <tr>
+            <td class="small"><?= e(short_text((string)$b['device_id'], 18)) ?></td>
+            <td><?= (int)$b['user_id'] === 0 ? 'Semua akun' : e((string)($b['user_name'] ?? '-')) ?></td>
+            <td class="small"><?= e((string)($b['reason'] ?? '') !== '' ? (string)$b['reason'] : '—') ?></td>
+            <td class="small"><?= e((string)($b['oleh_name'] ?? '-')) ?></td>
+            <td class="small"><?= e(tglIndo(substr((string)$b['created_at'], 0, 10))) ?></td>
+            <td>
+              <form method="post" class="mt-1" data-confirm="Buka blokir perangkat ini? Perangkat itu akan dapat masuk kembali.">
+                <?= csrf_field() ?><input type="hidden" name="action" value="login_unblock">
+                <input type="hidden" name="_anchor" value="loginmanage">
+                <input type="hidden" name="block_id" value="<?= (int)$b['id'] ?>">
+                <button class="btn btn-sm" type="submit"><?= icon('key') ?> Buka blokir</button>
+              </form>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <?php endif; ?>
 </div>
 
 <div class="card" id="ringkasan">
@@ -1185,7 +1583,8 @@ $ugc = is_super() ? upload_gc_scan(true) : null;   // dengan daftar contoh berka
   </div>
   <?php if ($mOn): ?>
     <div class="alert alert-warning" style="margin:16px 20px 0">
-      <strong>Mode pemeliharaan sedang aktif.</strong> Kasir dan Admin/Dokter hanya dapat <strong>melihat</strong> data —
+      <strong>Mode pemeliharaan sedang aktif<?= maintenance_branch_id() > 0 ? ' untuk ' . e(maintenance_scope_text()) : '' ?>.</strong>
+      Kasir dan Admin/Dokter <?= maintenance_branch_id() > 0 ? 'di cabang itu ' : '' ?>hanya dapat <strong>melihat</strong> data —
       tambah, ubah, hapus, impor, ekspor, kirim struk WhatsApp, dan kirim laporan email dinonaktifkan sementara.
       Super Admin (Anda) tetap dapat mengelola sistem sepenuhnya.
       <a class="btn btn-sm btn-leaf" style="margin-top:8px" href="maintenance.php" target="_blank"><?= icon('activity') ?> Lihat halaman yang dilihat pengguna</a>
@@ -1205,6 +1604,19 @@ $ugc = is_super() ? upload_gc_scan(true) : null;   // dengan daftar contoh berka
             <option value="1"<?= $mOn ? ' selected' : '' ?>>Aktif — selain Super Admin hanya dapat MELIHAT</option>
           </select>
           <span class="hint">Mematikan mode ini langsung memulihkan hak kelola tanpa perlu login ulang.</span></div>
+        <div class="field"><label>Cakupan Pemeliharaan</label>
+          <?php $mBranchNow = maintenance_branch_id(); ?>
+          <select class="input" name="maintenance_branch">
+            <option value="0"<?= $mBranchNow === 0 ? ' selected' : '' ?>>Global — SEMUA cabang</option>
+            <?php foreach (branches() as $bb): ?>
+              <option value="<?= (int)$bb['id'] ?>"<?= $mBranchNow === (int)$bb['id'] ? ' selected' : '' ?>>
+                Hanya cabang: <?= e($bb['name']) ?></option>
+            <?php endforeach; ?>
+          </select>
+          <span class="hint">Pilih <strong>satu cabang</strong> bila hanya cabang itu yang sedang diperbaiki —
+            cabang lain tetap dapat bekerja seperti biasa. Daftar ini mengikuti data cabang, jadi
+            <strong>cabang baru otomatis muncul</strong> di sini. Pengguna lintas cabang yang sedang melihat
+            "Semua Cabang" tidak dibatasi agar pekerjaan cabang lain tidak ikut terhenti.</span></div>
         <div class="field"><label>Perkiraan Selesai (opsional)</label>
           <input class="input" type="datetime-local" name="maintenance_until"
                  value="<?= e(($mInfo['until'] !== '' && strtotime($mInfo['until'])) ? date('Y-m-d\TH:i', strtotime($mInfo['until'])) : '') ?>">
@@ -1416,6 +1828,97 @@ $ugc = is_super() ? upload_gc_scan(true) : null;   // dengan daftar contoh berka
 
 <?php endif; /* is_super(): kartu dokumen ringkasan fungsi */ ?>
 
+<div class="card" id="fotorekammedis" style="border-color:#F5C9C6">
+  <div class="card-head">
+    <h3 style="color:#B3261E">Hapus / Bersihkan File Foto Rekam Medis</h3>
+    <span><?= badge('Khusus Super Admin', 'pink') ?></span>
+  </div>
+  <div class="card-body">
+    <p class="muted">Membersihkan <strong>berkas foto rekam medis elektronik</strong> — berguna agar penyimpanan
+      tidak menumpuk oleh foto lama atau berkas yang ketinggalan. Foto pasien, dokter/terapis, logo, dan QRIS
+      <strong>tidak pernah</strong> disentuh.</p>
+    <div class="grid g2">
+      <div class="field"><label>Keadaan folder sekarang</label>
+        <div class="small">
+          · Catatan foto di sistem: <strong><?= num($mpTotals['catatan']) ?></strong><br>
+          · Berkas di folder: <strong><?= num($mpTotals['berkas_disk']) ?></strong>
+            (<?= num(round($mpTotals['bytes_disk'] / 1048576, 2), 2) ?> MB)<br>
+          · Berkas tidak terpakai: <strong><?= num($mpTotals['tak_terpakai']) ?></strong>
+        </div>
+      </div>
+      <div class="field"><label>Pilihan pembersihan</label>
+        <div class="small">
+          · Hapus sekarang (semua): <strong><?= num($mpAll['rows']) ?></strong> catatan /
+            <strong><?= num($mpAll['files']) ?></strong> berkas
+            (<?= num(round($mpAll['bytes'] / 1048576, 2), 2) ?> MB)<br>
+          <?php foreach ($mpSemua as $y => $v): ?>
+            · Lebih lama dari <?= num($y) ?> tahun: <strong><?= num($v['rows']) ?></strong> catatan /
+              <strong><?= num($v['files']) ?></strong> berkas<br>
+          <?php endforeach; ?>
+          · Berkas tidak terpakai: <strong><?= num($mpSisa['files']) ?></strong> berkas
+            (<?= num(round($mpSisa['bytes'] / 1048576, 2), 2) ?> MB)
+        </div>
+      </div>
+    </div>
+
+    <form method="post" class="mt-2">
+      <?= csrf_field() ?><input type="hidden" name="action" value="medphoto_preview">
+      <input type="hidden" name="_anchor" value="fotorekammedis">
+      <div class="filter-bar">
+        <div class="field"><label>Yang dibersihkan</label>
+          <select class="input" name="mode" onchange="this.form.submit()">
+            <?php foreach (medphoto_gc_modes() as $k => $lbl): ?>
+              <option value="<?= e($k) ?>"<?= $mpMode === $k ? ' selected' : '' ?>><?= e($lbl) ?></option>
+            <?php endforeach; ?>
+          </select></div>
+        <div class="field"><label>Periode (untuk pilihan "lebih lama dari")</label>
+          <select class="input" name="years" onchange="this.form.submit()">
+            <?php foreach (medphoto_gc_periods() as $y => $lbl): ?>
+              <option value="<?= (int)$y ?>"<?= $mpYears === (int)$y ? ' selected' : '' ?>><?= e($lbl) ?></option>
+            <?php endforeach; ?>
+          </select></div>
+        <div class="field" style="align-self:flex-end">
+          <button class="btn btn-sm" type="submit"><?= icon('search') ?> Lihat pratinjau</button></div>
+      </div>
+    </form>
+
+    <div class="alert alert-warning mt-2">
+      <strong>Pratinjau pilihan Anda:</strong> <?= e(medphoto_gc_modes()[$mpMode]) ?><?= $mpMode === 'periode' ? ' (' . e(medphoto_gc_periods()[$mpYears]) . ')' : '' ?> —
+      akan menghapus <strong><?= num($mpScan['rows']) ?></strong> catatan foto dan
+      <strong><?= num($mpScan['files']) ?></strong> berkas
+      (<?= num(round($mpScan['bytes'] / 1048576, 2), 2) ?> MB).
+      <?= e($mpScan['catatan']) ?>
+      <?php if ($mpScan['contoh']): ?>
+        <div class="small mt-1">Contoh: <?= e(implode(', ', array_slice($mpScan['contoh'], 0, 6))) ?>
+          <?= count($mpScan['contoh']) > 6 ? '…' : '' ?></div>
+      <?php endif; ?>
+    </div>
+    <div class="small muted">Catatan foto dihapus lebih dulu (satu transaksi), lalu berkasnya dibuang —
+      dan hanya bila memang sudah tidak dirujuk catatan mana pun. Kartu ini <strong>tidak</strong> memakai
+      snapshot backup (berkasnya bukan data database), tetapi setiap tindakan tercatat di Audit Log.</div>
+  </div>
+  <form method="post" id="medphotoForm" data-heavy-kind="hapus"
+        data-heavy-confirm="HAPUS FOTO REKAM MEDIS"
+        data-heavy-warning="Berkas foto rekam medis pada pilihan di atas akan DIHAPUS dari penyimpanan. Tindakan ini tidak dapat dibatalkan dari dalam aplikasi. Foto pasien/dokter/terapis, logo, dan QRIS tidak ikut terhapus."
+        data-heavy-confirm2="PERINGATAN KEDUA (terakhir): hapus berkas foto rekam medis sekarang?">
+    <?= csrf_field() ?><input type="hidden" name="action" value="medphoto_gc">
+    <input type="hidden" name="_anchor" value="fotorekammedis">
+    <input type="hidden" name="confirm" value="1">
+    <input type="hidden" name="mode" value="<?= e($mpMode) ?>">
+    <input type="hidden" name="years" value="<?= (int)$mpYears ?>">
+    <div class="modal-foot" style="border-radius:0 0 var(--radius) var(--radius)">
+      <div class="field" style="margin:0;min-width:220px">
+        <label>Password Super Admin</label>
+        <input class="input input-sm" type="password" name="admin_pass" autocomplete="off" placeholder="wajib diisi">
+      </div>
+      <button class="btn btn-danger" type="submit" form="medphotoForm"
+              <?= ($mpScan['rows'] + $mpScan['files']) > 0 ? '' : 'disabled title="Tidak ada yang perlu dibersihkan pada pilihan ini"' ?>>
+        <?= icon('trash') ?> Bersihkan Sekarang (<?= num($mpScan['rows'] + $mpScan['files']) ?>)
+      </button>
+    </div>
+  </form>
+</div>
+
 <div class="card" id="hapusdata" style="border-color:#F5C9C6">
   <div class="card-head">
     <h3 style="color:#B3261E">Hapus Semua Data (Kosongkan Sistem)</h3>
@@ -1480,4 +1983,15 @@ $ugc = is_super() ? upload_gc_scan(true) : null;   // dengan daftar contoh berka
   </div>
 </div>
 
+<script>
+/* Buka modal Blokir Perangkat dengan mengisi id sesi & keterangan perangkatnya.
+   Dipasang dari atribut `data-block-open` supaya kolom Aksi cukup satu baris. */
+document.addEventListener('click', function (ev) {
+  var btn = ev.target.closest('[data-block-open]');
+  if (!btn) return;
+  document.getElementById('blockSession').value = btn.getAttribute('data-block-open');
+  document.getElementById('blockDevice').textContent = btn.getAttribute('data-block-device') || '-';
+  document.getElementById('blockModal').classList.add('open');
+});
+</script>
 <?php page_foot(); ?>

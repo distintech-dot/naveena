@@ -125,7 +125,10 @@ function demo_batch_tables(): array
         'orders' => 'Transaksi', 'order_items' => 'Item transaksi', 'payments' => 'Pembayaran',
         'inventory_movements' => 'Pergerakan stok', 'packages' => 'Paket',
         'treatments' => 'Treatment', 'skincare_products' => 'Skincare',
-        'treatment_materials' => 'Bahan treatment', 'suppliers' => 'Supplier'];
+        'treatment_materials' => 'Bahan treatment', 'suppliers' => 'Supplier',
+        /* Riwayat naik level kartu member (ronde 64d) — wajib ikut supaya penghapusan
+           batch demo tidak ditolak FK saat pasiennya dihapus. */
+        'member_upgrades' => 'Riwayat naik level member'];
 }
 
 /**
@@ -163,6 +166,25 @@ function demo_table_exists(string $tabel): bool
 {
     static $cache = [];
     if (isset($cache[$tabel])) return $cache[$tabel];
+    /* PENTING (FINAL AUDIT): tabel OPERASIONAL hanya ada di BERKAS CABANG, bukan di
+       central. Pemeriksaan `sqlite_master` pada koneksi aplikasi menunjuk basis data
+       `main` (central) sehingga tabel seperti `orders`/`patients` selalu dilaporkan
+       "tidak ada" — pratinjau batch demo jadi kosong dan penghapusan per batch tidak
+       menghapus apa pun. Karena itu tabel operasional diperiksa pada basis datanya. */
+    if (function_exists('db_route_scope_of') && db_route_scope_of($tabel) === 'branch') {
+        foreach (db_route_branch_ids() as $bid) {
+            $p = db_branch_path((int)$bid);
+            if (!is_file($p)) continue;
+            try {
+                $c = db_open($p);
+                $ada = (int)$c->query("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = "
+                    . $c->quote($tabel))->fetchColumn();
+                $c = null;
+                if ($ada > 0) return $cache[$tabel] = true;
+            } catch (Throwable $e) { /* lanjut ke berkas berikutnya */ }
+        }
+        return $cache[$tabel] = false;
+    }
     try {
         $n = (int)scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?", [$tabel]);
     } catch (Throwable $e) { $n = 0; }
@@ -215,12 +237,43 @@ function demo_batch_preview(string $batch): array
 {
     $out = [];
     foreach (demo_batch_usable_tables() as $t => $label) {
-        try {
-            $n = (int)scalar("SELECT COUNT(*) FROM {$t} WHERE demo_batch_id = ?", [$batch]);
-        } catch (Throwable $e) { $n = 0; }
+        $n = 0;
+        foreach (demo_batch_conns($t) as [$c, $ref]) {
+            try { $n += (int)$c->query("SELECT COUNT(*) FROM {$ref} WHERE demo_batch_id = " . $c->quote($batch))->fetchColumn(); }
+            catch (Throwable $e) { /* tabel belum ada di berkas itu */ }
+        }
         if ($n > 0) $out[] = ['tabel' => $t, 'label' => $label, 'jumlah' => $n];
     }
     return $out;
+}
+
+/**
+ * Daftar KONEKSI + nama tabel yang harus disentuh sebuah tabel untuk operasi batch demo.
+ *
+ * MENGAPA: pada arsitektur central + satu basis data per cabang, tabel operasional hanya
+ * ada di BERKAS MASING-MASING CABANG — satu koneksi aplikasi hanya melihat berkas yang
+ * ter-ATTACH (batas 9 berkas ketika cabangnya banyak). Pencarian/pratinjau/penghapusan
+ * batch demo karena itu dijalankan per BERKAS: setiap berkas cabang dibuka sendiri
+ * (tanpa batas ATTACH), sedangkan tabel global dijalankan pada koneksi aplikasi.
+ *
+ * @return array<int,array{0:PDO,1:string}> pasangan [koneksi, nama tabel ter-kutip]
+ */
+function demo_batch_conns(string $tabel): array
+{
+    if (!function_exists('db_route_scope_of') || db_route_scope_of($tabel) !== 'branch') {
+        return [[db(), '"' . $tabel . '"']];
+    }
+    static $cache = null;
+    if ($cache === null) {
+        $cache = [];
+        foreach (db_route_branch_ids() as $bid) {
+            $p = db_branch_path((int)$bid);
+            if (!is_file($p)) continue;
+            try { $cache[] = db_open($p); } catch (Throwable $e) { /* lewati berkas yang gagal */ }
+        }
+    }
+    $ref = '"' . $tabel . '"';
+    return array_map(fn($c) => [$c, $ref], $cache);
 }
 
 /** Daftar batch demo yang masih ada. */
@@ -254,26 +307,22 @@ function demo_batch_table_ref(string $tabel, string $alias = ''): string
     return $alias . '."' . $tabel . '"';
 }
 
-/** Daftar "berkas" yang harus disentuh sebuah tabel: alias cabang, atau [''] untuk tabel global. */
+/** Alias berkas cabang yang sedang ter-ATTACH pada koneksi aplikasi ([''] = tabel global). */
 function demo_batch_scope_refs(string $tabel): array
 {
     if (!function_exists('db_route_scope_of') || db_route_scope_of($tabel) !== 'branch') return [''];
     $out = [];
     foreach (db_route_attached() as $alias) $out[] = (string)$alias;
-    /* Belum ada berkas cabang ter-ATTACH (permintaan tanpa basis data cabang) →
-       pakai nama polos supaya perilakunya sama seperti sebelumnya. */
     return $out ?: [''];
 }
 
-/** Hapus semua baris sebuah batch pada SATU tabel (per berkas cabang bila perlu). */
+/** Hapus semua baris sebuah batch pada SATU tabel (per berkas cabang). */
 function demo_batch_delete_rows(PDO $pdo, string $tabel, string $batch): int
 {
     $total = 0;
-    foreach (demo_batch_scope_refs($tabel) as $alias) {
-        $ref = demo_batch_table_ref($tabel, $alias);
-        try {
-            $total += (int)$pdo->exec("DELETE FROM {$ref} WHERE demo_batch_id = " . $pdo->quote($batch));
-        } catch (Throwable $e) { /* tabel belum ada di berkas itu */ }
+    foreach (demo_batch_conns($tabel) as [$c, $ref]) {
+        try { $total += (int)$c->exec("DELETE FROM {$ref} WHERE demo_batch_id = " . $c->quote($batch)); }
+        catch (Throwable $e) { /* tabel belum ada di berkas itu */ }
     }
     return $total;
 }
@@ -288,54 +337,77 @@ function demo_batch_delete_rows(PDO $pdo, string $tabel, string $batch): int
 function demo_batch_delete(string $batch): array
 {
     if ($batch === '') return ['hapus' => [], 'dilewati' => [], 'fk' => 0, 'total' => 0];
+    /* Urutan anak → induk. `member_upgrades` WAJIB sebelum `patients` (FK patient_id). */
     $urut = ['appointment_treatments', 'appointments', 'order_items', 'payments', 'orders',
-        'medical_records', 'patients', 'inventory_movements'];
-    $hapus = []; $dilewati = [];
-    $pdo = db();
-    $pdo->exec('BEGIN IMMEDIATE');
-    try {
-        foreach ($urut as $t) {
-            if (!demo_table_exists($t) || !demo_table_has_batch($t)) continue;
-            $n = demo_batch_delete_rows($pdo, $t, $batch);
-            if ($n > 0) $hapus[$t] = $n;
-        }
-        /* Master: hanya dihapus bila TIDAK dipakai data non-demo. Daftar tabelnya diambil
-           dari satu sumber (demo_batch_tables) supaya nama tabel tidak pernah berbeda. */
-        $master = ['packages', 'treatments', 'skincare_products', 'treatment_materials', 'suppliers'];
-        $rujukan = [['order_items', 'treatment_id'], ['order_items', 'skincare_id'],
-            ['order_items', 'material_id'], ['appointment_treatments', 'treatment_id'],
-            ['appointments', 'treatment_id'], ['package_items', 'item_id']];
-        foreach ($master as $t) {
-            if (!demo_table_exists($t) || !demo_table_has_batch($t)) continue;
-            $boleh = 0;
-            foreach (demo_batch_scope_refs($t) as $alias) {
-                $ref = demo_batch_table_ref($t, $alias);
-                $ids = $pdo->query("SELECT id FROM {$ref} WHERE demo_batch_id = " . $pdo->quote($batch))
-                    ->fetchAll(PDO::FETCH_COLUMN);
+        'medical_records', 'member_upgrades', 'patients', 'inventory_movements'];
+    $master = ['packages', 'treatments', 'skincare_products', 'treatment_materials', 'suppliers'];
+    $rujukan = [['order_items', 'treatment_id'], ['order_items', 'skincare_id'],
+        ['order_items', 'material_id'], ['appointment_treatments', 'treatment_id'],
+        ['appointments', 'treatment_id'], ['package_items', 'item_id']];
+    $hapus = []; $dilewati = []; $fk = 0; $gagal = [];
+
+    /* PENTING: transaksi dijalankan per BERKAS BASIS DATA, bukan pada koneksi aplikasi.
+       `BEGIN IMMEDIATE` pada koneksi aplikasi mengunci SELURUH basis data yang ter-ATTACH,
+       sehingga koneksi terpisah (yang dipakai untuk berkas cabang di luar batas ATTACH)
+       tidak dapat menghapus apa pun — dan kegagalannya senyap karena ditelan try/catch.
+       Akibat nyata sebelum perbaikan: "hapus per batch" melaporkan 0 record terhapus
+       walau data demo jelas ada. */
+    $berkas = [];
+    foreach (db_route_branch_ids() as $bid) {
+        $p = db_branch_path((int)$bid);
+        if (is_file($p)) $berkas[] = $p;
+    }
+    if (!$berkas) $berkas = [null];        // tidak ada berkas cabang → pakai koneksi aplikasi
+
+    foreach ($berkas as $path) {
+        try { $c = $path === null ? db() : db_open($path); }
+        catch (Throwable $e) { $gagal[] = 'buka berkas: ' . $e->getMessage(); continue; }
+        $sendiri = $path !== null;
+        if ($sendiri) $c->exec('BEGIN IMMEDIATE');
+        try {
+            foreach ($urut as $t) {
+                if (!demo_table_exists($t) || !demo_table_has_batch($t)) continue;
+                try { $n = (int)$c->exec('DELETE FROM "' . $t . '" WHERE demo_batch_id = ' . $c->quote($batch)); }
+                catch (Throwable $e) { $n = 0; }
+                if ($n > 0) $hapus[$t] = ($hapus[$t] ?? 0) + $n;
+            }
+            /* Master: hanya dihapus bila TIDAK dipakai data non-demo (di berkas yang sama —
+               relasi tidak mungkin melintasi berkas basis data). */
+            foreach ($master as $t) {
+                if (!demo_table_exists($t) || !demo_table_has_batch($t)) continue;
+                try {
+                    $ids = $c->query('SELECT id FROM "' . $t . '" WHERE demo_batch_id = ' . $c->quote($batch))
+                        ->fetchAll(PDO::FETCH_COLUMN);
+                } catch (Throwable $e) { continue; }
+                $boleh = 0;
                 foreach ($ids as $id) {
                     $dipakai = 0;
                     foreach ($rujukan as [$tt, $kol]) {
                         if (!demo_table_exists($tt)) continue;
-                        /* Rujukan diperiksa di BERKAS YANG SAMA (relasi tidak mungkin
-                           melintasi berkas basis data) supaya tidak salah menilai. */
-                        $refRujukan = demo_batch_table_ref($tt, $alias);
-                        try { $dipakai += (int)$pdo->query("SELECT COUNT(*) FROM {$refRujukan} WHERE {$kol} = " . (int)$id)->fetchColumn(); }
+                        try { $dipakai += (int)$c->query('SELECT COUNT(*) FROM "' . $tt . '" WHERE ' . $kol . ' = ' . (int)$id)->fetchColumn(); }
                         catch (Throwable $e) { /* kolom tidak ada di tabel itu */ }
                     }
-                    if ($dipakai === 0) { $pdo->exec("DELETE FROM {$ref} WHERE id = " . (int)$id); $boleh++; }
+                    if ($dipakai === 0) { $c->exec('DELETE FROM "' . $t . '" WHERE id = ' . (int)$id); $boleh++; }
                     else $dilewati[] = $t . ' #' . (int)$id . ' masih dipakai transaksi lain';
                 }
+                if ($boleh > 0) $hapus[$t] = ($hapus[$t] ?? 0) + $boleh;
             }
-            if ($boleh > 0) $hapus[$t] = $boleh;
+            if ($sendiri) {
+                foreach ($c->query('PRAGMA foreign_key_check') as $row) $fk++;
+                $c->exec('COMMIT');
+            }
+        } catch (Throwable $e) {
+            if ($sendiri) { try { $c->exec('ROLLBACK'); } catch (Throwable $e2) { } }
+            $gagal[] = basename((string)$path) . ': ' . $e->getMessage();
         }
-        $pdo->exec("UPDATE demo_batches SET status = 'DELETED' WHERE batch_id = " . $pdo->quote($batch));
-        $pdo->exec('COMMIT');
-    } catch (Throwable $e) {
-        $pdo->exec('ROLLBACK');
-        return ['hapus' => [], 'dilewati' => ['gagal: ' . $e->getMessage()], 'fk' => 0, 'total' => 0];
+        if ($sendiri) $c = null;
     }
-    $fk = count($pdo->query('PRAGMA foreign_key_check')->fetchAll(PDO::FETCH_ASSOC));
-    return ['hapus' => $hapus, 'dilewati' => $dilewati, 'fk' => $fk,
+
+    /* Status batch (tabel GLOBAL di central). */
+    try { q("UPDATE demo_batches SET status = 'DELETED' WHERE batch_id = ?", [$batch]); }
+    catch (Throwable $e) { $gagal[] = 'status batch: ' . $e->getMessage(); }
+
+    return ['hapus' => $hapus, 'dilewati' => array_merge($gagal, $dilewati), 'fk' => $fk,
         'total' => array_sum($hapus)];
 }
 

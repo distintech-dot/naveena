@@ -89,7 +89,21 @@ function schema_is_current(PDO $pdo): bool
     } catch (Throwable $e) {
         return false;                     // tabel settings belum ada → basis data baru
     }
-    return $v === SCHEMA_VERSION && $fp === schema_adds_fingerprint();
+    /* Sidik jari DDL ikut diperiksa supaya tabel/indeks baru di `schema_ddl_raw()`
+       TIDAK PERNAH tertinggal pada pemasangan yang sudah berjalan (lihat catatan
+       schema_ddl_fingerprint()). */
+    return $v === SCHEMA_VERSION && $fp === schema_adds_fingerprint()
+        && schema_ddl_setting($pdo) === schema_ddl_fingerprint();
+}
+
+/** Sidik jari DDL tersimpan (dibuat saat migrasi). Tahan gagal untuk basis data baru. */
+function schema_ddl_setting(PDO $pdo): string
+{
+    try {
+        return (string)$pdo->query("SELECT value FROM settings WHERE key = 'schema_ddl_fp'")->fetchColumn();
+    } catch (Throwable $e) {
+        return '';
+    }
 }
 
 /** Baca satu setelan langsung dari PDO (dipakai jalur cepat ensure_schema). */
@@ -128,7 +142,8 @@ function ensure_schema(PDO $pdo): void
                 $again = '';   // tabel settings belum ada → database benar-benar baru
                 $fpAgain = '';
             }
-            $ulang = ($again === SCHEMA_VERSION && $fpAgain === schema_adds_fingerprint());
+            $ulang = ($again === SCHEMA_VERSION && $fpAgain === schema_adds_fingerprint()
+                && scalar_schema_setting($pdo, 'schema_ddl_fp') === schema_ddl_fingerprint());
         }
         if ($ulang) {
             $pdo->exec('ROLLBACK');
@@ -170,6 +185,8 @@ function ensure_schema(PDO $pdo): void
             $pdo->exec("INSERT INTO settings (key, value) VALUES ('schema_version', '" . SCHEMA_VERSION . "')
                         ON CONFLICT(key) DO UPDATE SET value = excluded.value");
             $pdo->exec("INSERT INTO settings (key, value) VALUES ('schema_adds_fp', '" . schema_adds_fingerprint() . "')
+                        ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+            $pdo->exec("INSERT INTO settings (key, value) VALUES ('schema_ddl_fp', '" . schema_ddl_fingerprint() . "')
                         ON CONFLICT(key) DO UPDATE SET value = excluded.value");
         }
         $pdo->exec('COMMIT');
@@ -434,6 +451,31 @@ function schema_adds_fingerprint(): string
     return $fp;
 }
 
+/**
+ * Sidik jari SKEMA LENGKAP (versi + daftar tambahan kolom + seluruh DDL tabel).
+ *
+ * MENGAPA perlu: jalur cepat `schema_is_current()` dulu hanya memakai SCHEMA_VERSION
+ * dan sidik jari daftar KOLOM. Akibatnya tabel/indeks baru yang ditambahkan ke
+ * `schema_ddl_raw()` (atau ke `run_migrations()`) **tidak pernah sampai ke pemasangan
+ * yang sudah berjalan** selama versinya tidak dinaikkan — kejadian nyata (ronde 64e):
+ * tabel `user_sessions` & `login_blocks` tidak terbentuk di produksi walau versinya
+ * sudah 1.38.0, sehingga Login Management mustahil bekerja.
+ *
+ * Dengan sidik jari ini, PERUBAHAN DDL APA PUN (menambah tabel/indeks di
+ * `schema_ddl_raw()`) otomatis membatalkan jalur cepat sehingga migrasi berjalan.
+ * Untuk tabel yang HANYA ada di `run_migrations()`, naikkan SCHEMA_VERSION seperti
+ * biasa — atau (lebih baik) taruh di `schema_ddl_raw()` supaya ikut terpantau di sini
+ * dan otomatis dibuat pada pemasangan baru.
+ */
+function schema_ddl_fingerprint(): string
+{
+    static $fp = null;
+    if ($fp === null) {
+        $fp = substr(md5(SCHEMA_VERSION . '|' . implode("\n", schema_ddl_raw())), 0, 16);
+    }
+    return $fp;
+}
+
 /** Additive migrations (idempotent, guarded) — runs inside the schema transaction. */
 function run_migrations(PDO $pdo): void
 {
@@ -444,12 +486,20 @@ function run_migrations(PDO $pdo): void
        Penyaringnya memeriksa NAMA TABEL pada teks SQL, jadi lengkap: CREATE TABLE,
        CREATE INDEX, dan ALTER TABLE sekaligus. */
     $branch = (db_schema_scope() === 'branch');
+    /* SATU SUMBER DATA UNTUK SETIAP TABEL (FINAL AUDIT):
+       · berkas CABANG  → pernyataan yang menyebut tabel GLOBAL dilewati;
+       · basis data CENTRAL → pernyataan yang menyebut tabel OPERASIONAL dilewati.
+       Sebelumnya central tetap membuat/menambah kolom tabel operasional (wadah kosong),
+       sehingga sebuah tabel bisa punya definisi di DUA basis data — sumber kebingungan
+       dan risiko data terbelah. Data operasional kini HANYA ada di berkas cabang. */
     $namaGlobal = $branch ? db_route_global_tables() : [];
-    $ex = function (string $sql) use ($pdo, $branch, $namaGlobal) {
-        if ($branch) {
-            foreach ($namaGlobal as $g) {
-                if (preg_match('/\b' . preg_quote($g, '/') . '\b/i', $sql)) return;
-            }
+    $namaOper = $branch ? [] : schema_branch_table_list();
+    $ex = function (string $sql) use ($pdo, $namaGlobal, $namaOper) {
+        foreach ($namaGlobal as $g) {
+            if (preg_match('/\b' . preg_quote($g, '/') . '\b/i', $sql)) return;
+        }
+        foreach ($namaOper as $g) {
+            if (preg_match('/\b' . preg_quote($g, '/') . '\b/i', $sql)) return;
         }
         $pdo->exec($sql);
     };
@@ -864,7 +914,8 @@ function run_migrations(PDO $pdo): void
        batch demo gagal dengan "no such column". */
     $tabelDemo = ['patients', 'medical_records', 'appointments', 'appointment_treatments',
                   'orders', 'order_items', 'payments', 'inventory_movements', 'packages',
-                  'treatments', 'skincare_products', 'treatment_materials', 'suppliers'];
+                  'treatments', 'skincare_products', 'treatment_materials', 'suppliers',
+                  'member_upgrades'];
     foreach ($tabelDemo as $tbl) {
         $ada = (int)$pdo->query("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name="
             . $pdo->quote($tbl))->fetchColumn();
@@ -875,7 +926,35 @@ function run_migrations(PDO $pdo): void
         $ex("CREATE INDEX IF NOT EXISTS idx_{$tbl}_demo ON {$tbl}(demo_batch_id)");
     }
 
-
+    /* ---------------------------------------------------------------- *
+     * BERSIHKAN WADAH OPERASIONAL KOSONG DI CENTRAL (FINAL AUDIT)
+     * ---------------------------------------------------------------- *
+     * Central HANYA memuat data global/sistem. Tabel operasional sisa dari
+     * arsitektur lama (dibuat sebagai "wadah kosong") dibuang HANYA bila
+     * benar-benar KOSONG — tabel yang masih berisi baris DIBIARKAN dan
+     * dilaporkan lewat $GLOBALS supaya tidak ada data yang hilang tanpa
+     * disetujui. Berkas CABANG tidak tersentuh sama sekali.
+     * Idempoten: sesudah dijalankan, tabelnya tidak ada lagi. */
+    if (!$branch) {
+        $dibuang = [];
+        foreach (schema_branch_table_list() as $t) {
+            try {
+                $ada = (int)$pdo->query("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name="
+                    . $pdo->quote($t))->fetchColumn();
+                if ($ada === 0) continue;
+                $baris = (int)$pdo->query('SELECT COUNT(*) FROM "' . $t . '"')->fetchColumn();
+                if ($baris > 0) {
+                    $GLOBALS['DB_CENTRAL_OPS_NOT_EMPTY'][$t] = $baris;
+                    continue;
+                }
+                $pdo->exec('DROP TABLE IF EXISTS "' . $t . '"');
+                $dibuang[] = $t;
+            } catch (Throwable $e) {
+                $GLOBALS['DB_CENTRAL_OPS_ERROR'][$t] = $e->getMessage();
+            }
+        }
+        if ($dibuang) $GLOBALS['DB_CENTRAL_OPS_DROPPED'] = $dibuang;
+    }
 }
 
 /**
@@ -1145,7 +1224,8 @@ function schema_branch_table_list(): array
     return ['patients', 'medical_records', 'medical_record_photos', 'appointments',
         'appointment_treatments', 'orders', 'order_items', 'payments',
         'inventory', 'inventory_movements', 'treatments', 'skincare_products',
-        'treatment_materials', 'suppliers', 'doctors', 'therapists', 'packages', 'package_items'];
+        'treatment_materials', 'suppliers', 'doctors', 'therapists', 'packages', 'package_items',
+        'member_upgrades'];
 }
 
 /**
@@ -1163,14 +1243,27 @@ function schema_branch_table_list(): array
 function schema_ddl(string $scope = 'central'): array
 {
     $ddl = schema_ddl_raw();
-    if ($scope !== 'branch') return $ddl;
     $oper = array_flip(array_map('strtolower', schema_branch_table_list()));
+    if ($scope === 'branch') {
+        $out = [];
+        foreach ($ddl as $sql) {
+            $t = schema_statement_table($sql);
+            if ($t === null) continue;                        // tidak dipastikan → jangan buat
+            if (!isset($oper[strtolower($t)])) continue;      // tabel global → bukan milik cabang
+            $out[] = db_route_strip_cross_fk($sql);
+        }
+        return $out;
+    }
+    /* CENTRAL (FINAL AUDIT): hanya tabel GLOBAL/SISTEM. Tabel operasional TIDAK
+       dibuat di central sama sekali — datanya hidup di berkas masing-masing cabang
+       dan disajikan lewat TEMP VIEW (includes/db_route.php). Dulu central ikut
+       membuat wadah kosong untuk 19 tabel operasional, sehingga definisi satu tabel
+       ada di DUA basis data. */
     $out = [];
     foreach ($ddl as $sql) {
         $t = schema_statement_table($sql);
-        if ($t === null) continue;                        // tidak dipastikan → jangan buat
-        if (!isset($oper[strtolower($t)])) continue;      // tabel global → bukan milik cabang
-        $out[] = db_route_strip_cross_fk($sql);
+        if ($t !== null && isset($oper[strtolower($t)])) continue;
+        $out[] = $sql;
     }
     return $out;
 }
@@ -1233,6 +1326,75 @@ function schema_ddl_raw(): array
            jadwal/notifikasi dan ditampilkan pada daftar & ekspor. Kolomnya juga
            ditambahkan ke daftar `schema_adds()` supaya pemasangan LAMA ikut dapat
            (sidik jari daftar kolom memicu migrasi walau versi skema tidak naik). */
+        /* RIWAYAT NAIK LEVEL KARTU MEMBER (ronde 64d) — "Membership Upgrade".
+           Satu baris = satu kali seorang pasien naik level kartu member, direkam
+           otomatis setelah transaksi tersimpan (lihat includes/member_upgrade.php).
+           Kolomnya menyimpan SNAPSHOT nama level/diskon saat itu supaya riwayat tetap
+           benar walau aturan level di Pengaturan diubah kemudian.
+           `email_status`: '' (belum dikirim) · 'sent' · 'failed'.
+           `wa_status`   : '' (belum) · 'prepared' (tautan WA sudah dibuka petugas).
+           Tabel OPERASIONAL (per cabang) → ikut db_route_branch_tables(). */
+        "CREATE TABLE IF NOT EXISTS member_upgrades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            branch_id INTEGER NOT NULL,
+            member_number TEXT,
+            old_level TEXT, old_label TEXT, old_pct REAL,
+            new_level TEXT NOT NULL, new_label TEXT, new_pct REAL,
+            upgraded_at TEXT NOT NULL,
+            total_amount REAL NOT NULL DEFAULT 0,
+            order_id INTEGER, invoice_number TEXT,
+            email_to TEXT, email_status TEXT, email_sent_at TEXT, email_error TEXT,
+            wa_status TEXT, wa_sent_at TEXT,
+            demo_batch_id TEXT,
+            created_at TEXT DEFAULT (datetime('now','localtime')),
+            FOREIGN KEY (branch_id) REFERENCES branches(id),
+            FOREIGN KEY (patient_id) REFERENCES patients(id)
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_member_upgrades_patient ON member_upgrades(patient_id)",
+        "CREATE INDEX IF NOT EXISTS idx_member_upgrades_time ON member_upgrades(upgraded_at)",
+        /* LOGIN MANAGEMENT (ronde 64e) — daftar sesi yang sedang/pernah aktif.
+           Sesi PHP berbasis berkas, jadi "mengeluarkan perangkat" dilakukan dengan
+           menandai baris ini `revoked`; pada permintaan berikutnya sesi itu mendapati
+           dirinya dicabut lalu dipaksa keluar (login_manage_boot()).
+           Tabel GLOBAL (hanya dibuat di central; berkas cabang menyaringnya lewat
+           schema_branch_table_list()). */
+        "CREATE TABLE IF NOT EXISTS user_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            branch_id INTEGER,
+            sid_hash TEXT NOT NULL,
+            device_id TEXT,
+            ip TEXT,
+            user_agent TEXT,
+            device_label TEXT,
+            browser TEXT,
+            platform TEXT,
+            jenis TEXT,
+            via TEXT DEFAULT 'password',
+            login_at TEXT NOT NULL,
+            last_activity TEXT,
+            logout_at TEXT,
+            revoked INTEGER NOT NULL DEFAULT 0,
+            revoked_by INTEGER,
+            revoked_at TEXT,
+            revoke_reason TEXT
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_user_sessions_sid ON user_sessions(sid_hash)",
+        "CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id)",
+        /* Pemblokiran PERANGKAT. `user_id = 0` = diblokir untuk SEMUA akun. */
+        "CREATE TABLE IF NOT EXISTS login_blocks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            device_id TEXT NOT NULL,
+            user_id INTEGER NOT NULL DEFAULT 0,
+            reason TEXT,
+            created_by INTEGER,
+            created_at TEXT DEFAULT (datetime('now','localtime')),
+            removed_by INTEGER,
+            removed_at TEXT,
+            active INTEGER NOT NULL DEFAULT 1
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_login_blocks_device ON login_blocks(device_id)",
         "CREATE TABLE IF NOT EXISTS doctors (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL, phone TEXT, email TEXT, specialization TEXT, schedule TEXT,
@@ -1710,6 +1872,10 @@ function seed_core(PDO $pdo): void
         /* Peran yang AKUN BAWAAN-nya ditampilkan di halaman login (ronde 37).
            Kosong = semua peran. Diatur di Developer Settings → Pengaturan Umum. */
         'login_hint_roles'      => 'super_admin,direktur,admin_dokter,kasir',
+        /* CAKUPAN MODE PEMELIHARAAN (ronde 66): '0' = GLOBAL (semua cabang),
+           atau id satu cabang. Daftar cabangnya dibaca dari tabel `branches`
+           sehingga cabang baru otomatis bisa dipilih. */
+        'maintenance_branch'    => '0',
         /* Ukuran tampilan (%) — pengganti kebiasaan menekan Ctrl+− pada peramban.
            Bawaan 80% karena tampilan 100% terasa terlalu besar di PC/laptop. */
         'ui_scale'              => '80',
@@ -1799,6 +1965,15 @@ function seed_core(PDO $pdo): void
            lihat wa_doctor_message()/wa_reservation_message()/wa_receipt_template(). */
         'wa_template_doctor'   => "Selamat pagi/siang Dokter {dokter},\n\nPengingat jadwal praktik di {klinik} {cabang}:\nTanggal: {tanggal}\nJam: {jam}\nPasien: {nama}\nTreatment: {treatment}\n\nMohon konfirmasi ketersediaannya. Terima kasih.",
         'wa_receipt_template'  => "Halo Kak {nama} 🙏\n\nTerima kasih telah melakukan perawatan di {klinik} {cabang}.\n\nRincian transaksi Kakak:\nNo. Invoice: {invoice}\nTanggal: {tanggal}\nTotal: {total}\nMetode: {metode}\n\nStruk digital: {link}\n\nSalam sehat,\n{klinik} {cabang}",
+        /* ---- MEMBERSHIP UPGRADE (ronde 64d) ----------------------------------
+           Ucapan selamat + penjelasan benefit diskon saat level kartu member pasien
+           NAIK. Dikirim otomatis setelah transaksi tersimpan (bila `..._auto` = 1)
+           dan dapat dikirim ulang manual dari halaman Membership Upgrade.
+           Lampiran: PDF kartu member lengkap 2 halaman (kartu + status & aturan). */
+        'email_member_upgrade_auto'    => '1',
+        'email_member_upgrade_subject' => 'Selamat! Level Kartu Member Anda naik menjadi {level}',
+        'email_member_upgrade_body'    => "Halo {nama} 🙏\n\nKabar baik! Level kartu member Anda di {klinik} {cabang} baru saja NAIK.\n\nLevel sebelumnya: {level_lama}\nLevel sekarang   : {level}\nAkumulasi transaksi {periode}: {akumulasi}\n\nBenefit diskon Anda sekarang: {diskon}\n{benefit}\n\nBersama email ini kami lampirkan kartu member lengkap Anda (PDF) yang memuat\npratinjau kartu beserta status dan aturan diskon yang berlaku.\n\nTerima kasih telah mempercayakan perawatan kulit Anda kepada {klinik}.\n\nSalam sehat,\n{klinik} {cabang}",
+        'wa_member_upgrade_template'   => "Halo Kak {nama} 🙏\n\nSelamat! Level kartu member Kakak di {klinik} {cabang} naik menjadi *{level}*.\n\nBenefit diskon sekarang: {diskon}\nAkumulasi transaksi {periode}: {akumulasi}\n\nKartu member lengkap akan kami kirim ke email Kakak.\n\nSalam sehat,\n{klinik} {cabang}",
     ];
     $st = $pdo->prepare('INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO NOTHING');
     foreach ($defaults as $k => $v) $st->execute([$k, (string)$v]);
@@ -1854,26 +2029,40 @@ function seed_core(PDO $pdo): void
         $bid = ['cabang' => max(1, db_schema_branch_id())];
     }
 
+    /* IDEMPOTEN (FINAL AUDIT): data contoh dokter/terapis/supplier HANYA diisi bila
+       tabelnya masih KOSONG. Sebelumnya pernyataannya tanpa penjaga, sehingga setiap
+       kali skema berkas cabang diterapkan ulang (mis. karena naik versi skema) data
+       contoh TAMBAH LAGI dan menumpuk di dokter/terapis/supplier produksi — kejadian
+       nyata: satu kali migrasi menambah 2 dokter, 2 terapis, dan 3 supplier per cabang.
+       Master treatment/skincare/bahan di bawah sudah aman (ON CONFLICT). */
+    $kosongDokter = (int)$pdo->query('SELECT COUNT(*) FROM doctors')->fetchColumn() === 0;
+    $kosongTerapis = (int)$pdo->query('SELECT COUNT(*) FROM therapists')->fetchColumn() === 0;
+    $kosongSupplier = (int)$pdo->query('SELECT COUNT(*) FROM suppliers')->fetchColumn() === 0;
+
     // ---- Dokter & Terapis (contoh awal, boleh diedit/dinonaktifkan) -----
-    $doctors = [
-        ['dr. Ratna Kusuma', '0812-3000-0011', 'Kulit & Estetika', 'Senin–Jumat 10.00–17.00'],
-        ['dr. Bagas Prakoso', '0812-3000-0012', 'Dermatologi', 'Selasa–Sabtu 13.00–19.00'],
-    ];
-    $therapists = [
-        ['Nia Puspita', '0812-3000-0021', 'Facial & Peeling', 'Senin–Sabtu 09.00–17.00'],
-        ['Sari Melati', '0812-3000-0022', 'Body Treatment', 'Senin–Sabtu 10.00–19.00'],
-    ];
-    $stDoc = $pdo->prepare('INSERT INTO doctors (name, phone, specialization, schedule, branch_id, status, created_at) VALUES (?,?,?,?,?,?,datetime("now","localtime"))');
-    $stThe = $pdo->prepare('INSERT INTO therapists (name, phone, specialization, schedule, branch_id, status, created_at) VALUES (?,?,?,?,?,?,datetime("now","localtime"))');
-    foreach ($bid as $b_id) {
-        foreach ($doctors as $d) $stDoc->execute([$d[0], $d[1], $d[2], $d[3], $b_id, 'active']);
-        foreach ($therapists as $t) $stThe->execute([$t[0], $t[1], $t[2], $t[3], $b_id, 'active']);
+    if ($kosongDokter || $kosongTerapis) {
+        $doctors = [
+            ['dr. Ratna Kusuma', '0812-3000-0011', 'Kulit & Estetika', 'Senin–Jumat 10.00–17.00'],
+            ['dr. Bagas Prakoso', '0812-3000-0012', 'Dermatologi', 'Selasa–Sabtu 13.00–19.00'],
+        ];
+        $therapists = [
+            ['Nia Puspita', '0812-3000-0021', 'Facial & Peeling', 'Senin–Sabtu 09.00–17.00'],
+            ['Sari Melati', '0812-3000-0022', 'Body Treatment', 'Senin–Sabtu 10.00–19.00'],
+        ];
+        $stDoc = $pdo->prepare('INSERT INTO doctors (name, phone, specialization, schedule, branch_id, status, created_at) VALUES (?,?,?,?,?,?,datetime("now","localtime"))');
+        $stThe = $pdo->prepare('INSERT INTO therapists (name, phone, specialization, schedule, branch_id, status, created_at) VALUES (?,?,?,?,?,?,datetime("now","localtime"))');
+        foreach ($bid as $b_id) {
+            if ($kosongDokter) foreach ($doctors as $d) $stDoc->execute([$d[0], $d[1], $d[2], $d[3], $b_id, 'active']);
+            if ($kosongTerapis) foreach ($therapists as $t) $stThe->execute([$t[0], $t[1], $t[2], $t[3], $b_id, 'active']);
+        }
     }
 
     // ---- Suppliers ------------------------------------------------
-    $st = $pdo->prepare('INSERT INTO suppliers (name, phone, address, branch_id) VALUES (?,?,?,?)');
-    foreach ([['PT Beauty Supply Indonesia', '021-5550100', 'Jakarta'], ['CV Glow Distribusi', '024-7770200', 'Semarang'], ['PT Dermacare Jaya', '021-5550300', 'Tangerang']] as $s) {
-        foreach ($bid as $bc => $b_id) $st->execute([$s[0], $s[1], $s[2], $b_id]);
+    if ($kosongSupplier) {
+        $st = $pdo->prepare('INSERT INTO suppliers (name, phone, address, branch_id) VALUES (?,?,?,?)');
+        foreach ([['PT Beauty Supply Indonesia', '021-5550100', 'Jakarta'], ['CV Glow Distribusi', '024-7770200', 'Semarang'], ['PT Dermacare Jaya', '021-5550300', 'Tangerang']] as $s) {
+            foreach ($bid as $bc => $b_id) $st->execute([$s[0], $s[1], $s[2], $b_id]);
+        }
     }
 
     // ---- Starter master data per branch (boleh diedit / dihapus) ----

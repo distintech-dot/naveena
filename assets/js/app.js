@@ -864,7 +864,18 @@
       const form = sel.form;
       const boxes = form ? form.querySelectorAll('[data-period-custom]') : [];
       if (!boxes.length) return;
-      const upd = () => boxes.forEach((b) => { b.style.display = sel.value === 'custom' ? 'flex' : 'none'; });
+      /* Kolom "Custom tanggal" yang TERSEMBUNYI ikut dinonaktifkan. Tanpa ini,
+         nilainya tetap terkirim saat formulir dikirim sehingga pilihan periode lain
+         (mis. "3 bulan terakhir"/"Tahun ini") dianggap "Custom tanggal" dengan
+         tanggal LAMA — gejalanya: memilih periode tampak tidak berpengaruh.
+         Ketika "Custom tanggal" dipilih, kolomnya ditampilkan DAN diaktifkan lagi. */
+      const upd = () => {
+        const kustom = sel.value === 'custom';
+        boxes.forEach((b) => {
+          b.style.display = kustom ? 'flex' : 'none';
+          b.querySelectorAll('input,select,textarea').forEach((inp) => { inp.disabled = !kustom; });
+        });
+      };
       sel.addEventListener('change', upd); upd();
     });
   });

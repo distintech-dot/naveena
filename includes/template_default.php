@@ -21,7 +21,9 @@
 function template_default_keys(): array
 {
     return ['email_receipt_subject', 'email_receipt_body',
-        'wa_template', 'wa_template_doctor', 'wa_receipt_template'];
+        'wa_template', 'wa_template_doctor', 'wa_receipt_template',
+        /* Membership Upgrade (ronde 64d) — ucapan selamat saat level naik. */
+        'email_member_upgrade_subject', 'email_member_upgrade_body', 'wa_member_upgrade_template'];
 }
 
 /** Kelompok kunci per kartu pengaturan (dipakai tombol & pesan hasil). */
@@ -32,6 +34,12 @@ function template_default_groups(): array
             'keys' => ['email_receipt_subject', 'email_receipt_body']],
         'wa' => ['label' => 'WhatsApp',
             'keys' => ['wa_template', 'wa_template_doctor', 'wa_receipt_template']],
+        /* Dipisah email vs WhatsApp karena tombolnya punya dua kata kunci konfirmasi
+           berbeda di halaman Membership Upgrade. */
+        'member_email' => ['label' => 'Ucapan Selamat Membership (Email)',
+            'keys' => ['email_member_upgrade_subject', 'email_member_upgrade_body']],
+        'member_wa' => ['label' => 'Ucapan Selamat Membership (WhatsApp)',
+            'keys' => ['wa_member_upgrade_template']],
     ];
 }
 
@@ -68,6 +76,22 @@ function template_code_default(string $key): string
             return "Halo Kak {nama} 🙏\n\nTerima kasih telah melakukan perawatan di {klinik} {cabang}.\n\n"
                 . "Rincian transaksi Kakak:\nNo. Invoice: {invoice}\nTanggal: {tanggal}\nTotal: {total}\n"
                 . "Metode: {metode}\n\nStruk digital: {link}\n\nSalam sehat,\n{klinik} {cabang}";
+        /* ---- Membership Upgrade (ronde 64d) ---- */
+        case 'email_member_upgrade_subject':
+            return 'Selamat! Level Kartu Member Anda naik menjadi {level}';
+        case 'email_member_upgrade_body':
+            return "Halo {nama} 🙏\n\nKabar baik! Level kartu member Anda di {klinik} {cabang} baru saja NAIK.\n\n"
+                . "Level sebelumnya: {level_lama}\nLevel sekarang   : {level}\n"
+                . "Akumulasi transaksi {periode}: {akumulasi}\n\n"
+                . "Benefit diskon Anda sekarang: {diskon}\n{benefit}\n\n"
+                . "Bersama email ini kami lampirkan kartu member lengkap Anda (PDF) yang memuat\n"
+                . "pratinjau kartu beserta status dan aturan diskon yang berlaku.\n\n"
+                . "Terima kasih telah mempercayakan perawatan kulit Anda kepada {klinik}.\n\n"
+                . "Salam sehat,\n{klinik} {cabang}";
+        case 'wa_member_upgrade_template':
+            return "Halo Kak {nama} 🙏\n\nSelamat! Level kartu member Kakak di {klinik} {cabang} naik menjadi *{level}*.\n\n"
+                . "Benefit diskon sekarang: {diskon}\nAkumulasi transaksi {periode}: {akumulasi}\n\n"
+                . "Kartu member lengkap akan kami kirim ke email Kakak.\n\nSalam sehat,\n{klinik} {cabang}";
     }
     return '';
 }

@@ -42,6 +42,8 @@ function db_route_global_tables(): array
         'email_report_logs', 'pay_pending', 'finance_costs', 'finance_cost_amounts',
         'db_registry', 'db_migrations', 'demo_batches',
         'login_remember', 'login_2fa_codes', 'password_resets', 'recovery_codes', 'twofa',
+        /* LOGIN MANAGEMENT (ronde 64e) — sesi & blokir perangkat adalah data GLOBAL. */
+        'user_sessions', 'login_blocks',
         'ai_tasks', 'ai_task_files', 'ai_usage_log', 'ai_steps', 'ai_messages', 'ai_traces', 'ai_jobs'];
 }
 
@@ -51,7 +53,9 @@ function db_route_branch_tables(): array
     return ['patients', 'medical_records', 'medical_record_photos', 'appointments',
         'appointment_treatments', 'orders', 'order_items', 'payments',
         'inventory', 'inventory_movements', 'treatments', 'skincare_products',
-        'treatment_materials', 'suppliers', 'doctors', 'therapists', 'packages', 'package_items'];
+        'treatment_materials', 'suppliers', 'doctors', 'therapists', 'packages', 'package_items',
+        /* Riwayat naik level kartu member (ronde 64d) — data per pasien/cabang. */
+        'member_upgrades'];
 }
 
 /**
@@ -69,7 +73,9 @@ function db_route_parent_refs(): array
 {
     return ['appointments' => ['patients', 'patient_id'],
         'orders' => ['patients', 'patient_id'],
-        'medical_records' => ['patients', 'patient_id']];
+        'medical_records' => ['patients', 'patient_id'],
+        /* Riwayat naik level mengikuti cabang PASIEN yang bersangkutan. */
+        'member_upgrades' => ['patients', 'patient_id']];
 }
 
 /** Tabel tanpa kolom `branch_id` — cabangnya ditentukan dari tabel INDUK. */
@@ -104,6 +110,46 @@ function db_route_scope_of(string $table): string
  * CAKUPAN BACA & CABANG TULIS
  * ------------------------------------------------------------------ */
 
+/**
+ * Cakupan baca dihitung dari basis data CENTRAL (tanpa koneksi routed).
+ *
+ * Aturannya SAMA dengan `user_branch()` + `scope_branch()`:
+ *   • belum ada akun aktif (bootstrap/CLI) → semua cabang (null);
+ *   • akun dengan peran owner (super_admin/direktur):
+ *       – `?branch=` diisi  → cabang itu ('all' → semua),
+ *       – ada cabang aktif di sesi → cabang itu,
+ *       – selain itu → semua cabang (null);
+ *   • akun lain → cabang akunnya (0/-1 diperlakukan sebagai semua cabang).
+ */
+function db_route_scope_central(): ?int
+{
+    $uid = (int)($_SESSION['user_id'] ?? 0);
+    if ($uid <= 0) return null;
+    $u = db_route_scope_user($uid);
+    if (!$u) return null;
+    $owner = in_array((string)$u['role_code'], ['super_admin', 'direktur'], true);
+    if ($owner) {
+        $b = (string)($_GET['branch'] ?? $_POST['branch'] ?? '');
+        if ($b !== '') return $b === 'all' ? null : ((int)$b > 0 ? (int)$b : null);
+        $aktif = (int)($_SESSION['active_branch'] ?? 0);
+        return $aktif > 0 ? $aktif : null;
+    }
+    $bid = (int)($u['branch_id'] ?? 0);
+    return $bid > 0 ? $bid : null;
+}
+
+/** Identitas akun (cabang + kode peran) dari CENTRAL, di-cache per permintaan. */
+function db_route_scope_user(int $uid): ?array
+{
+    static $cache = [];
+    if (array_key_exists($uid, $cache)) return $cache[$uid];
+    $rows = db_route_raw_central_many(
+        'SELECT u.id, u.branch_id, r.code AS role_code
+           FROM users u LEFT JOIN roles r ON r.id = u.role_id WHERE u.id = ? LIMIT 1', [$uid]);
+    $cache[$uid] = $rows ? $rows[0] : null;
+    return $cache[$uid];
+}
+
 /** Cabang yang dipakai untuk MEMBACA (null = semua cabang / level owner). */
 function db_route_read_scope(): ?int
 {
@@ -120,11 +166,13 @@ function db_route_read_scope(): ?int
     if (!empty($GLOBALS['DB_ROUTE_SCOPE_BUSY'])) return null;   // sedang dihitung → hindari rekursi
     $GLOBALS['DB_ROUTE_SCOPE_BUSY'] = true;
     try {
-        $b = function_exists('scope_branch') ? scope_branch() : null;
-        /* Hanya id cabang POSITIF yang dianggap cakupan satu cabang. null berarti
-           "semua cabang" (level owner); 0/-1 (belum ada akun aktif) juga diperlakukan
-           sebagai semua cabang supaya tidak ada cabang yang luput. */
-        $nilai = ($b !== null && (int)$b > 0) ? (int)$b : null;
+        /* PENTING (ronde 65): identitas akun dibaca dari CENTRAL LANGSUNG, bukan lewat
+           `scope_branch()`/`current_user()` — keduanya memakai koneksi routed (`db()`),
+           sehingga pada permintaan PERTAMA terjadi lingkaran: db() → attach → scope →
+           db(). Dulu lingkaran itu diputus dengan menganggap cakupannya "semua cabang",
+           dan AKIBATNYA setiap permintaan meng-ATTACH sampai 9 berkas cabang walau
+           akunnya dipin ke satu cabang saja. */
+        $nilai = db_route_scope_central();
     } finally {
         unset($GLOBALS['DB_ROUTE_SCOPE_BUSY']);
     }
@@ -187,6 +235,21 @@ function db_route_conn(bool $siapkanSkema = true): PDO
     static $scopeViews = null;
     static $skemaSiap = false;
 
+    /* PERMINTAAN MEMBANGUN ULANG KONEKSI (ronde 65).
+       Dipakai setelah PEMULIHAN BACKUP: berkas basis data diganti di disk, sedangkan
+       koneksi yang lama masih memegang berkas (inode) lama berikut berkas `-wal`-nya.
+       Tanpa membangun ulang, penulisan berikutnya bisa MENGHIDUPKAN KEMBALI baris lama
+       dari WAL (pernah benar-benar terjadi pada uji pemulihan: jumlah baris kembali
+       seperti SEBELUM pemulihan). */
+    if (!empty($GLOBALS['DB_ROUTE_RESET'])) {
+        $GLOBALS['DB_ROUTE_RESET'] = false;
+        $pdo = null;
+        $scopeViews = null;
+        $skemaSiap = false;
+        $GLOBALS['DB_ROUTE_ATTACHED'] = [];
+        $GLOBALS['DB_ROUTE_ATTACHING'] = true;      // cegah pemanggilan ulang saat membangun
+    }
+
     /* Mode periksa: jangan sentuh skema, tetapi tetap hitung kesiapan supaya
        pemanggil yang meminta skema nanti tidak menjalankan migrasi diam-diam. */
     if ($siapkanSkema && db_route_inspect()) {
@@ -195,6 +258,8 @@ function db_route_conn(bool $siapkanSkema = true): PDO
     }
 
     if (!$pdo instanceof PDO) {
+        $GLOBALS['DB_ROUTE_ATTACHING'] = true;
+        try {
         $path = db_central_path();
         if (!is_file($path)) {
             /* Central belum ada: buat + terapkan skema (global) lebih dulu. */
@@ -208,6 +273,7 @@ function db_route_conn(bool $siapkanSkema = true): PDO
         }
         db_route_attach_all($pdo);
         db_route_install_views($pdo);
+        } finally { unset($GLOBALS['DB_ROUTE_ATTACHING']); }
         $scopeViews = db_route_read_scope();
         return $pdo;
     }
@@ -238,31 +304,132 @@ function db_route_conn(bool $siapkanSkema = true): PDO
 function db_route_attach_all(PDO $pdo): void
 {
     $ids = db_route_branch_ids();
-    $prioritas = [];
     $scope = db_route_read_scope();
     $tulis = isset($GLOBALS['DB_ROUTE_WRITE_BRANCH']) ? (int)$GLOBALS['DB_ROUTE_WRITE_BRANCH'] : 0;
     $akun = function_exists('user_branch') ? (int)user_branch() : 0;
-    foreach ([$scope, $tulis, $akun] as $p) {
-        if ($p !== null && (int)$p > 0 && in_array((int)$p, $ids, true)) $prioritas[] = (int)$p;
+
+    /* ---- ATTACH SELEKTIF (ronde 65) -------------------------------------
+       Dulu SETIAP permintaan meng-ATTACH sampai 9 berkas cabang — termasuk akun
+       yang dipin ke SATU cabang (kasir/admin). Dengan 10–15 cabang itu berarti
+       membuka 10–16 berkas basis data + membuat 19 TEMP VIEW tiap permintaan,
+       padahal data yang dibutuhkan hanya satu cabang. Sekarang:
+         • cakupan SATU cabang (akun cabang, atau owner yang memilih cabang) →
+           hanya berkas cabang itu yang di-ATTACH (+ cabang tulis bila berbeda);
+         • cakupan SEMUA cabang (owner lintas cabang) → sampai batas ATTACH,
+           cabang yang sedang aktif didahulukan.
+       Query laporan lintas cabang untuk cabang yang TIDAK ter-ATTACH dilayani
+       fan-out (`db_branch_each()`): satu berkas cabang pada satu waktu, hasilnya
+       digabung di PHP — jadi tidak ada data transaksi yang dipindahkan ke central. */
+    if ($scope !== null && (int)$scope > 0) {
+        $urutan = [(int)$scope];
+        foreach ([$tulis, $akun] as $extra) {
+            if ((int)$extra > 0 && (int)$extra !== (int)$scope) $urutan[] = (int)$extra;
+        }
+    } else {
+        $prioritas = [];
+        foreach ([$akun, $tulis] as $p) {
+            if ((int)$p > 0 && in_array((int)$p, $ids, true)) $prioritas[] = (int)$p;
+        }
+        $urutan = array_values(array_unique(array_merge($prioritas, $ids)));
     }
-    $urutan = array_values(array_unique(array_merge($prioritas, $ids)));
+
     $terpasang = [];
     foreach ($urutan as $i => $bid) {
-        if ($i >= DB_ROUTE_MAX_ATTACH) break;
-        $file = db_branch_path((int)$bid);
-        if (!is_file($file)) db_branch_create((int)$bid);          // cabang baru → otomatis dibuat
-        if (!is_file($file)) continue;
-        $alias = 'b' . (int)$bid;
-        try {
-            $pdo->exec('ATTACH DATABASE ' . $pdo->quote($file) . ' AS ' . $alias);
-        } catch (Throwable $e) {
-            continue;
-        }
-        db_route_ensure_branch_schema($pdo, $alias, (int)$bid);     // skema + migrasi cabang
-        $terpasang[(int)$bid] = $alias;
+        if (count($terpasang) >= DB_ROUTE_MAX_ATTACH) break;
+        if (!in_array((int)$bid, $ids, true)) continue;           // cabang tidak terdaftar
+        db_route_attach_one($pdo, (int)$bid, $terpasang);
     }
     $GLOBALS['DB_ROUTE_ATTACHED'] = $terpasang;
     $GLOBALS['DB_ROUTE_ATTACH_SKIPPED'] = array_values(array_diff($ids, array_keys($terpasang)));
+    $GLOBALS['DB_ROUTE_ATTACH_ALL_MODE'] = ($scope === null);
+}
+
+/**
+ * ATTACH satu berkas cabang ke sebuah koneksi (+ skema/migrasinya bila perlu).
+ * Idempoten: cabang yang sudah terpasang tidak di-ATTACH ulang.
+ *
+ * @param array<int,string> $terpasang daftar [id cabang => alias] yang sudah ada
+ */
+function db_route_attach_one(PDO $pdo, int $bid, array &$terpasang): string
+{
+    if (isset($terpasang[$bid])) return $terpasang[$bid];
+    if (count($terpasang) >= DB_ROUTE_MAX_ATTACH) return '';
+    $file = db_branch_path($bid);
+    if (!is_file($file)) db_branch_create($bid);          // cabang baru → otomatis dibuat
+    if (!is_file($file)) return '';
+    $alias = 'b' . $bid;
+    try {
+        $pdo->exec('ATTACH DATABASE ' . $pdo->quote($file) . ' AS ' . $alias);
+    } catch (Throwable $e) {
+        return '';
+    }
+    /* Skema/migrasi cabang hanya diperiksa untuk cabang yang benar-benar dipakai —
+       itulah sebabnya pemeriksaan ini dipindah ke sini (dulu dilakukan untuk semua
+       cabang yang di-ATTACH, termasuk yang tidak diperlukan permintaan ini). */
+    db_route_ensure_branch_schema($pdo, $alias, $bid);
+    $terpasang[$bid] = $alias;
+    return $alias;
+}
+
+/**
+ * Pastikan cabang TUJUAN TULIS ter-ATTACH; bila slot penuh, lepaskan berkas yang
+ * tidak diperlukan (bukan cabang tulis, bukan cakupan baca sekarang).
+ *
+ * @param array<int,string> $attached daftar terpasang saat ini
+ * @return array<int,string> daftar terpasang sesudahnya
+ */
+function db_route_attach_for_write(int $branchId, array $attached): array
+{
+    if (isset($attached[$branchId])) return $attached;
+    $pdo = db_route_conn();
+    if (count($attached) < DB_ROUTE_MAX_ATTACH) {
+        if (db_route_attach_one($pdo, $branchId, $attached) !== '') {
+            $GLOBALS['DB_ROUTE_ATTACHED'] = $attached;
+            db_route_install_views($pdo);
+        }
+        return $attached;
+    }
+    /* Slot penuh → longgarkan: pertahankan cabang tulis + cakupan baca. */
+    $scope = db_route_read_scope();
+    $pertahankan = [$branchId => true];
+    if ($scope !== null && (int)$scope > 0) $pertahankan[(int)$scope] = true;
+    foreach (array_keys($attached) as $bid) {
+        if (isset($pertahankan[(int)$bid])) continue;
+        $alias = $attached[(int)$bid];
+        try {
+            $pdo->exec('DETACH DATABASE ' . $pdo->quote($alias));
+        } catch (Throwable $e) {
+            continue;
+        }
+        unset($attached[(int)$bid]);
+        break;                                  // satu slot cukup
+    }
+    if (db_route_attach_one($pdo, $branchId, $attached) !== '') {
+        $GLOBALS['DB_ROUTE_ATTACHED'] = $attached;
+        $GLOBALS['DB_ROUTE_ATTACH_SKIPPED'] = array_values(array_diff(db_route_branch_ids(), array_keys($attached)));
+        db_route_install_views($pdo);
+    }
+    return $attached;
+}
+
+/**
+ * Pastikan sebuah cabang TER-ATTACH pada koneksi utama (dipakai bila alurnya
+ * ternyata membutuhkan cabang lain — mis. membuka rekam medis pasien cabang lain
+ * oleh akun lintas cabang). View dibangun ulang setelahnya.
+ */
+function db_route_require_branch(int $bid): bool
+{
+    $bid = (int)$bid;
+    if ($bid <= 0) return false;
+    $attached = db_route_attached();
+    if (isset($attached[$bid])) return true;
+    $pdo = db_route_conn();
+    $baru = db_route_attach_one($pdo, $bid, $attached);
+    if ($baru === '') return false;
+    $GLOBALS['DB_ROUTE_ATTACHED'] = $attached;
+    $GLOBALS['DB_ROUTE_ATTACH_SKIPPED'] = array_values(array_diff(db_route_branch_ids(), array_keys($attached)));
+    db_route_install_views($pdo);
+    return true;
 }
 
 /** Cabang yang berhasil di-ATTACH pada permintaan ini: [id => alias]. */
@@ -287,10 +454,529 @@ function db_checkpoint_all(): void
 
 function db_route_attached(): array
 {
-    if (!isset($GLOBALS['DB_ROUTE_ATTACHED']) || !is_array($GLOBALS['DB_ROUTE_ATTACHED'])) {
+    /* PENJAGA RE-ENTRANCY (penting): saat koneksi SEDANG dibangun (`DB_ROUTE_ATTACHING`),
+       pemanggilan `db_route_conn()` dari sini akan memulai pembangunan koneksi yang
+       sama sekali lagi — berputar tanpa henti sampai memori habis. Ini benar-benar
+       terjadi (Allowed memory size exhausted) ketika penyiapan skema/migrasi cabang
+       memanggil kembali lapisan query. Selama pembangunan, daftar yang sudah terpasang
+       dikembalikan apa adanya (boleh kosong). */
+    if (empty($GLOBALS['DB_ROUTE_ATTACHING'])
+        && (!isset($GLOBALS['DB_ROUTE_ATTACHED']) || !is_array($GLOBALS['DB_ROUTE_ATTACHED']))) {
         db_route_conn();
     }
-    return $GLOBALS['DB_ROUTE_ATTACHED'] ?? [];
+    return is_array($GLOBALS['DB_ROUTE_ATTACHED'] ?? null) ? $GLOBALS['DB_ROUTE_ATTACHED'] : [];
+}
+
+/* ------------------------------------------------------------------ *
+ * FAN-OUT: MEMBACA CABANG SATU PER SATU (untuk 10–15 cabang)
+ * ------------------------------------------------------------------ *
+ * Batas ATTACH SQLite hanya 10 basis data per koneksi (central + 9 cabang) dan
+ * TIDAK dapat dinaikkan saat berjalan. Karena itu laporan/agregasi lintas cabang
+ * TIDAK boleh bergantung pada "semua cabang ter-ATTACH": berkas cabang dibuka satu
+ * per satu pada koneksi terpisah (central + 1 cabang), query yang SAMA dijalankan
+ * di sana, lalu hasilnya digabung di PHP.
+ *
+ * Keuntungan: jumlah berkas terbuka tetap 2 pada satu waktu, berlaku untuk berapa
+ * pun cabangnya, dan TIDAK ada data transaksi yang dipindahkan ke central.
+ */
+
+/**
+ * Koneksi ber-cakupan SATU cabang (central + berkas cabang itu, view disaring ke
+ * cabang tersebut). Dipakai fan-out; hasilnya di-cache terbatas (2 terakhir) supaya
+ * jumlah berkas terbuka tetap kecil.
+ *
+ * @return PDO|null null bila berkas cabangnya tidak ada
+ */
+function db_scope_conn(int $branchId, ?array $hanyaTabel = null): ?PDO
+{
+    $branchId = (int)$branchId;
+    if ($branchId <= 0) return null;
+    /* Koneksi ber-cakupan SATU cabang tanpa TEMP VIEW lengkap (dipakai fan-out):
+       sasaran tabelnya diteruskan supaya hanya view yang dibutuhkan dibuat. */
+    $ringkas = $hanyaTabel !== null;
+    if (!isset($GLOBALS['DB_SCOPE_POOL']) || !is_array($GLOBALS['DB_SCOPE_POOL'])) {
+        $GLOBALS['DB_SCOPE_POOL'] = [];
+    }
+    $pool = $GLOBALS['DB_SCOPE_POOL'];
+    if ($ringkas) return db_fanout_conn($branchId);
+    if (isset($pool[$branchId])) {
+        /* Sentuh urutan pemakaian supaya yang terakhir dipakai tidak dibuang. */
+        unset($GLOBALS['DB_SCOPE_POOL'][$branchId]);
+        $GLOBALS['DB_SCOPE_POOL'][$branchId] = $pool[$branchId];
+        return $pool[$branchId];
+    }
+    $file = db_branch_path($branchId);
+    if (!is_file($file)) return null;
+    $central = db_central_path();
+    try {
+        $pdo = db_open($central);
+        /* `$att` HARUS variabel tersendiri: parameter ke-3 `db_route_attach_one()`
+           diteruskan by-reference, sehingga ekspresi bawaan di dalam pemanggilan
+           ditolak PHP ("cannot be passed by reference"). */
+        $att = [];
+        db_route_attach_one($pdo, $branchId, $att);
+        if (!$att) return null;
+        db_route_install_views($pdo, $att, $branchId);
+        $GLOBALS['DB_SCOPE_POOL'][$branchId] = $pdo;
+        /* Batasi: hanya 2 koneksi cabang yang disimpan (yang lain dilepas). Berkas
+           basis data ditutup sendiri oleh SQLite begitu PDO-nya tidak lagi dirujuk,
+           sehingga jumlah berkas terbuka tetap kecil walau cabangnya banyak. */
+        while (count($GLOBALS['DB_SCOPE_POOL']) > 2) {
+            $kunci = array_key_first($GLOBALS['DB_SCOPE_POOL']);
+            unset($GLOBALS['DB_SCOPE_POOL'][$kunci]);
+        }
+        return $pdo;
+    } catch (Throwable $e) {
+        /* Dilaporkan apa adanya supaya fan-out yang gagal tidak pernah diam-diam
+           membuat angka laporan tampak lebih kecil. */
+        $GLOBALS['DB_SCOPE_LAST_ERROR'] = 'Cabang ' . $branchId . ': ' . $e->getMessage();
+        return null;
+    }
+}
+
+/**
+ * KONEKSI FAN-OUT BERSAMA — SATU koneksi untuk membaca SELURUH cabang satu per satu.
+ *
+ * MENGAPA begini: membuka koneksi baru (central 7 MB) untuk setiap cabang membuat
+ * laporan lintas cabang pada 15 cabang memakan ~45 ms hanya untuk membuka berkas.
+ * Sebagai gantinya:
+ *   • koneksi dibuka SEKALI dan view-nya dibuat SEKALI (alias tetap `bf`);
+ *   • untuk tiap cabang berkasnya cukup DILEPAS lalu DIPASANG ULANG sebagai `bf`,
+ *     dan view tetap sah karena menunjuk NAMA alias (bukan berkas).
+ * Hasil ukur: 6 cabang fan-out turun dari ~46 ms menjadi beberapa milidetik.
+ * Aman: koneksi ini hanya dipakai BERURUTAN (satu cabang pada satu waktu).
+ */
+function db_fanout_conn(int $branchId): ?PDO
+{
+    if ($branchId <= 0) return null;
+    $file = db_branch_path($branchId);
+    if (!is_file($file)) return null;
+    try {
+        if (!isset($GLOBALS['DB_FANOUT_PDO']) || !($GLOBALS['DB_FANOUT_PDO'] instanceof PDO)) {
+            $pdo = db_open(db_central_path());
+            /* Berkas pertama dipasang SEBELUM view dibuat (SQLite memvalidasi nama
+               tabel saat CREATE VIEW). */
+            $pdo->exec('ATTACH DATABASE ' . $pdo->quote($file) . ' AS bf');
+            /* SATU set view untuk SEMUA cabang: penyaring cabangnya membaca penanda
+               `temp.nv_fan_branch`, jadi menukar cabang cukup menukar berkas + satu
+               UPDATE. Kunci peta WAJIB id cabang (bukan alias) — pembuat view memakai
+               kunci itu sebagai nilai cadangan pada penyaring. */
+            $pdo->exec('CREATE TEMP TABLE IF NOT EXISTS nv_fan_branch (v INTEGER)');
+            $pdo->exec('INSERT INTO nv_fan_branch (v) VALUES (' . $branchId . ')');
+            db_route_install_views($pdo, [$branchId => 'bf'], null, true, null,
+                '(SELECT v FROM nv_fan_branch)');
+            $GLOBALS['DB_FANOUT_PDO'] = $pdo;
+            $GLOBALS['DB_FANOUT_FILE'] = $file;
+            $GLOBALS['DB_FANOUT_BRANCH'] = $branchId;
+            return $pdo;
+        }
+        $pdo = $GLOBALS['DB_FANOUT_PDO'];
+        if (($GLOBALS['DB_FANOUT_FILE'] ?? '') === $file) return $pdo;
+        /* Tukar berkas + penanda cabang (view tidak perlu dibuat ulang). */
+        $pdo->exec('DETACH DATABASE bf');
+        $pdo->exec('ATTACH DATABASE ' . $pdo->quote($file) . ' AS bf');
+        $pdo->exec('UPDATE nv_fan_branch SET v = ' . (int)$branchId);
+        $GLOBALS['DB_FANOUT_FILE'] = $file;
+        $GLOBALS['DB_FANOUT_BRANCH'] = $branchId;
+        return $pdo;
+    } catch (Throwable $e) {
+        $GLOBALS['DB_SCOPE_LAST_ERROR'] = 'Cabang ' . $branchId . ': ' . $e->getMessage();
+        unset($GLOBALS['DB_FANOUT_PDO'], $GLOBALS['DB_FANOUT_FILE']);
+        return null;
+    }
+}
+
+/** Cabang yang perlu dilayani fan-out = semua cabang TERDAFTAR (bukan hanya yang ter-ATTACH). */
+function db_route_all_branch_ids(): array
+{
+    return db_route_branch_ids();
+}
+
+/** Jumlah SELURUH cabang yang terdaftar (untuk keterangan batas teknis). */
+function db_route_branches_semua(): array
+{
+    return db_route_branch_ids();
+}
+
+/**
+ * Cabang yang TIDAK ter-ATTACH pada koneksi utama (perlu fan-out).
+ *
+ * Dihitung dari KEADAAN SEKARANG (seluruh cabang terdaftar − yang ter-ATTACH), bukan
+ * dari daftar "terlewat" yang disimpan saat koneksi dibangun. Daftar simpanan itu
+ * menjadi BASI begitu ada cabang baru (proses panjang / permintaan yang baru membuat
+ * cabang) — akibatnya laporan lintas cabang kehilangan cabang baru TANPA pesan
+ * kesalahan apa pun.
+ */
+function db_route_missing_branches(): array
+{
+    if (empty($GLOBALS['DB_ROUTE_ATTACH_ALL_MODE'])) return [];
+    $terpasang = array_map('intval', array_keys(db_route_attached()));
+    return array_values(array_diff(db_route_branch_ids(), $terpasang));
+}
+
+/**
+ * KONEKSI FAN-OUT BERKELOMPOK — beberapa berkas cabang di-ATTACH SEKALIGUS.
+ *
+ * MENGAPA: cara lama membuka basis data cabang SATU PER SATU pada satu koneksi
+ * (DETACH/ATTACH tiap cabang). Untuk laporan lintas cabang pada 25 cabang, satu
+ * halaman Laporan menukar berkas ratusan kali sehingga waktunya habis di buka-tutup
+ * berkas, bukan di query-nya.
+ *
+ * Sekarang cabang-cabang yang tidak ter-ATTACH dikelompokkan menjadi beberapa koneksi
+ * (masing-masing memuat sampai batas teknis SQLite = 9 berkas) dan SETIAP koneksi
+ * memakai view UNION ALL yang tiap lengannya disaring ke cabang pemilik berkasnya.
+ * Dengan begitu satu query melayani seluruh cabang dalam kelompok itu, dan hasilnya
+ * tetap dipisah per cabang karena setiap lengan membawa `branch_id` sendiri.
+ *
+ * Koneksinya di-cache sepanjang permintaan (isinya tidak berubah).
+ *
+ * @param array<int> $ids cabang yang perlu dilayani
+ * @return array<int,PDO> daftar koneksi; setiap koneksi memuat `$GROUP` cabang
+ */
+function db_fanout_conn_group(array $ids): array
+{
+    $ids = array_values(array_unique(array_map('intval', $ids)));
+    if (!$ids) return [];
+    $kunci = implode(',', $ids);
+    if (isset($GLOBALS['DB_FANOUT_GROUPS'][$kunci])) return $GLOBALS['DB_FANOUT_GROUPS'][$kunci];
+    $out = [];
+    foreach (array_chunk($ids, DB_ROUTE_MAX_ATTACH) as $chunk) {
+        $pdo = null;
+        try {
+            $pdo = db_open(db_central_path());
+            $att = [];
+            foreach ($chunk as $bid) {
+                db_route_attach_one($pdo, (int)$bid, $att);
+            }
+            if (!$att) { $pdo = null; continue; }
+            /* View = UNION ALL seluruh lengan; setiap lengan disaring ke cabang
+               pemilik berkasnya (lihat db_route_view_sql()). */
+            db_route_install_views($pdo, $att, null);
+            $out[] = $pdo;
+        } catch (Throwable $e) {
+            $GLOBALS['DB_SCOPE_LAST_ERROR'] = $e->getMessage();
+            $pdo = null;
+        }
+    }
+    /* Batasi jumlah koneksi yang disimpan (proses panjang) — hanya kelompok yang
+       baru saja dipakai yang disimpan. */
+    if (!isset($GLOBALS['DB_FANOUT_GROUPS']) || count($GLOBALS['DB_FANOUT_GROUPS']) > 3) {
+        $GLOBALS['DB_FANOUT_GROUPS'] = [];
+    }
+    $GLOBALS['DB_FANOUT_GROUPS'][$kunci] = $out;
+    return $out;
+}
+
+/**
+ * Jalankan satu query pada SELURUH cabang yang tidak ter-ATTACH, berkelompok.
+ *
+ * View setiap koneksi berupa UNION ALL, sehingga satu query melayani seluruh cabang
+ * dalam kelompok itu (bukan satu query per cabang).
+ *
+ * @return array<int,array> seluruh baris hasil (gabungan semua kelompok)
+ */
+function db_fanout_run(string $sql, array $params): array
+{
+    $ids = db_cross_fanout_ids($sql, $params);
+    if (!$ids) return [];
+    $out = [];
+    foreach (db_fanout_conn_group($ids) as $pdo) {
+        try {
+            $st = $pdo->prepare($sql);
+            $st->execute($params);
+            foreach ($st->fetchAll() as $r) $out[] = $r;
+        } catch (Throwable $e) {
+            $GLOBALS['DB_SCOPE_LAST_ERROR'] = $e->getMessage();
+        }
+    }
+    return $out;
+}
+
+/**
+ * Jalankan sebuah callback untuk SETIAP cabang (satu per satu, koneksi ber-cakupan).
+ *
+ * @param callable(PDO,int):mixed $fn    menerima (koneksi ber-cakupan, id cabang)
+ * @param array<int>|null          $ids  daftar cabang; null = cabang yang TIDAK ter-ATTACH
+ * @return array<int,mixed> hasil per cabang (kunci = id cabang)
+ */
+function db_branch_each(callable $fn, ?array $ids = null, ?array $hanyaTabel = null): array
+{
+    $ids = $ids ?? db_route_missing_branches();
+    $out = [];
+    foreach ($ids as $bid) {
+        $pdo = db_scope_conn((int)$bid, $hanyaTabel);
+        if (!$pdo) continue;
+        try {
+            $out[(int)$bid] = $fn($pdo, (int)$bid);
+        } catch (Throwable $e) {
+            $out[(int)$bid] = null;
+        }
+    }
+    return $out;
+}
+
+/**
+ * JUMLAHKAN hasil query agregat (satu baris) dari cabang-cabang yang tidak ter-ATTACH.
+ *
+ * Dipakai laporan/dashboard/keuangan supaya angka lintas cabang tetap BENAR walau
+ * cabangnya lebih banyak daripada batas ATTACH. Kolom non-numerik diabaikan.
+ *
+ * @param string   $sql          query agregat yang sama dengan yang dipakai laporan
+ * @param array    $params       parameter query
+ * @param string[] $kolomAngka   nama kolom yang dijumlahkan
+ * @return array<string,float>   total tambahan per kolom
+ */
+/**
+ * Cabang yang perlu dilayani fan-out untuk sebuah query.
+ *
+ * Bila query-nya SUDAH menyebut satu cabang (`branch_id = ?`/literal), fan-out cukup
+ * ke cabang itu saja (dan tidak perlu bila cabangnya sudah ter-ATTACH). Ini yang membuat
+ * LOOPS per cabang (mis. ringkasan keuangan 25 cabang) tetap murah: tanpa pemetaan ini
+ * setiap panggilan akan mem-fan-out ke SELURUH cabang yang tidak ter-ATTACH.
+ *
+ * @return array<int>
+ */
+/**
+ * Cache hasil fan-out dalam SATU permintaan.
+ *
+ * Satu halaman (mis. Laporan) memanggil query yang SAMA lebih dari sekali —
+ * `report_bundle()` menjalankan `report_daily()` lalu `report_monthly()` yang di
+ * dalamnya memanggil `report_daily()` lagi. Tanpa cache, setiap pemanggilan membaca
+ * ulang seluruh berkas cabang di luar batas ATTACH (pada 25 cabang: 16 berkas).
+ * Isi basis data tidak berubah selama satu permintaan, jadi hasilnya boleh disimpan.
+ * Cache dibatalkan saat tulisan terjadi (`db_route_cache_flush()`).
+ */
+function db_cross_cache_get(string $kunci)
+{
+    if (!empty($GLOBALS['DB_CROSS_CACHE_FLUSHED'])) return null;
+    return $GLOBALS['DB_CROSS_CACHE'][$kunci] ?? null;
+}
+function db_cross_cache_put(string $kunci, $nilai): void
+{
+    if (!empty($GLOBALS['DB_CROSS_CACHE_FLUSHED'])) return;
+    $GLOBALS['DB_CROSS_CACHE'][$kunci] = $nilai;
+    /* Batasi ukuran cache supaya tidak tumbuh tanpa batas pada proses panjang. */
+    if (count($GLOBALS['DB_CROSS_CACHE']) > 400) array_shift($GLOBALS['DB_CROSS_CACHE']);
+}
+/** Buang cache lintas cabang (dipanggil setiap kali ada tulisan data operasional). */
+function db_route_cache_flush(): void
+{
+    $GLOBALS['DB_CROSS_CACHE'] = [];
+    $GLOBALS['DB_CROSS_CACHE_FLUSHED'] = false;
+}
+
+function db_cross_fanout_ids(string $sql, array $params): array
+{
+    if (!function_exists('db_route_missing_branches')) return [];
+    $target = db_route_branch_from_sql($sql, $params);
+    if ($target !== null && $target > 0) {
+        $att = array_map('intval', array_keys(db_route_attached()));
+        return in_array($target, $att, true) ? [] : [$target];
+    }
+    return db_route_missing_branches();
+}
+
+function db_cross_sum(string $sql, array $params, array $kolomAngka): array
+{
+    $total = array_fill_keys($kolomAngka, 0.0);
+    if (!$kolomAngka) return $total;
+    $kunci = 'sum|' . md5($sql . '|' . json_encode($params));
+    $cache = db_cross_cache_get($kunci);
+    if (is_array($cache)) {
+        foreach ($kolomAngka as $k) $total[$k] = (float)($cache[$k] ?? 0);
+        return $total;
+    }
+    foreach (db_fanout_conn_group(db_cross_fanout_ids($sql, $params)) as $pdo) {
+        try {
+            $st = $pdo->prepare($sql);
+            $st->execute($params);
+            $baris = $st->fetch() ?: [];
+        } catch (Throwable $e) { $baris = []; }
+        foreach ($kolomAngka as $k) {
+            if (isset($baris[$k])) $total[$k] += (float)$baris[$k];
+        }
+    }
+    db_cross_cache_put($kunci, $total);
+    return $total;
+}
+
+/**
+ * Query DAFTAR berurut & berbatas yang LENGKAP untuk seluruh cabang.
+ *
+ * Dipakai daftar seperti "8 transaksi terbaru" / "stok menipis": query dijalankan pada
+ * koneksi utama (cabang yang ter-ATTACH) DAN pada setiap cabang yang tidak ter-ATTACH
+ * (satu berkas pada satu waktu), lalu SELURUH barisnya diurutkan & dibatasi ULANG —
+ * sehingga daftarnya benar-benar memuat baris teratas dari SELURUH cabang, bukan hanya
+ * dari 9 cabang pertama.
+ *
+ * @param string $urut  nama kolom hasil untuk pengurutan menurun
+ * @param int    $limit jumlah baris akhir
+ */
+function db_cross_top(string $sql, array $params, string $urut, int $limit, bool $naik = false): array
+{
+    $ck = 'top|' . md5($sql . '|' . json_encode($params) . '|' . $urut . '|' . $limit . '|' . (int)$naik);
+    $cache = db_cross_cache_get($ck);
+    if (is_array($cache)) return $cache;
+    $kumpul = [];
+    foreach (all($sql, $params) as $r) $kumpul[] = $r;
+    foreach (db_fanout_run($sql, $params) as $r) $kumpul[] = $r;
+    if ($urut !== '') {
+        usort($kumpul, function ($a, $b) use ($urut, $naik) {
+            $x = $a[$urut] ?? null; $y = $b[$urut] ?? null;
+            if (is_numeric($x) && is_numeric($y)) return $naik ? ($x <=> $y) : ($y <=> $x);
+            return $naik ? strcmp((string)$x, (string)$y) : strcmp((string)$y, (string)$x);
+        });
+    }
+    $out = $limit > 0 ? array_slice($kumpul, 0, $limit) : $kumpul;
+    db_cross_cache_put($ck, $out);
+    return $out;
+}
+
+/**
+ * Tabel OPERASIONAL yang disebut sebuah query (untuk membuat view seperlunya saja).
+ *
+ * Dipakai fan-out: laporan yang hanya menyentuh `orders` + `order_items` cukup
+ * dibuatkan 2 view per cabang, bukan 19.
+ */
+function db_route_sql_tables(string $sql): array
+{
+    $ada = [];
+    foreach (db_route_branch_tables() as $t) {
+        if (preg_match('/\b' . preg_quote($t, '/') . '\b/i', $sql)) $ada[] = $t;
+    }
+    return $ada ?: db_route_branch_tables();
+}
+
+/**
+ * Jumlahkan baris hasil query DAFTAR (banyak baris) dari cabang yang tidak ter-ATTACH.
+ * Dipakai rekap seperti "penjualan per cabang" yang memang butuh baris, bukan skalar.
+ *
+ * @return array<int,array> baris gabungan
+ */
+function db_cross_rows(string $sql, array $params = []): array
+{
+    return db_fanout_run($sql, $params);
+}
+
+/**
+ * Satu baris AGGREGAT yang LENGKAP untuk seluruh cabang (view + fan-out dijumlahkan).
+ *
+ * Padanan `one()` untuk angka yang harus mencakup SELURUH cabang, termasuk cabang di
+ * luar batas ATTACH SQLite. Seluruh kolom pada `$kolomAngka` dijumlahkan.
+ *
+ * @return array<string,mixed> baris gabungan (kolom yang tidak disebut tetap dari sumber pertama)
+ */
+function db_cross_one(string $sql, array $params, array $kolomAngka): array
+{
+    $kunci = 'one|' . md5($sql . '|' . json_encode($params));
+    $cache = db_cross_cache_get($kunci);
+    if (is_array($cache)) return $cache;
+    $hasil = [];
+    $pertama = one($sql, $params);
+    if (is_array($pertama)) $hasil = $pertama;
+    foreach ($kolomAngka as $k) if (!isset($hasil[$k])) $hasil[$k] = 0;
+    $ids = db_cross_fanout_ids($sql, $params);
+    if (!$ids) return $hasil;
+    foreach (db_fanout_conn_group($ids) as $pdo) {
+        try { $baris = one_on($pdo, $sql, $params) ?? []; } catch (Throwable $e) { $baris = []; }
+        if (!is_array($baris)) continue;
+        foreach ($kolomAngka as $k) {
+            if (isset($baris[$k]) && is_numeric($baris[$k])) {
+                $hasil[$k] = (is_numeric($hasil[$k] ?? 0) ? (float)$hasil[$k] : 0) + (float)$baris[$k];
+            }
+        }
+    }
+    db_cross_cache_put($kunci, $hasil);
+    return $hasil;
+}
+
+/**
+ * Query AGGREGAT (GROUP BY kunci) yang LENGKAP untuk seluruh cabang.
+ *
+ * MASALAH yang diselesaikan: TEMP VIEW hanya memuat cabang yang ter-ATTACH (maksimum
+ * 9 berkas karena batas SQLite). Query agregat yang dijalankan sekali pada koneksi
+ * utama karena itu **kehilangan cabang ke-10 dan seterusnya TANPA pesan kesalahan**
+ * — tabel "per cabang", grafik harian/bulanan, dan rekap kasir tampak "hampir benar"
+ * tetapi jumlahnya kurang. Helper ini menjalankan query yang SAMA pada setiap cabang
+ * yang tidak ter-ATTACH (satu berkas pada satu waktu) lalu MENGGABUNGKAN barisnya per
+ * nilai kunci dengan menjumlahkan seluruh kolom numerik.
+ *
+ * Benar karena id baris memakai blok per cabang (`db_branch_id_floor`), sehingga
+ * `COUNT(DISTINCT id)` per cabang tidak mungkin tumpang tindih.
+ *
+ * @param string   $sql    query agregat
+ * @param array    $params parameter
+ * @param string[] $kunci  kolom penentu identitas baris (mis. ['branch_id'] atau ['d'])
+ * @param string   $urut   kolom numerik untuk pengurutan menurun ('' = tanpa urut ulang)
+ * @param int      $limit  batasi jumlah baris hasil (0 = tanpa batas)
+ * @return array<int,array>
+ */
+function db_cross_group(string $sql, array $params, array $kunci, string $urut = '', int $limit = 0): array
+{
+    $ck = 'grp|' . md5($sql . '|' . json_encode($params) . '|' . implode(',', $kunci) . '|' . $urut . '|' . $limit);
+    $cache = db_cross_cache_get($ck);
+    if (is_array($cache)) return $cache;
+    $gabung = [];
+    $tambah = function (array $rows) use (&$gabung, $kunci) {
+        foreach ($rows as $r) {
+            if (!is_array($r)) continue;
+            $k = [];
+            foreach ($kunci as $c) $k[] = (string)($r[$c] ?? '');
+            $ks = implode("\x1f", $k);
+            if (!isset($gabung[$ks])) { $gabung[$ks] = $r; continue; }
+            foreach ($r as $col => $val) {
+                /* Kolom numerik dijumlahkan; kolom teks dipertahankan apa adanya. */
+                if (isset($gabung[$ks][$col]) && is_numeric($val) && is_numeric($gabung[$ks][$col])) {
+                    $gabung[$ks][$col] = $gabung[$ks][$col] + $val;
+                } elseif (!isset($gabung[$ks][$col])) {
+                    $gabung[$ks][$col] = $val;
+                }
+            }
+        }
+    };
+    $tambah(all($sql, $params));
+    $tambah(db_fanout_run($sql, $params));
+    $out = array_values($gabung);
+    if ($urut !== '') {
+        usort($out, fn($a, $b) => ((float)($b[$urut] ?? 0)) <=> ((float)($a[$urut] ?? 0)));
+    }
+    if ($limit > 0) $out = array_slice($out, 0, $limit);
+    db_cross_cache_put($ck, $out);
+    return $out;
+}
+
+/**
+ * Lepaskan koneksi routed (& koneksi fan-out) supaya permintaan berikutnya membangun
+ * ulang dari berkas yang ADA DI DISK SEKARANG.
+ *
+ * WAJIB dipanggil setiap kali berkas basis data diganti dari luar aplikasi
+ * (pemulihan backup/paket). Tanpa ini, koneksi lama masih memegang berkas lama
+ * beserta `-wal`-nya sehingga penulisan berikutnya dapat memunculkan kembali
+ * baris-baris yang sudah dipulihkan.
+ */
+function db_route_reset(): void
+{
+    $GLOBALS['DB_ROUTE_RESET'] = true;
+    $GLOBALS['DB_SCOPE_POOL'] = [];
+    unset($GLOBALS['DB_FANOUT_PDO'], $GLOBALS['DB_FANOUT_FILE']);
+    $GLOBALS['DB_ROUTE_ATTACHED'] = [];
+    $GLOBALS['DB_ROUTE_ATTACH_SKIPPED'] = [];
+    db_route_branches_changed();
+    /* `db_scope_conn()` menyimpan koneksinya di static → dipaksa lepas juga. */
+    if (function_exists('db_scope_conn_pool_clear')) db_scope_conn_pool_clear();
+}
+
+/**
+ * Bersihkan sisa WAL/SHM berkas basis data dari disk.
+ *
+ * Dipakai setelah pemulihan: berkas `-wal` lama yang tertinggal akan DIPUTAR ULANG
+ * oleh SQLite saat berkasnya dibuka lagi, sehingga dapat mengembalikan data lama.
+ */
+function db_route_clear_wal(string $path): void
+{
+    foreach (['-wal', '-shm'] as $akhiran) {
+        if (is_file($path . $akhiran)) @unlink($path . $akhiran);
+    }
 }
 
 /** Cabang yang TIDAK kebagian slot ATTACH (dilaporkan, bukan disembunyikan). */
@@ -299,15 +985,32 @@ function db_route_attach_skipped(): array
     return $GLOBALS['DB_ROUTE_ATTACH_SKIPPED'] ?? [];
 }
 
-/** Daftar id cabang (dibaca langsung dari central, tanpa lewat dispatcher). */
+/**
+ * Daftar id cabang (dibaca langsung dari central, tanpa lewat dispatcher).
+ *
+ * Disimpan di `$GLOBALS` (bukan `static`) supaya dapat DIBATALKAN saat daftar cabang
+ * berubah — lihat `db_route_branches_changed()`. Dengan `static`, proses yang berjalan
+ * lama (pekerja latar, pengisian data demo) atau permintaan yang MEMBUAT cabang baru
+ * tetap memakai daftar lama sehingga cabang barunya tidak ikut laporan/fan-out.
+ */
 function db_route_branch_ids(): array
 {
-    static $ids = null;
-    if ($ids !== null) return $ids;
+    if (isset($GLOBALS['DB_ROUTE_BRANCH_IDS']) && is_array($GLOBALS['DB_ROUTE_BRANCH_IDS'])) {
+        return $GLOBALS['DB_ROUTE_BRANCH_IDS'];
+    }
     $rows = db_route_raw_central_many('SELECT id FROM branches ORDER BY id');
     $ids = array_map(fn($r) => (int)$r['id'], $rows);
     if (!$ids) $ids = [1];
-    return $ids;
+    return $GLOBALS['DB_ROUTE_BRANCH_IDS'] = $ids;
+}
+
+/**
+ * Daftar cabang berubah (cabang ditambah/diubah/dihapus) → buang cache daftar cabang
+ * supaya laporan & fan-out pada permintaan/proses yang sama langsung ikut melihatnya.
+ */
+function db_route_branches_changed(): void
+{
+    unset($GLOBALS['DB_ROUTE_BRANCH_IDS']);
 }
 
 /**
@@ -386,13 +1089,23 @@ function db_route_ensure_branch_schema(PDO $pdo, string $alias, int $branchId): 
            sidik jari daftar tambahan kolom cocok. Dulu hanya versi yang diperiksa,
            sehingga kolom baru pada tabel operasional tidak pernah sampai ke berkas
            cabang yang sudah ada bila SCHEMA_VERSION lupa dinaikkan (kejadian nyata:
-           `backups.auto_run` → backup gagal dibuat di produksi). */
-        if (!schema_is_current($c)) {
+           `backups.auto_run` → backup gagal dibuat di produksi).
+           PENTING (FINAL AUDIT): pemeriksaan WAJIB dijalankan dalam ruang lingkup
+           `branch` — berkas cabang tidak punya tabel `settings`, penandanya
+           `PRAGMA user_version`. Sebelumnya fungsi ini dipanggil di luar ruang
+           lingkup sehingga SELALU menjawab "belum terkini": skema diterapkan ulang
+           setiap permintaan dan riwayat migrasi bertambah 2 baris/permintaan
+           (terukur 1.945 baris `db_migrations` hanya dalam beberapa hari). */
+        $belumTerkini = !db_schema_with_scope('branch', fn() => schema_is_current($c));
+        if ($belumTerkini) {
             $GLOBALS['DB_SCHEMA_BRANCH_ID'] = $branchId;
             try { db_schema_apply($path, 'branch'); } finally { unset($GLOBALS['DB_SCHEMA_BRANCH_ID']); }
+            /* Migrasi bisa membuat tabel dengan FK ke tabel global → dibuat ulang.
+               Hanya perlu diperiksa setelah skema BENAR-BENAR diterapkan; sebelumnya
+               pemeriksaan ini berjalan tiap permintaan (memindai sqlite_master +
+               membuka berkas cabang lagi). */
+            db_branch_strip_cross_fk_tables_pdo($c, $branchId);
         }
-        /* Migrasi bisa membuat tabel dengan FK ke tabel global → dibuat ulang. */
-        db_branch_strip_cross_fk_tables($branchId);
     } catch (Throwable $e) {
         /* Kegagalan migrasi cabang tidak boleh mematikan aplikasi: dilaporkan lewat route_report(). */
         $GLOBALS['DB_ROUTE_LAST_ERROR'] = 'Cabang ' . $branchId . ': ' . $e->getMessage();
@@ -406,16 +1119,46 @@ function db_route_ensure_branch_schema(PDO $pdo, string $alias, int $branchId): 
  *   • satu cabang → hanya berkas cabang itu (ISOLASI STRUKTURAL untuk READ);
  *   • semua cabang → gabungan UNION ALL seluruh cabang yang ter-ATTACH.
  */
-function db_route_install_views(PDO $pdo): void
+function db_route_install_views(PDO $pdo, ?array $attached = null, ?int $scope = null,
+                                 bool $paksaSemua = false, ?array $hanyaTabel = null,
+                                 string $idExpr = ''): void
 {
-    $attached = db_route_attached();
-    $scope = db_route_read_scope();
+    $attached = $attached ?? db_route_attached();
+    $scope = $scope ?? db_route_read_scope();
+    if ($paksaSemua) $scope = null;
+    foreach (db_route_view_sql($pdo, $attached, $scope, null, $idExpr) as $t => $sql) {
+        /* `$hanyaTabel` dipakai jalur fan-out: hanya tabel yang benar-benar disebut
+           query yang dibuatkan view (19 view → 2–5 view per cabang), sehingga laporan
+           lintas cabang pada 10–15 cabang jauh lebih ringan. */
+        if ($hanyaTabel !== null && !in_array($t, $hanyaTabel, true)) continue;
+        $pdo->exec('DROP VIEW IF EXISTS temp.' . $t);
+        $pdo->exec('CREATE TEMP VIEW ' . $t . ' AS ' . $sql);
+    }
+}
+
+/**
+ * SQL setiap TEMP VIEW untuk sekumpulan berkas cabang yang ter-ATTACH.
+ *
+ * DIPISAH dari `db_route_install_views()` supaya pembuat view yang SAMA dapat dipakai
+ * koneksi fan-out (`db_scope_conn()`) — inilah yang membuat query laporan lintas cabang
+ * berjalan pada basis data cabang SATU PER SATU tanpa perlu meng-ATTACH semuanya.
+ *
+ * @return array<string,string> nama tabel => SQL view
+ */
+function db_route_view_sql(PDO $pdo, array $attached, ?int $scope, ?array $hanyaTabel = null,
+                            string $idExpr = ''): array
+{
     /* Setiap "lengan" view DISARING ke cabang pemilik berkasnya, sehingga baris
        milik cabang lain TIDAK PERNAH terlihat — walau berkas cabangnya memuat
        baris sisa (mis. sisa data contoh saat berkas dibuat). Inilah jaminan
        ISOLASI BACA yang bersifat struktural, bukan bergantung pada filter
        `branch_id` di masing-masing query. */
-    $lengan = function (string $alias, int $bid, string $t, bool $ikutTanpaCabang) use ($pdo): string {
+    $lengan = function (string $alias, int $bid, string $t, bool $ikutTanpaCabang) use ($pdo, $idExpr): string {
+        /* `$idExpr` dipakai jalur FAN-OUT: penyaring cabangnya berupa subquery ke tabel
+           penanda (`temp.nv_fan_branch`), sehingga SATU set view dapat dipakai untuk
+           SEMUA cabang — cukup menukar berkas yang di-ATTACH + satu UPDATE penanda.
+           Tanpa ini, view harus dibuat ulang per cabang (jauh lebih mahal). */
+        $idSql = $idExpr !== '' ? $idExpr : (string)(int)$bid;
         $anak = db_route_child_tables();
         /* Baris TANPA cabang (branch_id NULL) = data bersama/lintas cabang
            (mis. supplier yang didaftarkan owner tanpa memilih cabang). Baris itu
@@ -428,13 +1171,14 @@ function db_route_install_views(PDO $pdo): void
             /* Tabel anak tidak punya branch_id → dipastikan lewat INDUKnya. */
             $b = $pdo->quote($alias) . '.' . $t;
             return 'SELECT c.* FROM ' . $b . ' c WHERE EXISTS (SELECT 1 FROM ' . $pdo->quote($alias) . '.' . $induk
-                . ' p WHERE p.id = c.' . $fk . ' AND (p.branch_id = ' . (int)$bid . $tanpa . '))';
+                . ' p WHERE p.id = c.' . $fk . ' AND (p.branch_id = ' . $idSql . $tanpa . '))';
         }
         return 'SELECT * FROM ' . $pdo->quote($alias) . '.' . $t
-            . ' WHERE branch_id = ' . (int)$bid . $tanpa;
+            . ' WHERE branch_id = ' . $idSql . $tanpa;
     };
+    $out = [];
     foreach (db_route_branch_tables() as $t) {
-        $pdo->exec('DROP VIEW IF EXISTS temp.' . $t);
+        if ($hanyaTabel !== null && !in_array($t, $hanyaTabel, true)) continue;
         $bagian = [];
         if ($scope !== null && isset($attached[$scope])) {
             $bagian[] = $lengan($attached[$scope], (int)$scope, $t, true);
@@ -445,9 +1189,9 @@ function db_route_install_views(PDO $pdo): void
                 $pertama = false;
             }
         }
-        if (!$bagian) continue;
-        $pdo->exec('CREATE TEMP VIEW ' . $t . ' AS ' . implode(' UNION ALL ', $bagian));
+        if ($bagian) $out[$t] = implode(' UNION ALL ', $bagian);
     }
+    return $out;
 }
 
 /* ------------------------------------------------------------------ *
@@ -480,8 +1224,18 @@ function db_route_prepare_all(string $sql, array $params = []): array
 {
     $tulis = db_route_write_target($sql);
     if ($tulis === null) return [$sql];
+    /* SETIAP pernyataan tulis membatalkan cache hasil lintas cabang (angka laporan
+       tidak boleh basi setelah perubahan data). */
+    if (function_exists('db_route_cache_flush')) db_route_cache_flush();
     [$tabel, $mulai, $panjang, $kutip] = $tulis;
-    if (db_route_scope_of($tabel) !== 'branch') return [$sql];
+    if (db_route_scope_of($tabel) !== 'branch') {
+        /* Daftar CABANG berubah → cache daftar cabang dibatalkan supaya laporan &
+           fan-out pada permintaan yang sama langsung ikut melihat cabang barunya. */
+        if (strcasecmp($tabel, 'branches') === 0 && function_exists('db_route_branches_changed')) {
+            db_route_branches_changed();
+        }
+        return [$sql];
+    }
     /* Sudah dikualifikasi sebelumnya (mis. `b1.orders`) → jangan diubah lagi. */
     if ($mulai > 0 && substr($sql, $mulai - 1, 1) === '.') return [$sql];
 
@@ -494,7 +1248,7 @@ function db_route_prepare_all(string $sql, array $params = []): array
     if ($branch === 0) {
         /* Tidak dapat ditentukan cabangnya → boleh lintas cabang HANYA untuk
            UPDATE/DELETE oleh akun dengan cakupan semua cabang. */
-        $lintas = in_array(strtoupper(substr(ltrim($sql), 0, 6)), ['UPDATE', 'DELETE'], true);
+        $lintas = in_array(db_route_sql_verb($sql), ['UPDATE', 'DELETE'], true);
         $akun = function_exists('user_branch') ? user_branch() : null;
         if ($lintas && $akun === null && db_route_default_branch() > 0) {
             $perluSemua = true;
@@ -505,8 +1259,16 @@ function db_route_prepare_all(string $sql, array $params = []): array
     $attached = db_route_attached();
     if (!$perluSemua) {
         if (!isset($attached[$branch])) {
+            /* Cabang tujuannya belum ter-ATTACH (mis. pemilik klinik dengan LEBIH dari
+               9 cabang menulis data cabang ke-12). Berkasnya dipasang sesuai kebutuhan:
+               bila slot penuh, berkas yang TIDAK diperlukan lagi (bukan cabang tulis,
+               bukan cakupan baca saat ini) dilepas lebih dulu. Tanpa ini, penulisan ke
+               cabang di luar batas ATTACH selalu gagal walaupun aplikasinya benar. */
+            $attached = db_route_attach_for_write((int)$branch, $attached);
+        }
+        if (!isset($attached[$branch])) {
             $GLOBALS['DB_ROUTE_LAST_ERROR'] = 'Cabang ' . $branch . ' untuk tabel ' . $tabel
-                . ' tidak ter-ATTACH (batas ' . DB_ROUTE_MAX_ATTACH . ' berkas cabang) — penulisan dibatalkan.';
+                . ' tidak dapat dibuka (berkas basis data cabang tidak ditemukan) — penulisan dibatalkan.';
             throw new RuntimeException($GLOBALS['DB_ROUTE_LAST_ERROR']);
         }
         $satu = substr($sql, 0, $mulai) . $attached[$branch] . '.' . $kutip . $tabel . $kutip
@@ -526,6 +1288,40 @@ function db_route_prepare_all(string $sql, array $params = []): array
         $GLOBALS['DB_ROUTE_DEBUG'][] = $tabel . ' → SEMUA cabang (' . count($keluar) . ' berkas) | ' . preg_replace('/\s+/', ' ', trim($sql));
     }
     return $keluar ?: [$sql];
+}
+
+/**
+ * Kata kerja sebuah pernyataan SQL (SELECT/INSERT/UPDATE/DELETE/REPLACE/…), dengan
+ * KOMENTAR & spasi di AWAL pernyataan dilewati lebih dulu.
+ *
+ * KENAPA PENTING: `q()` memakai karakter PERTAMA untuk memutuskan apakah sebuah
+ * pernyataan perlu dirutekan ke berkas cabang (`DELETE FROM orders` → `DELETE FROM
+ * b2.orders`). Sebelumnya komentar di awal pernyataan — mis. penanda
+ * `/* cross-branch *​/ DELETE FROM medical_record_photos …` — membuat pemeriksaan itu
+ * meleset, sehingga DELETE dijalankan pada TEMP VIEW dan SQLite menolaknya
+ * ("cannot modify … because it is a view"). Gunakan helper ini, jangan periksa
+ * karakter pertama secara langsung.
+ */
+function db_route_sql_verb(string $sql): string
+{
+    $s = ltrim($sql);
+    /* Lewati komentar blok & komentar baris berulang di awal pernyataan. */
+    $ubah = true;
+    while ($ubah && $s !== '') {
+        $ubah = false;
+        if (strncmp($s, '/*', 2) === 0) {
+            $tutup = strpos($s, '*/');
+            $s = $tutup === false ? '' : ltrim(substr($s, $tutup + 2));
+            $ubah = true;
+        } elseif (strncmp($s, '--', 2) === 0) {
+            $baris = strpos($s, "\n");
+            $s = $baris === false ? '' : ltrim(substr($s, $baris + 1));
+            $ubah = true;
+        }
+    }
+    if ($s === '') return '';
+    if (!preg_match('/^([A-Za-z_]+)/', $s, $m)) return '';
+    return strtoupper($m[1]);
 }
 
 /**
@@ -592,8 +1388,9 @@ function db_route_write_branch_for(string $tabel, string $sql, array $params = [
     if ($dariSql !== null && $dariSql > 0) return $dariSql;
 
     /* UPDATE/DELETE: cari di berkas cabang mana baris itu berada (paling dapat dipercaya —
-       tidak mungkin "mengubah 0 baris" karena salah berkas). */
-    if (preg_match('/^\s*(UPDATE|DELETE\s+FROM)\b/i', $sql)) {
+       tidak mungkin "mengubah 0 baris" karena salah berkas). Kata kerja dibaca lewat
+       db_route_sql_verb() supaya komentar di awal pernyataan tidak membuatnya meleset. */
+    if (in_array(db_route_sql_verb($sql), ['UPDATE', 'DELETE'], true)) {
         $id = db_route_col_value($sql, 'id', $params);
         if ($id !== null && $id > 0) {
             $ketemu = db_route_branch_of_id($tabel, $id);
@@ -617,7 +1414,7 @@ function db_route_write_branch_for(string $tabel, string $sql, array $params = [
          menyebut nilai cabang sehingga tidak dapat dipetakan ke satu berkas).
        · Selain itu (INSERT/REPLACE, atau akun yang dipin satu cabang) → cabang
          bawaan supaya perilakunya tetap dapat diprediksi. */
-    $kata = strtoupper(substr(ltrim($sql), 0, 6));
+    $kata = db_route_sql_verb($sql);
     if ($kata === 'UPDATE' || $kata === 'DELETE') return 0;
     return db_route_default_branch();
 }

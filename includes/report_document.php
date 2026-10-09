@@ -35,16 +35,13 @@ function render_report_document(array $B, array $user): void
     $skTot = array_sum(array_column($perSk, 's')) ?: 1;
     $branchSum = array_sum(array_column($perBranch, 'total')) ?: 1;
 
+    /* SATU SUMBER dengan halaman Top 10 Pasien & ekspor (report_top_patients()):
+       urutannya (transaksi → nilai → nama) dan kolomnya (kunjungan vs jumlah
+       transaksi) jadi sama di seluruh aplikasi. */
     $topPatients = [];
     if (has_perm('report.view')) {
-        $bs = $f['scope'] === null ? '' : ' AND o.branch_id = ?';
-        $bp = $f['scope'] === null ? [] : [$f['scope']];
-        $topPatients = all("SELECT p.name, p.patient_number, p.member_number, b.name AS branch_name,
-                                   COUNT(DISTINCT o.id) trx, COALESCE(SUM(o.total),0) total
-                            FROM orders o JOIN patients p ON p.id=o.patient_id JOIN branches b ON b.id=o.branch_id
-                            WHERE o.status='paid' AND date(o.created_at) BETWEEN ? AND ? {$bs}
-                            GROUP BY p.id ORDER BY trx DESC, total DESC LIMIT 10",
-            array_merge([$f['ps'], $f['pe']], $bp));
+        require_once __DIR__ . '/reports.php';
+        $topPatients = report_top_patients(report_filters_manual($f['ps'], $f['pe'], $f['scope'], 'paid'), 10);
     }
     ?><!DOCTYPE html>
 <html lang="id">
@@ -311,17 +308,19 @@ function render_report_document(array $B, array $user): void
 <?php if ($topPatients): ?>
 <div class="doc-section">
   <h2><?= $f['scope'] === null && $monthly['branches'] ? '7' : '6' ?>. Top 10 Pasien (Periode Ini)</h2>
+  <p class="muted" style="font-size:.78rem;margin:-4px 0 8px">Diurutkan dari <strong>total transaksi (Rp) terbesar</strong>;
+    bila nilainya sama, jumlah transaksi terbanyak yang diutamakan.</p>
   <div class="table-wrap">
     <table class="tbl">
-      <thead><tr><th>#</th><th>Nama Pasien</th><th>No. Member</th><th class="num">Kunjungan</th><th class="num">Jumlah Transaksi</th><th class="num">Total Transaksi</th><th>Cabang</th></tr></thead>
+      <thead><tr><?php foreach (top_patients_columns() as $i => $th): ?><th<?= $i >= 3 && $i <= 5 ? ' class="num"' : '' ?>><?= e($th) ?></th><?php endforeach; ?></tr></thead>
       <tbody>
       <?php foreach ($topPatients as $i => $r): ?>
         <tr><td><?= $i + 1 ?></td>
           <td><?= e($r['name']) ?><div class="muted" style="font-size:.7rem"><?= e($r['patient_number']) ?></div></td>
           <td><?= e($r['member_number'] ?: '-') ?></td>
-          <td class="num"><?= num($r['trx']) ?></td>
-          <td class="num"><?= num($r['trx']) ?></td>
+          <td class="num"><?= num($r['visits']) ?></td>
           <td class="num"><strong><?= money($r['total']) ?></strong></td>
+          <td class="num"><?= num($r['trx']) ?></td>
           <td><?= e($r['branch_name']) ?></td></tr>
       <?php endforeach; ?>
       </tbody>

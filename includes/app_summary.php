@@ -98,9 +98,29 @@ function app_summary_modules(): array
 /** Bagian: identitas & keadaan sistem. */
 function app_summary_identity(): array
 {
+    /* VERSI SKEMA dibaca dari PEMERIKSAAN NYATA, bukan dari setelan/cache: central
+       memakai `settings.schema_version`, berkas cabang memakai `PRAGMA user_version`.
+       Dulu nilai setelan dipakai apa adanya sehingga dokumen bisa menuliskan versi
+       yang sudah tidak berlaku (keluhan: aplikasi 1.41.0 tetapi tercatat 1.35.2). */
+    $verCentral = '';
+    $verCabang = [];
+    if (function_exists('db_schema_version_of')) {
+        $vc = db_schema_version_of(db_central_path());
+        $verCentral = $vc['version'] !== '' ? $vc['version'] : '(tidak diketahui)';
+        foreach (db_route_branch_ids() as $bid) {
+            $v = db_schema_version_of(db_branch_path((int)$bid));
+            $verCabang[(string)$v['version']] = ($verCabang[(string)$v['version']] ?? 0) + 1;
+        }
+    }
+    $verCabangTeks = $verCabang
+        ? implode(' · ', array_map(fn($v, $n) => $n . ' cabang @ ' . ($v !== '' ? $v : '(tidak diketahui)'),
+            array_keys($verCabang), array_values($verCabang)))
+        : '-';
     $rows = [
         ['Nama klinik', clinic_name()],
-        ['Versi skema database', (string)setting('schema_version', '-')],
+        ['Versi skema database (hasil pemeriksaan)', 'central ' . $verCentral . ' · ' . $verCabangTeks
+            . (function_exists('SCHEMA_VERSION') || defined('SCHEMA_VERSION') ? ' — kode aplikasi ' . SCHEMA_VERSION : '')],
+        ['Versi skema kode aplikasi', SCHEMA_VERSION],
         ['Versi kode aplikasi', defined('APP_VERSION') ? (string)APP_VERSION : '-'],
         ['Zona waktu', date_default_timezone_get() . ' (jam server: ' . date('d/m/Y H:i') . ')'],
         ['Jumlah cabang', (string)count(branches())],
@@ -176,23 +196,68 @@ function app_summary_roles_blocks(): array
     return $bl;
 }
 
-/** Bagian: struktur basis data (tabel & kolom dari sqlite_master + PRAGMA). */
+/**
+ * Bagian: struktur basis data (tabel & kolom dari sqlite_master + PRAGMA).
+ *
+ * PENTING (arsitektur central + satu basis data per cabang): satu koneksi aplikasi
+ * hanya melihat basis data `main` (central) pada `sqlite_master`, sehingga struktur
+ * tabel OPERASIONAL (pasien, transaksi, rekam medis, …) TIDAK akan muncul. Dokumen
+ * karena itu menyusuri SETIAP basis data: bagian central (data global) dan bagian
+ * tiap berkas cabang (data operasional) — supaya dokumennya benar-benar lengkap.
+ */
 function app_summary_schema_blocks(): array
 {
-    $tables = all("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
-    $bl = [['t' => 'p', 'text' => 'Basis data: SQLite (' . strtoupper('sqlite') . ') dengan ' . count($tables) . ' tabel. '
+    $pusat = all("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name");
+    $oper = schema_branch_table_list();
+    $bl = [['t' => 'p', 'text' => 'Basis data: SQLite, memakai arsitektur CENTRAL + SATU BASIS DATA PER CABANG. '
+        . 'Data global/sistem (' . count($pusat) . ' tabel di central) dipisahkan dari data operasional cabang ('
+        . count($oper) . ' tabel per berkas cabang, ' . count(db_route_branch_ids()) . ' berkas terdaftar). '
         . 'PERHATIAN untuk agent: seluruh query WAJIB dibatasi cabang lewat helper `branch_sql()`/`bscope()`/`scope_branch()`, '
+        . 'penulisan ke tabel operasional dirutekan otomatis ke berkas cabang (`includes/db_route.php`), '
         . 'dan `PRAGMA foreign_keys = ON` aktif sehingga tabel anak harus dihapus lebih dulu sebelum induknya.']];
+
     $rows = [];
-    foreach ($tables as $t) {
+    foreach ($pusat as $t) {
         $name = (string)$t['name'];
+        if (db_route_scope_of($name) === 'branch') continue;         // (seharusnya tidak ada lagi di central)
         $cols = all('PRAGMA table_info("' . str_replace('"', '', $name) . '")');
         $nRows = (int)scalar('SELECT COUNT(*) FROM "' . str_replace('"', '', $name) . '"', [], 0);
-        $rows[] = [$name, (string)count($cols) . ' kolom', (string)num($nRows) . ' baris',
+        $rows[] = [$name . '  (central)', (string)count($cols) . ' kolom', (string)num($nRows) . ' baris',
             implode(', ', array_map(fn($c) => (string)$c['name'], array_slice($cols, 0, 6)))
             . (count($cols) > 6 ? ', …' : '')];
     }
+    $bl[] = ['t' => 'p', 'text' => 'Bagian 1 — CENTRAL (data global/sistem):'];
     $bl[] = ['t' => 'table', 'head' => ['Tabel', 'Kolom', 'Jumlah data', 'Kolom awal'], 'rows' => $rows];
+
+    /* Struktur tabel OPERASIONAL dibaca dari berkas cabang pertama (semua berkas
+       cabang memakai definisi yang sama) + jumlah data gabungan seluruh cabang. */
+    $idCab = db_route_branch_ids();
+    $bid = (int)($idCab[0] ?? 0);
+    $p = $bid > 0 ? db_branch_path($bid) : '';
+    $rows2 = [];
+    if ($p !== '' && is_file($p)) {
+        try {
+            $c = db_open($p);
+            foreach ($oper as $t) {
+                $cols = $c->query('PRAGMA table_info("' . $t . '")')->fetchAll(PDO::FETCH_ASSOC);
+                if (!$cols) continue;
+                $ikut = in_array($t, ['order_items', 'payments', 'appointment_treatments',
+                    'medical_record_photos', 'package_items'], true);
+                $filter = $ikut ? '' : ' WHERE branch_id = ' . $bid;
+                $nRows = (int)$c->query('SELECT COUNT(*) FROM "' . $t . '"' . $filter)->fetchColumn();
+                $rows2[] = [$t . '  (berkas cabang)', (string)count($cols) . ' kolom',
+                    (string)num($nRows) . ' baris' . ($ikut ? ' (ikut induk)' : ''),
+                    implode(', ', array_map(fn($x) => (string)$x['name'], array_slice($cols, 0, 6)))
+                    . (count($cols) > 6 ? ', …' : '')];
+            }
+            $c = null;
+        } catch (Throwable $e) {
+            $bl[] = ['t' => 'p', 'text' => 'Struktur berkas cabang tidak dapat dibaca: ' . $e->getMessage()];
+        }
+    }
+    $bl[] = ['t' => 'p', 'text' => 'Bagian 2 — BERKAS CABANG (data operasional, ' . count($idCab) . ' berkas):'
+        . ' jumlah baris di bawah ini diambil dari berkas cabang pertama sebagai contoh.'];
+    $bl[] = ['t' => 'table', 'head' => ['Tabel', 'Kolom', 'Jumlah data', 'Kolom awal'], 'rows' => $rows2];
     return $bl;
 }
 

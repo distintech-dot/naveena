@@ -234,6 +234,9 @@ function login_security_boot(): void
         $_SESSION['remember_me'] = true;
         $_SESSION['last_seen'] = time();
         q("UPDATE users SET last_login = datetime('now','localtime') WHERE id = ?", [(int)$u['id']]);
+        /* LOGIN MANAGEMENT: sesi hasil masuk-otomatis dari cookie juga dicatat
+           supaya tetap terlihat & dapat dikeluarkan dari halaman Login Management. */
+        if (function_exists('session_register')) session_register((int)$u['id'], 'ingat-saya');
     } catch (Throwable $e) {
         /* Jangan pernah mematikan aplikasi karena masalah tabel keamanan. */
     }

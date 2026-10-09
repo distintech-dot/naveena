@@ -6,9 +6,16 @@ header('Content-Type: application/json');
 /* Status pemeliharaan boleh dicek tanpa login: halaman pemeliharaan
    memakainya untuk mengarahkan pengunjung kembali ke halaman masuk. */
 if ((string)($_GET['a'] ?? '') === 'maintenance_status') {
+    /* Titik ini SENGAJA tanpa login (dipakai halaman pemeliharaan untuk memeriksa
+       ulang setiap 60 detik). `applies` = apakah mode ini BERLAKU bagi pengunjung
+       tersebut, sehingga halaman pemeliharaan tahu kapan harus melepas pengguna
+       (mis. cakupan dipindah ke cabang lain, atau mode dimatikan). */
     echo json_encode([
         'ok' => true,
         'maintenance' => maintenance_on(),
+        'applies' => maintenance_applies_to(),
+        'scope' => maintenance_scope_text(),
+        'branch_id' => maintenance_branch_id(),
         'title' => maintenance_info()['title'],
     ], JSON_UNESCAPED_UNICODE);
     exit;
@@ -256,6 +263,8 @@ try {
 
         case 'maintenance_status':
             $out['maintenance'] = maintenance_on();
+            $out['applies'] = maintenance_applies_to();
+            $out['scope'] = maintenance_scope_text();
             $out['readonly'] = maintenance_readonly();
             break;
 

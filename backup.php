@@ -170,6 +170,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         if ($act === 'db_health') {
             if (!is_super()) deny('Hanya Super Admin.');
+            /* db_health_all() sekaligus menuliskan hasil pemeriksaannya ke db_registry
+               (tanpa pemeriksaan tambahan) — panel & registry jadi tidak pernah
+               menampilkan status yang berbeda. */
             $h = db_health_all();
             $rusak = [];
             foreach ($h as $k => $v) { if (empty($v['ok'])) $rusak[] = $k . ' (' . ($v['error'] ?: 'periksa') . ')'; }
@@ -177,9 +180,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         : ('Health check: seluruh ' . count($h) . ' basis data sehat (integritas ok, tanpa pelanggaran FK).'),
                 $rusak ? 'warning' : 'success');
             audit('Health Check Basis Data', 'Database', null, null,
-                ['diperiksa' => count($h), 'bermasalah' => count($rusak)],
-                'Pemeriksaan integritas & FK');
-            header('Location: backup.php#database');
+                ['diperiksa' => count($h), 'bermasalah' => count($rusak),
+                 'registry' => db_registry_summary()],
+                'Pemeriksaan integritas & FK (+ sinkronisasi registry)');
+            header('Location: backup.php#registry');
+            exit;
+        }
+        if ($act === 'db_registry') {
+            /* SINKRONKAN REGISTRY (permintaan pemilik): menyegarkan versi skema,
+               status migrasi, lokasi, ukuran, dan status kesehatan SETIAP basis data
+               berdasarkan pemeriksaan NYATA. Tidak mengubah data operasional, tidak
+               mengulang migrasi yang sudah selesai, dan tidak mereset basis data. */
+            if (!is_super()) deny('Hanya Super Admin.');
+            $r = db_registry_refresh(null, true);
+            $sum = $r['ringkas'];
+            $pesan = 'Registry disinkronkan: ' . num((int)$sum['jumlah']) . ' basis data diperiksa ulang.';
+            if (!empty($sum['tertinggal'])) {
+                $pesan .= ' Skema BELUM terkini di: ' . implode(', ', $sum['tertinggal']) . '.';
+            }
+            if (!empty($sum['gagal'])) {
+                $pesan .= ' PERLU DIPERIKSA (gagal divalidasi): ' . implode(', ', $sum['gagal']) . '.';
+            }
+            if (empty($sum['tertinggal']) && empty($sum['gagal'])) {
+                $pesan .= ' Seluruh basis data berstatus sehat & skema ' . SCHEMA_VERSION . ' terkini.';
+            }
+            flash($pesan, (empty($sum['gagal']) && empty($sum['tertinggal'])) ? 'success' : 'warning');
+            audit('Sinkronkan Registry Basis Data', 'Database', null, null,
+                ['jumlah' => (int)$sum['jumlah'], 'per_status' => $sum['per_status'],
+                 'tertinggal' => $sum['tertinggal'], 'gagal' => $sum['gagal']],
+                'Versi skema, status, ukuran & kesehatan seluruh basis data disegarkan dari pemeriksaan nyata');
+            header('Location: backup.php#registry');
+            exit;
+        }
+        if ($act === 'db_registry_clean') {
+            /* Buang baris registry yang menunjuk basis data dari lokasi lain (sisa
+               pemindahan folder / salinan uji). Basis data pemasangan ini tidak disentuh. */
+            if (!is_super()) deny('Hanya Super Admin.');
+            $n = db_registry_delete_foreign();
+            flash($n > 0 ? ('Registry dirapikan: ' . num($n) . ' baris asing dibuang.')
+                         : 'Tidak ada baris registry asing yang perlu dibuang.',
+                'success');
+            audit('Bersihkan Registry Asing', 'Database', null, null, ['dibuang' => $n],
+                'Baris registry yang menunjuk basis data dari lokasi lain dibuang (bukan basis data pemasangan ini)');
+            header('Location: backup.php#registry');
             exit;
         }
         if ($act === 'backup_cfg') {
@@ -236,49 +279,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$snap['ok']) throw new RuntimeException('Snapshot pengaman sebelum restore gagal dibuat: ' . $snap['error']);
             $safety = $snap['file'];
 
-            /* PEMULIHAN PADA ARSITEKTUR CENTRAL + PER CABANG (ronde 59):
-               (1) skema TIDAK diubah — dikelola ensure_schema(), jadi seluruh pernyataan
-                   DDL (CREATE TABLE/INDEX/TRIGGER/VIEW) dilewati;
-               (2) seluruh baris dikosongkan lebih dulu — tabel operasional dikosongkan di
-                   SEMUA berkas cabang (DELETE biasa hanya mengenai satu cabang);
-               (3) penyisipan memakai q() sehingga setiap baris mendarat di berkas cabang
-                   yang benar (dari nilai branch_id pada dump). */
-            $statements = backup_split_statements($sql);
-            $pdo = db();
-            $pdo->exec('PRAGMA foreign_keys = OFF');
-            $pdo->exec('BEGIN IMMEDIATE');
-            try {
-                /* Tabel yang akan dikosongkan = SELURUH tabel yang tercakup dump
-                   (baik yang punya baris maupun yang kosong saat itu). Tanpa daftar
-                   dari CREATE TABLE, tabel yang kebetulan kosong saat backup akan
-                   tetap menyimpan baris baru sehingga pemulihan tidak kembali ke
-                   keadaan backup. */
-                $tabelDump = [];
-                foreach ($statements as $stmt) {
-                    if (preg_match('/^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\[]?(\w+)/i', $stmt, $m)) {
-                        $tabelDump[strtolower($m[1])] = true;
-                        continue;
-                    }
-                    if (!preg_match('/^\s*(INSERT|REPLACE)\b/i', $stmt)) continue;
-                    if (preg_match('/^\s*(?:INSERT|REPLACE)\s+(?:OR\s+\w+\s+)?INTO\s+[`"\[]?(\w+)/i', $stmt, $m)) {
-                        $tabelDump[strtolower($m[1])] = true;
-                    }
-                }
-                foreach (array_keys($tabelDump) as $t) backup_clear_table($t);
-                $n = 0;
-                foreach ($statements as $stmt) {
-                    if (preg_match('/^\s*(CREATE|PRAGMA|BEGIN|COMMIT|DROP|ALTER)\b/i', $stmt)) continue;
-                    if (!preg_match('/^\s*(INSERT|REPLACE)\b/i', $stmt)) continue;
-                    q($stmt);                       // dikualifikasi ke berkas cabang yang benar
-                    $n++;
-                }
-                $pdo->exec('COMMIT');
-            } catch (Throwable $ex) {
-                $pdo->exec('ROLLBACK');
-                $pdo->exec('PRAGMA foreign_keys = ON');
-                throw new RuntimeException('Restore gagal: ' . $ex->getMessage() . ' Tidak ada perubahan yang disimpan.');
-            }
-            $pdo->exec('PRAGMA foreign_keys = ON');
+            /* PEMULIHAN PADA ARSITEKTUR CENTRAL + PER CABANG:
+               setiap basis data dipulihkan lewat koneksinya SENDIRI (satu transaksi per
+               basis data) — lihat backup_restore_sql_dump(). Pendekatan ini berlaku untuk
+               berapa pun jumlah cabangnya (batas ATTACH SQLite 10 basis data tidak lagi
+               menjadi batas pemulihan) dan tidak lagi gagal tanpa pesan. */
+            $hasil = backup_restore_sql_dump($sql, (int)$user['id']);
+            if (!$hasil['ok']) throw new RuntimeException('Restore gagal: ' . $hasil['error']);
+            $n = (int)$hasil['total'];
+            db_route_write_branch_clear();
             /* Tabel `backups` ikut dikembalikan isi backup, sehingga baris snapshot
                pengaman tadi hilang dari daftar (berkasnya tetap ada). Didaftarkan
                ulang supaya berkas pengaman TIDAK dianggap "berkas tak terdaftar"
@@ -859,10 +868,105 @@ $routeRep = db_route_report();
     </div>
 
     <?php
+    /* ------------------------------------------------------------------ *
+     * REGISTRY BASIS DATA (db_registry) — versi skema, status migrasi,
+     * lokasi, ukuran, dan kesehatan SETIAP basis data.
+     * ------------------------------------------------------------------
+     * Nilainya berasal dari PEMERIKSAAN NYATA (bukan setelan/cache) dan sudah
+     * disegarkan otomatis oleh db_status_summary() di atas — jadi tabel ini tidak
+     * pernah berbeda dengan tabel Central & Basis Data Cabang di atasnya. */
+    $regRows = db_registry_list();
+    $regSum = db_registry_summary();
+    $regAdaMasalah = !empty($regSum['gagal']) || !empty($regSum['tertinggal']);
+    ?>
+    <div class="section-title" id="registry">Registry Basis Data (versi · status · ukuran · kesehatan)</div>
+    <div class="notice small" style="background:<?= $regAdaMasalah ? '#FFF6F5' : 'var(--tint)' ?>">
+      <?php if ($regAdaMasalah): ?>
+        <strong>Perlu perhatian:</strong>
+        <?php if (!empty($regSum['gagal'])): ?>
+          gagal divalidasi → <strong><?= e(implode(', ', $regSum['gagal'])) ?></strong>.
+        <?php endif; ?>
+        <?php if (!empty($regSum['tertinggal'])): ?>
+          skema belum terkini → <strong><?= e(implode(', ', $regSum['tertinggal'])) ?></strong>
+          (akan dimigrasikan otomatis saat basis data itu dipakai, atau tekan
+          <em>Siapkan Basis Data Semua Cabang</em>).
+        <?php endif; ?>
+      <?php else: ?>
+        <?= icon('check') ?> Seluruh <strong><?= num((int)$regSum['jumlah']) ?></strong> basis data
+        berstatus sehat dan skema <strong><?= e(SCHEMA_VERSION) ?></strong> terkini.
+      <?php endif; ?>
+      <div class="mt-1">Terakhir disinkronkan: <strong><?= e((string)$regSum['disinkronkan']) ?></strong>.
+        Nilai di tabel ini dibaca langsung dari setiap berkas basis data
+        (central → <code>settings.schema_version</code>; berkas cabang →
+        <code>PRAGMA user_version</code>) beserta hasil <code>integrity_check</code> dan
+        <code>foreign_key_check</code>.</div>
+    </div>
+    <div class="table-wrap">
+      <table class="tbl">
+        <thead><tr><th>Basis data</th><th>Lokasi</th><th>Versi skema</th><th>Status</th>
+          <th class="num">Ukuran</th><th>Keterangan pemeriksaan</th><th>Terakhir diperiksa</th></tr></thead>
+        <tbody>
+        <?php if (!$regRows): ?>
+          <tr><td colspan="7" class="muted small">Belum ada baris registry — tekan
+            <em>Sinkronkan Registry</em> di bawah.</td></tr>
+        <?php endif; ?>
+        <?php foreach ($regRows as $r):
+          $st = strtoupper((string)$r['status']);
+          $tone = $st === 'ACTIVE' ? 'green' : ($st === 'MIGRATED' ? 'blue' : ($st === 'CHECK' ? 'yellow' : 'red'));
+        ?>
+          <tr>
+            <td><strong><?= $r['kind'] === 'central' ? 'Central' : ('Cabang ' . (int)$r['branch_id']) ?></strong>
+              <div class="muted small"><?= $r['kind'] === 'central' ? 'data global &amp; sistem' : 'data operasional' ?></div></td>
+            <td class="small"><code><?= e(short_text((string)$r['path'], 58)) ?></code></td>
+            <td class="small"><?= e((string)$r['schema_version']) ?>
+              <?php if ((string)$r['schema_version'] !== SCHEMA_VERSION): ?>
+                <div class="muted small">aplikasi: <?= e(SCHEMA_VERSION) ?></div>
+              <?php endif; ?></td>
+            <td><?= badge($st, $tone) ?></td>
+            <td class="num small"><?= num(round(((int)$r['size']) / 1048576, 2), 2) ?> MB</td>
+            <td class="small"><?= e(short_text((string)($r['health'] ?? ''), 110)) ?></td>
+            <td class="small nowrap"><?= e(tgl((string)$r['last_check'], true)) ?></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+    <div class="flex gap-sm flex-wrap mt-2" style="align-items:flex-start">
+      <div style="max-width:380px">
+        <form method="post"
+              data-confirm="Sinkronkan registry dengan kondisi basis data yang sebenarnya? Versi skema, status, ukuran, dan kesehatan setiap basis data diperiksa ulang. TIDAK mengubah data operasional, TIDAK mengulang migrasi, dan TIDAK mereset basis data.">
+          <?= csrf_field() ?><input type="hidden" name="action" value="db_registry">
+          <button class="btn btn-primary" type="submit"><?= icon('refresh') ?> Sinkronkan Registry</button>
+        </form>
+        <p class="muted small mt-1">Membaca ulang versi skema, ukuran berkas, integritas
+          (<code>integrity_check</code>), dan pelanggaran relasi (<code>foreign_key_check</code>)
+          untuk central + setiap cabang, lalu menuliskan hasilnya ke registry.
+          <strong>Tidak ada</strong> data operasional yang diubah dan tidak ada migrasi yang diulang.
+          Registry juga disegarkan otomatis setiap kali migrasi berhasil dan setiap kali panel ini dibuka.</p>
+      </div>
+      <?php $regAsing = db_registry_foreign_rows(); ?>
+      <?php if ($regAsing): ?>
+        <div style="max-width:480px">
+          <div class="alert alert-warning small" style="margin:0">
+            Ada <strong><?= num(count($regAsing)) ?> baris registry</strong> yang menunjuk basis data
+            dari lokasi LAIN (bukan central/cabang pemasangan ini) — biasanya sisa pemindahan folder
+            atau salinan uji. Baris itu tidak dipakai aplikasi dan aman dibuang.
+          </div>
+          <form method="post" class="mt-1"
+                data-confirm="Buang <?= num(count($regAsing)) ?> baris registry yang menunjuk basis data dari lokasi lain? Basis data pemasangan ini (central + setiap cabang) TIDAK tersentuh.">
+            <?= csrf_field() ?><input type="hidden" name="action" value="db_registry_clean">
+            <button class="btn" type="submit"><?= icon('trash') ?> Buang <?= num(count($regAsing)) ?> Baris Registry Asing</button>
+          </form>
+          <p class="muted small mt-1">Contoh: <code><?= e(short_text((string)($regAsing[0]['path'] ?? ''), 70)) ?></code></p>
+        </div>
+      <?php endif; ?>
+    </div>
+
+    <?php
     /* Riwayat migrasi & audit cakupan query: INFORMASI saja (tanpa tombol). */
     try {
         db_central_registry_ready();
-        $riwayatMigrasi = db_central_all('SELECT * FROM db_migrations ORDER BY id DESC LIMIT 5');
+        $riwayatMigrasi = db_central_all('SELECT * FROM db_migrations ORDER BY id DESC LIMIT 8');
     } catch (Throwable $e) { $riwayatMigrasi = []; }
     ?>
     <?php if ($riwayatMigrasi): ?>

@@ -339,19 +339,21 @@ if ($type === 'laporan' && $format === 'xlsx') {
             'series' => [['name' => 'Penjualan', 'name_ref' => '$E$1', 'range' => '$E$2:$E$' . count($rows), 'color' => ltrim(chart_series_color('skincare'), '#')]],
         ]] : []];
 
-    // 8. Top 10 pasien
-    $bsx = $fx['scope'] === null ? '' : ' AND o.branch_id = ?';
-    $bpx = $fx['scope'] === null ? [] : [$fx['scope']];
-    $tp = all("SELECT p.name, p.member_number, p.patient_number, b.name branch_name,
-                      COUNT(DISTINCT o.id) trx, COALESCE(SUM(o.total),0) total
-               FROM orders o JOIN patients p ON p.id=o.patient_id JOIN branches b ON b.id=o.branch_id
-               WHERE o.status='paid' AND date(o.created_at) BETWEEN ? AND ? {$bsx}
-               GROUP BY p.id ORDER BY trx DESC, total DESC LIMIT 10", array_merge([$fx['ps'], $fx['pe']], $bpx));
-    $rows = [['#', 'Nama Pasien', 'No. Member', 'No. Pasien', 'Kunjungan', 'Total Transaksi', 'Cabang']];
+    // 8. Top 10 pasien — SATU SUMBER dengan halaman & dokumen cetak
+    $tp = report_top_patients(report_filters_manual($fx['ps'], $fx['pe'], $fx['scope'], 'paid'), 10);
+    $rows = [array_merge(top_patients_columns(), ['No. Pasien'])];
     foreach ($tp as $i => $r) {
-        $rows[] = [$i + 1, $r['name'], $r['member_number'] ?: '-', $r['patient_number'], (int)$r['trx'], (float)$r['total'], $r['branch_name']];
+        /* Kolom "Kunjungan" = jumlah HARI kunjungan, "Jumlah Transaksi" = jumlah
+           transaksi. Dulu kolom "Kunjungan" diisi jumlah transaksi (label salah)
+           sehingga urutan peringkat tampak tidak cocok dengan angkanya. */
+        $rows[] = [$i + 1, $r['name'], $r['member_number'] ?: '-', (int)$r['visits'],
+            (int)$r['trx'], (float)$r['total'], $r['branch_name'], $r['patient_number']];
     }
-    $sheets[] = ['name' => 'Top 10 Pasien', 'widths' => [6, 30, 18, 18, 12, 18, 28], 'rows' => $rows];
+    /* Keterangan urutan ditulis di bawah tabel supaya berkas Excel dapat dibaca
+       tanpa membuka aplikasi (sumber angkanya sama dengan halaman & dokumen). */
+    $rows[] = [];
+    $rows[] = ['Urutan', 'Diurutkan dari TOTAL TRANSAKSI (Rp) terbesar; bila nilainya sama, jumlah transaksi terbanyak yang diutamakan.'];
+    $sheets[] = ['name' => 'Top 10 Pasien', 'widths' => [6, 30, 18, 12, 14, 18, 28, 18], 'rows' => $rows];
 
     // 9 & 10. Rincian item
     $rows = [['Treatment', 'Kode', 'Kategori', 'Terjual', 'Pendapatan']];
@@ -570,16 +572,16 @@ if ($type === 'laporan' && $format === 'excel') {
     foreach (array_slice($B2['skincares'], 0, 5) as $i => $r) $ss[] = [$i + 1, $r['nama'], $r['kategori'], $r['q'], $r['s']];
     $tbl(['#', 'Produk Skincare', 'Kategori', 'Terjual', 'Penjualan'], $ss ?: [['-', '-', '-', 0, 0]], '7. Top 5 Skincare');
 
-    $bs2 = $f2['scope'] === null ? '' : ' AND o.branch_id = ?';
-    $bp2 = $f2['scope'] === null ? [] : [$f2['scope']];
-    $tp = all("SELECT p.name, p.patient_number, p.member_number, b.name branch_name,
-                      COUNT(DISTINCT o.id) trx, COALESCE(SUM(o.total),0) total
-               FROM orders o JOIN patients p ON p.id=o.patient_id JOIN branches b ON b.id=o.branch_id
-               WHERE o.status='paid' AND date(o.created_at) BETWEEN ? AND ? {$bs2}
-               GROUP BY p.id ORDER BY trx DESC, total DESC LIMIT 10", array_merge([$f2['ps'], $f2['pe']], $bp2));
+    $tp = report_top_patients(report_filters_manual($f2['ps'], $f2['pe'], $f2['scope'], 'paid'), 10);
     $tpRows = [];
-    foreach ($tp as $i => $r) $tpRows[] = [$i + 1, $r['name'], $r['member_number'] ?: '-', $r['trx'], $r['total'], $r['branch_name']];
-    $tbl(['#', 'Nama Pasien', 'No. Member', 'Kunjungan', 'Total Transaksi', 'Cabang'], $tpRows ?: [['-', '-', '-', 0, 0, '-']], '8. Top 10 Pasien');
+    foreach ($tp as $i => $r) {
+        /* Kolom lengkap: kunjungan, jumlah transaksi, dan total — dulu kolom
+           "Kunjungan" justru berisi jumlah transaksi dan kolom "Jumlah Transaksi"
+           tidak ada sama sekali, sehingga urutan peringkat tidak dapat diperiksa. */
+        $tpRows[] = [$i + 1, $r['name'], $r['member_number'] ?: '-', (int)$r['visits'],
+            $r['total'], (int)$r['trx'], $r['branch_name']];
+    }
+    $tbl(top_patients_columns(), $tpRows ?: [['-', '-', '-', 0, 0, 0, '-']], '8. Top 10 Pasien');
 
     $rt = [];
     foreach ($B2['treatments'] as $r) $rt[] = [$r['nama'], $r['kode'], $r['kategori'], $r['q'], $r['s']];
@@ -655,7 +657,8 @@ switch ($type) {
         $w = 'p.status = "active" AND 1=1' . $b1;
         if (gp('q') !== '') { $w .= ' AND (p.name LIKE ? OR p.nik LIKE ? OR p.phone LIKE ? OR p.email LIKE ? OR p.member_number LIKE ?)'; $q = '%' . gp('q') . '%'; array_push($p, $q, $q, $q, $q, $q); }
         $headers = ['No. Pasien', 'Nama', 'JK', 'NIK', 'Telepon', 'Email', 'Member', 'Status', 'Cabang', 'Kunjungan', 'Total Belanja'];
-        foreach (all("SELECT p.*, b.name branch, (SELECT COUNT(*) FROM orders o WHERE o.patient_id=p.id AND o.status='paid') visits,
+        require_once __DIR__ . '/includes/patient.php';
+        foreach (all("SELECT p.*, b.name branch, " . patient_visits_sql('p') . " AS visits,
                              (SELECT COALESCE(SUM(total),0) FROM orders o WHERE o.patient_id=p.id AND o.status='paid') spent
                       FROM patients p JOIN branches b ON b.id=p.branch_id WHERE {$w} ORDER BY p.name", $p) as $r) {
             $rows[] = [$r['patient_number'], $r['name'], $r['gender'] ?: '-', $r['nik'] ?: '-', $r['phone'] ?: '-', ($r['email'] ?? '') ?: '-', $r['member_number'] ?: '-', $r['patient_type'], $r['branch'], $r['visits'], $r['spent']];
@@ -721,11 +724,14 @@ switch ($type) {
         [$b1, $b2] = sc('o.branch_id', $scope);
         $p = array_merge([$ps, $pe], $b2);
         $headers = ['Tanggal', 'Jumlah Transaksi', 'Pendapatan Treatment', 'Penjualan Skincare', 'Diskon', 'Diskon Member', 'Total Pendapatan'];
+        require_once __DIR__ . '/includes/reports.php';
+        $joinItem = report_items_join_sql();
         $rows = all("SELECT date(o.created_at) tgl, COUNT(DISTINCT o.id) trx, COALESCE(SUM(o.total),0) total, COALESCE(SUM(o.discount),0) disc,
                             COALESCE(SUM(o.member_discount),0) mdisc,
-                            COALESCE(SUM((SELECT COALESCE(SUM(oi.subtotal),0) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type='treatment')),0) tr,
-                            COALESCE(SUM((SELECT COALESCE(SUM(oi.subtotal),0) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type='skincare')),0) sk
-                     FROM orders o WHERE o.status='paid' AND date(o.created_at) BETWEEN ? AND ? {$b1}
+                            COALESCE(SUM(oit.tr),0) tr,
+                            COALESCE(SUM(oit.sk),0) sk
+                     FROM orders o {$joinItem}
+                     WHERE o.status='paid' AND date(o.created_at) BETWEEN ? AND ? {$b1}
                      GROUP BY tgl ORDER BY tgl", $p);
         $g = ['trx' => 0, 'tr' => 0, 'sk' => 0, 'disc' => 0, 'mdisc' => 0, 'total' => 0];
         $out = [];

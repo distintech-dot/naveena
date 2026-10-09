@@ -119,15 +119,34 @@ function backup_quota_bytes(): int
 }
 
 /** Semua berkas backup di folder (terdaftar maupun tidak). */
+/**
+ * Daftar berkas backup di folder backup (SEMUA jenis yang diproduksi aplikasi).
+ *
+ * JEBAKAN YANG SUDAH DIPERBAIKI (ronde 64c): fungsi ini dulu hanya memakai pola
+ * `*.sql` dan `*.sql.gz`, sehingga **backup PAKET (`.zip`) dan backup per cabang
+ * (`.sqlite.gz`) tidak pernah terlihat**. Akibatnya:
+ *   • tombol "Bersihkan" (berkas tak terdaftar) tidak pernah bisa membuang sisa
+ *     paket/per-cabang — di produksi menumpuk 15 berkas / ±135 MB yang tak
+ *     terpakai tetapi tampak "0 berkas sisa" di layar;
+ *   • peringatan penyimpanan hampir penuh tidak pernah menyebut berkas itu.
+ * Semua jenis backup yang dibuat `backup_create_package()` / `backup_branch_create()`
+ * kini ikut dihitung, sementara berkas yang TERDAFTAR di tabel `backups` tetap
+ * dilindungi oleh `backup_orphan_files()`.
+ */
 function backup_dir_files(): array
 {
     $dir = backup_dir_ensure();
     $out = [];
-    foreach (array_merge(glob($dir . '/*.sql') ?: [], glob($dir . '/*.sql.gz') ?: []) as $path) {
-        if (!is_file($path)) continue;
-        $out[] = ['name' => basename($path), 'size' => (int)filesize($path), 'mtime' => (int)filemtime($path)];
+    /* Urutan penting: `*.sql.gz` harus diperiksa sebelum `*.sql` agar tidak ada
+       berkas yang terdaftar dua kali (glob `*.sql` tidak cocok untuk `.sql.gz`). */
+    foreach (['*.sql', '*.sql.gz', '*.sqlite.gz', '*.zip'] as $pola) {
+        foreach (glob($dir . '/' . $pola) ?: [] as $path) {
+            if (!is_file($path)) continue;
+            $out[basename($path)] = ['name' => basename($path), 'size' => (int)filesize($path),
+                'mtime' => (int)filemtime($path)];
+        }
     }
-    return $out;
+    return array_values($out);
 }
 
 /**
@@ -251,22 +270,94 @@ function backup_purge_orphans(): int
  * ------------------------------------------------------------------ */
 
 /** Dump schema + data (teks SQL) — selalu utuh, dipadatkan saat ditulis. */
+/**
+ * DUMP SELURUH DATA: CENTRAL + SETIAP BERKAS CABANG.
+ *
+ * PENTING (FINAL AUDIT): pada arsitektur central + satu basis data per cabang, satu
+ * koneksi hanya melihat SEBAGIAN basis data. `sqlite_master` pada koneksi aplikasi
+ * menunjuk basis data `main` (central), sehingga dump yang membaca satu koneksi saja
+ * TIDAK memuat tabel operasional (pasien/transaksi) sama sekali — backup akan tampak
+ * berhasil tetapi tidak dapat memulihkan data klinik.
+ *
+ * Karena itu dump menyusuri SETIAP basis data:
+ *   • bagian central ditandai `-- @@BRANCH 0`;
+ *   • bagian tiap cabang ditandai `-- @@BRANCH <id cabang>`.
+ * Penanda itu dipakai RESTORE untuk menetapkan cabang tujuan penulisan secara
+ * eksplisit — sehingga tabel ANAK (order_items, payments, …) yang tidak punya
+ * `branch_id` pun mendarat di berkas cabang yang benar (tanpa penanda, cabangnya
+ * ditentukan dari baris INDUK yang mungkin belum tersisip).
+ *
+ * Berkas lama (tanpa penanda) tetap dapat dipulihkan — restore jatuh ke cara lama
+ * (menentukan cabang dari nilai `branch_id` pada pernyataan).
+ */
 function db_dump(): string
 {
     $pdo = db();
     $out = "-- " . clinic_name() . " Management System\n-- Backup: " . date('Y-m-d H:i:s')
         . "\n-- Arsitektur: central.sqlite (data global) + satu basis data per cabang (data operasional)"
-        . "\n-- Isi dump: SELURUH data (global + semua cabang), disatukan supaya dapat dipulihkan penuh"
+        . "\n-- Isi dump: SELURUH data (global + semua cabang) dengan penanda -- @@BRANCH <id>"
         . "\n\n";
-    $objects = all("SELECT type, name, sql FROM sqlite_master
-                    WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY (type='table') DESC, name");
-    foreach ($objects as $o) {
-        $out .= $o['sql'] . ";\n\n";
+
+    /* ---------- 1. CENTRAL (data global/sistem) ----------
+       Penanda baris ini HARUS persis `-- @@BRANCH <angka>` (tanpa teks tambahan) karena
+       pemecah pernyataan hanya mempertahankan bentuk itu untuk dipakai restore. */
+    $out .= "-- @@BRANCH 0\n";
+    $out .= db_dump_section($pdo, null, []);
+
+    /* ---------- 2. SETIAP BERKAS CABANG (data operasional) ---------- */
+    foreach (db_route_branch_ids() as $bid) {
+        $path = db_branch_path((int)$bid);
+        if (!is_file($path)) continue;
+        $out .= "\n-- @@BRANCH " . (int)$bid . "\n";
+        try {
+            /* Koneksi TERPISAH ke berkas cabang: tidak dibatasi jumlah ATTACH dan
+               tidak terpengaruh cakupan baca — isi berkas dibaca apa adanya. */
+            $c = db_open($path);
+            $out .= db_dump_section($c, (int)$bid, schema_branch_table_list());
+            $c = null;
+        } catch (Throwable $e) {
+            $out .= "-- PERINGATAN: cabang " . (int)$bid . " tidak dapat dibaca: " . $e->getMessage() . "\n";
+        }
     }
-    foreach ($objects as $o) {
-        if ($o['type'] !== 'table') continue;
-        $t = $o['name'];
-        $rows = $pdo->query("SELECT * FROM \"{$t}\"")->fetchAll(PDO::FETCH_ASSOC);
+    return $out;
+}
+
+/**
+ * Satu bagian dump (DDL + data) dari sebuah koneksi.
+ *
+ * @param PDO        $pdo
+ * @param int|null   $branchId null = central
+ * @param string[]   $hanya    bila tidak kosong, hanya tabel ini yang diikutkan
+ */
+function db_dump_section(PDO $pdo, ?int $branchId, array $hanya): string
+{
+    $filter = $hanya ? array_flip(array_map('strtolower', $hanya)) : null;
+    $semua = $pdo->query("SELECT type, name, sql FROM sqlite_master
+                          WHERE type='table' AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+                          ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
+    $tabel = [];
+    foreach ($semua as $o) {
+        $nama = (string)$o['name'];
+        if ($filter !== null) {
+            if (!isset($filter[strtolower($nama)])) continue;
+        } else {
+            /* Bagian central TIDAK memuat tabel operasional (tidak ada di central). */
+            if (db_route_scope_of($nama) === 'branch') continue;
+        }
+        $tabel[] = $o;
+    }
+    $out = '';
+    foreach ($tabel as $o) {
+        $out .= $o['sql'] . ";\n";
+    }
+    $out .= "\n";
+    foreach ($tabel as $o) {
+        $t = (string)$o['name'];
+        try {
+            $rows = $pdo->query('SELECT * FROM "' . $t . '"')->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) {
+            continue;
+        }
         if (!$rows) continue;
         $out .= "-- data: {$t} (" . count($rows) . " baris)\n";
         foreach ($rows as $r) {
@@ -537,7 +628,16 @@ function backup_split_statements(string $sql): array
         $next = ($i + 1 < $len) ? $sql[$i + 1] : '';
         /* komentar baris */
         if ($ch === '-' && $next === '-') {
+            $mulai = $i;
             while ($i < $len && $sql[$i] !== "\n") $i++;
+            /* PENANDA BAGIAN BASIS DATA dipertahankan sebagai pernyataan tersendiri
+               (`@@BRANCH <id>`): dipakai restore untuk menetapkan cabang tujuan
+               penulisan. Komentar lain dibuang seperti biasa. */
+            $komentar = trim(substr($sql, $mulai, $i - $mulai));
+            if (preg_match('/^--\s*@@BRANCH\s+\d+\s*$/i', $komentar)) {
+                if (trim($buf) !== '') { $statements[] = trim($buf); $buf = ''; }
+                $statements[] = strtoupper(preg_replace('/^--\s*/', '', $komentar));
+            }
             continue;
         }
         /* komentar blok */
@@ -604,6 +704,32 @@ function backup_size_text(int $size, int $rawSize = 0): string
  *   checksums.json                   sha256 tiap berkas
  *   metadata.json                    versi skema, mode arsitektur, waktu, jumlah cabang
  * ------------------------------------------------------------------ */
+
+/**
+ * Versi skema untuk metadata paket backup — dari PEMERIKSAAN NYATA.
+ * Bila ada basis data yang versinya berbeda dari kode aplikasi, hal itu ditulis apa
+ * adanya (mis. "central 1.41.0 · 2 cabang @ 1.41.0" atau "… (BELUM terkini)").
+ */
+function backup_schema_version_text(): string
+{
+    if (!function_exists('db_schema_version_of')) {
+        return (string)setting('schema_version', SCHEMA_VERSION);
+    }
+    try {
+        $vc = db_schema_version_of(db_central_path());
+        $bagian = ['central ' . ($vc['version'] !== '' ? $vc['version'] : '(tidak diketahui)')];
+        $peta = [];
+        foreach (db_route_branch_ids() as $bid) {
+            $v = db_schema_version_of(db_branch_path((int)$bid));
+            $kunci = $v['version'] !== '' ? $v['version'] : '(tidak diketahui)';
+            $peta[$kunci] = ($peta[$kunci] ?? 0) + 1;
+        }
+        foreach ($peta as $v => $n) $bagian[] = $n . ' cabang @ ' . $v;
+        return implode(' · ', $bagian);
+    } catch (Throwable $e) {
+        return (string)setting('schema_version', SCHEMA_VERSION);
+    }
+}
 
 /** Daftar basis data yang harus masuk paket backup (central + tiap cabang). */
 function backup_db_inventory(): array
@@ -932,7 +1058,10 @@ function backup_create_package(string $note, ?int $userId = null, array $opts = 
     $meta = [
         'aplikasi' => function_exists('clinic_name') ? clinic_name() : 'Naveena',
         'kompresi' => 'DEFLATE (ZIP metode 8) — otomatis pada tiap berkas bila hasilnya lebih kecil',
-        'schema_version' => (string)setting('schema_version', SCHEMA_VERSION),
+        /* Versi skema diambil dari PEMERIKSAAN NYATA basis datanya (central →
+           `settings.schema_version`; berkas cabang → `PRAGMA user_version`) supaya
+           metadata paket tidak ikut menuliskan versi yang sudah tidak berlaku. */
+        'schema_version' => backup_schema_version_text(),
         'arsitektur' => 'central_branch',
         'dibuat' => date('Y-m-d H:i:s'),
         'jumlah_database' => count($manifest),
@@ -1210,6 +1339,12 @@ function backup_restore_package(string $file, ?int $userId = null): array
     $s = backup_create_package('Snapshot otomatis sebelum restore paket', $userId, ['enforce' => false]);
     if (!empty($s['ok'])) $snap = (string)$s['file'];
 
+    /* Tulis isi WAL ke berkas utama untuk central & seluruh berkas cabang SEBELUM
+       apa pun diganti, lalu buang sisa `-wal`/`-shm` agar SQLite tidak memutar ulang
+       transaksi lama saat berkas barunya dibuka. */
+    $berkasDiganti = [];
+    if (function_exists('db_checkpoint_all')) { try { db_checkpoint_all(); } catch (Throwable $e) { /* lanjut */ } }
+
     $dipulihkan = [];
     $dilewati = [];
     $mediaKembali = 0;
@@ -1261,7 +1396,18 @@ function backup_restore_package(string $file, ?int $userId = null): array
         if (@rename($tmp, $target)) {
             @chmod($target, 0664);
             $dipulihkan[] = $label;
+            $berkasDiganti[] = $target;
         }
+    }
+    /* JEBAKAN YANG SUDAH DIPERBAIKI (ronde 65): koneksi aplikasi yang masih terbuka
+       memegang berkas (inode) LAMA beserta `-wal`-nya. Bila tidak dilepas, penulisan
+       berikutnya dapat MEMUTAR ULANG WAL lama sehingga baris yang sudah dipulihkan
+       muncul kembali (terbukti pada uji pemulihan: jumlah baris kembali seperti sebelum
+       pemulihan). Karena itu: sisa `-wal`/`-shm` dibuang LAGI, lalu koneksi routed
+       diminta dibangun ulang pada permintaan berikutnya. */
+    if ($berkasDiganti && function_exists('db_route_clear_wal')) {
+        foreach ($berkasDiganti as $t) db_route_clear_wal($t);
+        if (function_exists('db_route_reset')) db_route_reset();
     }
     if ($mediaKembali > 0) $dipulihkan[] = $mediaKembali . ' berkas foto';
     /* Central ikut dipulihkan: pastikan skema & data contoh sistem siap. */
@@ -1330,14 +1476,159 @@ function backup_clear_table(string $table): int
 {
     $total = 0;
     if (db_route_scope_of($table) === 'branch') {
-        foreach (db_route_attached() as $alias) {
-            try { $total += (int)db()->exec('DELETE FROM ' . $alias . '."' . $table . '"'); }
-            catch (Throwable $e) { /* tabel belum ada di berkas itu */ }
+        /* SELURUH berkas cabang (bukan hanya yang ter-ATTACH): pada 10+ cabang,
+           tabel yang tidak ter-ATTACH tidak akan dikosongkan oleh DELETE biasa —
+           akibatnya pemulihan menyisakan baris lama di cabang tersebut. */
+        foreach (db_route_branch_ids() as $bid) {
+            $path = db_branch_path((int)$bid);
+            if (!is_file($path)) continue;
+            try {
+                $c = db_open($path);
+                $total += (int)$c->exec('DELETE FROM "' . $table . '"');
+                $c = null;
+            } catch (Throwable $e) { /* tabel belum ada di berkas itu */ }
         }
     } else {
         try { $total += (int)db()->exec('DELETE FROM "' . $table . '"'); } catch (Throwable $e) { /* - */ }
     }
     return $total;
+}
+
+/**
+ * PULIHKAN DUMP SQL (central + setiap cabang) — per basis data, atomik.
+ *
+ * MENGAPA begini (FINAL AUDIT): pada arsitektur central + satu basis data per cabang,
+ * satu koneksi aplikasi hanya dapat meng-ATTACH maksimum 9 berkas cabang (batas SQLite
+ * yang tidak dapat dinaikkan). Pemulihan yang mengandalkan satu transaksi lintas berkas
+ * karena itu:
+ *   • meninggalkan cabang di luar batas ATTACH dengan ISI LAMA (pemulihan tampak
+ *     berhasil padahal datanya tidak kembali), dan
+ *   • menulis lewat koneksi terpisah SELAGI transaksi pemulihan terbuka — SQLite
+ *     mengunci SELURUH basis data yang ter-ATTACH pada `BEGIN IMMEDIATE`, sehingga
+ *     pengosongan tabel gagal tanpa pesan (kesalahannya ditelan pemanggil).
+ *
+ * Cara yang dipakai sekarang: setiap basis data dipulihkan lewat koneksinya SENDIRI
+ * (`BEGIN IMMEDIATE` → kosongkan tabel bagian itu → sisipkan barisnya → `COMMIT`).
+ * Dengan begitu berlaku untuk berapa pun cabangnya dan tidak ada data yang tertinggal.
+ *
+ * Dump lama tanpa penanda `@@BRANCH` tetap didukung: barisnya ditempatkan menurut nilai
+ * `branch_id` pada pernyataan (perilaku sebelumnya).
+ *
+ * @return array{ok:bool,error:string,per_db:array<string,int>,total:int}
+ */
+function backup_restore_sql_dump(string $sql, ?int $userId = null): array
+{
+    $statements = backup_split_statements($sql);
+    if (!$statements) return ['ok' => false, 'error' => 'Dump kosong.', 'per_db' => [], 'total' => 0];
+
+    /* ---- Bagi pernyataan menjadi bagian per basis data ---- */
+    $bagian = [];              // label => ['branch' => int|null, 'ddl' => [], 'insert' => []]
+    $pakaiPenanda = false;
+    $aktif = 'legacy';
+    $bagian[$aktif] = ['branch' => null, 'ddl' => [], 'insert' => []];
+    foreach ($statements as $st) {
+        if (preg_match('/^@@BRANCH\s+(\d+)$/i', $st, $m)) {
+            $pakaiPenanda = true;
+            $bid = (int)$m[1];
+            $aktif = $bid > 0 ? 'b' . $bid : 'central';
+            if (!isset($bagian[$aktif])) $bagian[$aktif] = ['branch' => $bid > 0 ? $bid : null, 'ddl' => [], 'insert' => []];
+            continue;
+        }
+        if (preg_match('/^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\[]?(\w+)/i', $st)) {
+            $bagian[$aktif]['ddl'][] = $st;
+            continue;
+        }
+        if (preg_match('/^\s*(INSERT|REPLACE)\b/i', $st)) $bagian[$aktif]['insert'][] = $st;
+    }
+    if (!$pakaiPenanda) {
+        /* Dump lama: tempatkan menurut nilai `branch_id` pada pernyataan. */
+        $peta = ['legacy' => ['branch' => 0, 'ddl' => [], 'insert' => $bagian['legacy']['ddl']]];
+        foreach ($bagian['legacy']['insert'] as $st) {
+            $bid = db_route_branch_from_sql($st, []);
+            $tabel = null;
+            if (preg_match('/^\s*(?:INSERT|REPLACE)\s+(?:OR\s+\w+\s+)?INTO\s+[`"\[]?(\w+)/i', $st, $m)) $tabel = $m[1];
+            $kunci = ($tabel !== null && db_route_scope_of($tabel) === 'branch')
+                ? 'b' . ($bid !== null && $bid > 0 ? $bid : 0)
+                : 'central';
+            if (!isset($bagian[$kunci])) $bagian[$kunci] = ['branch' => $kunci === 'central' ? null : (int)substr($kunci, 1),
+                'ddl' => [], 'insert' => []];
+            $bagian[$kunci]['insert'][] = $st;
+        }
+        unset($bagian['legacy']);
+    }
+
+    /* ---- Pulihkan satu basis data pada satu waktu ---- */
+    $perDb = [];
+    $total = 0;
+    $gagal = [];
+    foreach ($bagian as $label => $b) {
+        if (!$b['insert'] && !$b['ddl']) continue;
+        $bid = $b['branch'] ?? null;
+        if ($bid !== null && (int)$bid <= 0) continue;                  // tidak dapat ditentukan
+        $target = ($bid === null) ? db_central_path() : db_branch_path((int)$bid);
+        if ($bid !== null && !is_file($target)) {
+            db_branch_create((int)$bid);                                // cabang baru pada dump
+        }
+        if (!is_file($target)) { $gagal[] = $label . ' (berkas tidak ada)'; continue; }
+        try {
+            $pdo = db_open($target);
+            /* Skema TIDAK diubah: dikelola ensure_schema() — pernyataan DDL dilewati. */
+            $pdo->exec('PRAGMA foreign_keys = OFF');
+            $pdo->exec('BEGIN IMMEDIATE');
+            try {
+                /* Kosongkan HANYA tabel yang ada di bagian ini (bukan seluruh tabel),
+                   supaya tabel yang tidak ikut ke dump tidak ikut hilang. */
+                $tabel = [];
+                foreach ($b['ddl'] as $st) {
+                    if (preg_match('/^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\[]?(\w+)/i', $st, $m)) {
+                        $tabel[strtolower($m[1])] = true;
+                    }
+                }
+                foreach ($b['insert'] as $st) {
+                    if (preg_match('/^\s*(?:INSERT|REPLACE)\s+(?:OR\s+\w+\s+)?INTO\s+[`"\[]?(\w+)/i', $st, $m)) {
+                        $tabel[strtolower($m[1])] = true;
+                    }
+                }
+                foreach (array_keys($tabel) as $t) {
+                    try { $pdo->exec('DELETE FROM "' . $t . '"'); } catch (Throwable $e) { /* tabel belum ada */ }
+                }
+                $n = 0;
+                foreach ($b['insert'] as $st) {
+                    try { $pdo->exec($st); $n++; }
+                    catch (Throwable $e) { throw new RuntimeException(basename($target) . ': ' . $e->getMessage()); }
+                }
+                $pdo->exec('COMMIT');
+                $perDb[$label] = $n;
+                $total += $n;
+            } catch (Throwable $e) {
+                $pdo->exec('ROLLBACK');
+                throw $e;
+            } finally {
+                try { $pdo->exec('PRAGMA foreign_keys = ON'); } catch (Throwable $e) { }
+                /* Isi WAL ditulis ke berkas utama lalu dipotong: berkas basis data
+                   dikembalikan dalam keadaan lengkap tanpa sisa WAL yang menggantung.
+                   JANGAN menghapus berkas `-wal` secara paksa — koneksi aplikasi
+                   (yang dibuka lebih dulu pada berkas yang sama) masih memegangnya,
+                   dan menghapusnya membuat SQLite melaporkan "disk I/O error". */
+                try { $pdo->exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (Throwable $e) { }
+            }
+            $pdo = null;
+        } catch (Throwable $e) {
+            $gagal[] = $label . ': ' . $e->getMessage();
+        }
+    }
+
+    /* Koneksi aplikasi DIBANGUN ULANG supaya membaca isi berkas yang baru saja
+       dipulihkan (skema/versi maupun datanya). Berkas `-wal` TIDAK dihapus paksa —
+       lihat catatan di dalam loop di atas. */
+    if (function_exists('db_route_reset')) db_route_reset();
+    if (function_exists('settings')) settings(true);
+
+    if ($gagal) {
+        return ['ok' => false, 'error' => 'Sebagian basis data gagal dipulihkan — ' . implode('; ', $gagal),
+            'per_db' => $perDb, 'total' => $total];
+    }
+    return ['ok' => true, 'error' => '', 'per_db' => $perDb, 'total' => $total];
 }
 
 /** Verifikasi paket: manifest + checksum harus cocok. */

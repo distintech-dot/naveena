@@ -210,7 +210,22 @@ function finance_company_share(?int $branchId): float
  */
 function finance_cost_amount(int $costId, int $scope): ?array
 {
-    return one('SELECT * FROM finance_cost_amounts WHERE cost_id = ? AND branch_id = ?', [$costId, $scope]);
+    /* Di-cache per permintaan: tabel nominal biaya hanya berubah saat pemilik menekan
+       Simpan, sedangkan halaman Keuangan memanggil fungsi ini berkali-kali (satu per
+       pos × per cakupan) — terukur 105 pemanggilan pada 25 cabang. */
+    static $cache = [];
+    if (!empty($GLOBALS['FINANCE_COST_CACHE_OFF'])) {
+        return one('SELECT * FROM finance_cost_amounts WHERE cost_id = ? AND branch_id = ?', [$costId, $scope]);
+    }
+    $k = $costId . '|' . $scope;
+    if (array_key_exists($k, $cache)) return $cache[$k];
+    return $cache[$k] = one('SELECT * FROM finance_cost_amounts WHERE cost_id = ? AND branch_id = ?', [$costId, $scope]);
+}
+
+/** Buang cache nominal biaya (dipanggil setelah penyimpanan biaya). */
+function finance_cost_amount_cache_reset(): void
+{
+    $GLOBALS['FINANCE_COST_CACHE_OFF'] = true;
 }
 
 /**
@@ -357,17 +372,24 @@ function finance_cost_sync_applicable(?int $costId = null): void
  */
 function finance_cost_effective_rows(bool $onlyActive = true): array
 {
+    /* Cache per permintaan: isi tabel biaya hanya berubah saat pemilik menyimpan,
+       sedangkan halaman Keuangan memanggilnya berkali-kali (per cabang). */
+    static $cache = [];
+    $k = $onlyActive ? '1' : '0';
+    if (empty($GLOBALS['FINANCE_COST_CACHE_OFF']) && isset($cache[$k])) return $cache[$k];
     $w = ["((c.cost_mode = 'company' AND a.branch_id = 0)
            OR (COALESCE(c.cost_mode,'branch') <> 'company' AND a.branch_id <> 0))",
           'COALESCE(a.amount,0) > 0'];
     if ($onlyActive) $w[] = "a.status = 'active'";
-    return all('SELECT c.id cost_id, c.name, c.category, c.note,
+    $rows = all('SELECT c.id cost_id, c.name, c.category, c.note,
                        COALESCE(c.cost_mode,\'branch\') cost_mode,
                        a.id amount_id, a.branch_id scope, a.amount, a.period_months, a.status
                 FROM finance_costs c
                 JOIN finance_cost_amounts a ON a.cost_id = c.id
                 WHERE ' . implode(' AND ', $w) . '
                 ORDER BY c.sort ASC, c.id ASC, a.branch_id ASC');
+    if (empty($GLOBALS['FINANCE_COST_CACHE_OFF'])) $cache[$k] = $rows;
+    return $rows;
 }
 
 /** Daftar pos biaya operasional (definisi) — dipakai halaman/ekspor/uji. */
@@ -381,6 +403,25 @@ function finance_costs(bool $onlyActive = true, ?int $branchId = null): array
 function finance_costs_active(): array
 {
     return finance_cost_effective_rows(true);
+}
+
+/**
+ * Nominal tiap cakupan yang TERISI untuk sebuah pos biaya (satu baca, di-cache).
+ *
+ * @return array<int,array> baris {branch_id, amount, status} urut branch_id
+ */
+function finance_cost_amounts_of(int $costId): array
+{
+    static $cache = [];
+    if (!empty($GLOBALS['FINANCE_COST_CACHE_OFF'])) {
+        return all('SELECT branch_id, amount, status FROM finance_cost_amounts
+                    WHERE cost_id = ? AND COALESCE(amount,0) > 0 ORDER BY branch_id', [$costId]);
+    }
+    if (!isset($cache[$costId])) {
+        $cache[$costId] = all('SELECT branch_id, amount, status FROM finance_cost_amounts
+                               WHERE cost_id = ? AND COALESCE(amount,0) > 0 ORDER BY branch_id', [$costId]);
+    }
+    return $cache[$costId];
 }
 
 /**
@@ -480,13 +521,16 @@ function finance_operational_costs(array $f, ?int $branchId = null): array
             fn($p) => $p['scope_label'] . ' ' . money((float)$p['amount']), $g['parts']));
         /* Cakupan yang terisi untuk pos ini di SELURUH cakupan (untuk pemberitahuan
            "masih ada cabang yang belum diisi"). */
-        $g['filled_scopes'] = array_map(fn($r) => (int)$r['branch_id'],
-            all('SELECT branch_id FROM finance_cost_amounts WHERE cost_id = ? AND COALESCE(amount,0) > 0', [$id]));
+        /* Satu kali baca per pos biaya (hasilnya di-cache sepanjang permintaan):
+           `finance_operational_costs()` dipanggil sekali per cabang pada halaman
+           Keuangan, sehingga tanpa cache ini tiap pos dibaca 25 kali (terukur 135
+           query hanya untuk data yang sama). */
+        $parts = finance_cost_amounts_of($id);
+        $g['filled_scopes'] = array_map(fn($r) => (int)$r['branch_id'], $parts);
         $g['all_parts'] = array_map(fn($r) => [
             'scope' => (int)$r['branch_id'], 'scope_label' => finance_cost_scope_label((int)$r['branch_id']),
             'amount' => (float)$r['amount'], 'status' => (string)$r['status'],
-        ], all('SELECT branch_id, amount, status FROM finance_cost_amounts
-                 WHERE cost_id = ? AND COALESCE(amount,0) > 0 ORDER BY branch_id', [$id]));
+        ], $parts);
         $rows[] = $g;
     }
 
@@ -697,7 +741,11 @@ function finance_cost_delete(int $costId): ?array
 function finance_summary(array $f, bool $withCosts = true, ?int $branchId = null,
                          ?float $companyShare = null): array
 {
-    $items = one("SELECT
+    /* Diambil lewat `db_cross_one()` supaya angka keuangan tetap LENGKAP walau cabangnya
+       lebih banyak daripada batas ATTACH SQLite (cabang di luar batas dijumlahkan lewat
+       fan-out). Sebelumnya `one()` biasa sehingga total omzet/HPP/total bayar menjadi
+       kurang tanpa pesan kesalahan apa pun begitu cabangnya lebih dari 9. */
+    $items = db_cross_one("SELECT
             COALESCE(SUM(CASE WHEN oi.item_type='treatment' THEN oi.subtotal ELSE 0 END),0) tr,
             COALESCE(SUM(CASE WHEN oi.item_type='skincare'  THEN oi.subtotal ELSE 0 END),0) sk,
             /* PAKET: pendapatan & HPP paket (baris bertipe 'package'). Komponen
@@ -716,12 +764,14 @@ function finance_summary(array $f, bool $withCosts = true, ?int $branchId = null
         JOIN orders o ON o.id = oi.order_id
         LEFT JOIN treatments t ON t.id = oi.treatment_id
         LEFT JOIN skincare_products s ON s.id = oi.skincare_id
-        WHERE {$f['sql']}", $f['params']);
-    $ord = one("SELECT COUNT(*) trx, COALESCE(SUM(o.subtotal),0) subtotal,
+        WHERE {$f['sql']}", $f['params'],
+        ['tr', 'sk', 'pkg', 'hpp_pkg', 'hpp_tr', 'hpp_sk', 'qty_tr', 'qty_sk', 'qty_pkg']);
+    $ord = db_cross_one("SELECT COUNT(*) trx, COALESCE(SUM(o.subtotal),0) subtotal,
                        COALESCE(SUM(o.discount),0) disc,
                        COALESCE(SUM(o.member_discount),0) member_disc,
                        COALESCE(SUM(o.total),0) total
-                FROM orders o WHERE {$f['sql']}", $f['params']);
+                FROM orders o WHERE {$f['sql']}", $f['params'],
+        ['trx', 'subtotal', 'disc', 'member_disc', 'total']);
 
     $tr = (float)$items['tr'];
     $sk = (float)$items['sk'];
@@ -827,7 +877,7 @@ function finance_series(array $f, ?int $maxBuckets = 24): array
     }
 
     $fill = function (array $sf) use (&$buckets, $keyExpr): void {
-        $rows = all("SELECT $keyExpr k,
+        $rows = db_cross_group("SELECT $keyExpr k,
                 COALESCE(SUM(CASE WHEN oi.item_type IN ('treatment','skincare','package') THEN oi.subtotal ELSE 0 END),0) bruto,
                 COALESCE(SUM(CASE WHEN oi.item_type='treatment' THEN oi.quantity *
                         CASE WHEN oi.hpp > 0 THEN oi.hpp ELSE COALESCE(t.hpp,0) END
@@ -838,16 +888,16 @@ function finance_series(array $f, ?int $maxBuckets = 24): array
             JOIN orders o ON o.id = oi.order_id
             LEFT JOIN treatments t ON t.id = oi.treatment_id
             LEFT JOIN skincare_products s ON s.id = oi.skincare_id
-            WHERE {$sf['sql']} GROUP BY k", $sf['params']);
+            WHERE {$sf['sql']} GROUP BY k", $sf['params'], ['k']);
         foreach ($rows as $r) {
             if (!isset($buckets[$r['k']])) continue;
             $buckets[$r['k']]['omzet'] += (float)$r['bruto'];
             $buckets[$r['k']]['hpp'] += (float)$r['hpp'];
         }
         /* Diskon transaksi & diskon member mengurangi omzet pada periode itu. */
-        $dis = all("SELECT $keyExpr k,
+        $dis = db_cross_group("SELECT $keyExpr k,
                 COALESCE(SUM(o.discount + o.member_discount),0) d
-            FROM orders o WHERE {$sf['sql']} GROUP BY k", $sf['params']);
+            FROM orders o WHERE {$sf['sql']} GROUP BY k", $sf['params'], ['k']);
         foreach ($dis as $r) {
             if (!isset($buckets[$r['k']])) continue;
             $buckets[$r['k']]['omzet'] -= (float)$r['d'];
@@ -880,13 +930,47 @@ function finance_series(array $f, ?int $maxBuckets = 24): array
        cabang tampak jauh lebih rugi daripada totalnya). */
     $branches = [];
     if ($f['scope'] === null) {
+        /* SATU query berkelompok per (cabang, bucket) untuk SEMUA cabang — bukan satu
+           query per cabang (terukur 26 query berat pada 25 cabang). Cabang di luar batas
+           ATTACH SQLite tetap ikut karena `db_cross_group()` memakai fan-out. */
+        $rowsB = db_cross_group("SELECT o.branch_id bid, $keyExpr k,
+                COALESCE(SUM(CASE WHEN oi.item_type IN ('treatment','skincare','package') THEN oi.subtotal ELSE 0 END),0) bruto,
+                COALESCE(SUM(CASE WHEN oi.item_type='treatment' THEN oi.quantity *
+                        CASE WHEN oi.hpp > 0 THEN oi.hpp ELSE COALESCE(t.hpp,0) END
+                    WHEN oi.item_type='skincare' THEN oi.quantity * COALESCE(s.purchase_price,0)
+                    WHEN oi.item_type='package'  THEN oi.quantity * oi.hpp
+                    ELSE 0 END),0) hpp
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            LEFT JOIN treatments t ON t.id = oi.treatment_id
+            LEFT JOIN skincare_products s ON s.id = oi.skincare_id
+            WHERE {$f['sql']} GROUP BY bid, k", $f['params'], ['bid', 'k']);
+        $discB = db_cross_group("SELECT o.branch_id bid, $keyExpr k,
+                COALESCE(SUM(o.discount + o.member_discount),0) d
+            FROM orders o WHERE {$f['sql']} GROUP BY bid, k", $f['params'], ['bid', 'k']);
+        $peta = [];
+        foreach ($rowsB as $r) {
+            $b = (int)$r['bid'];
+            if (!isset($peta[$b][$r['k']])) $peta[$b][$r['k']] = ['omzet' => 0.0, 'hpp' => 0.0];
+            $peta[$b][$r['k']]['omzet'] += (float)$r['bruto'];
+            $peta[$b][$r['k']]['hpp'] += (float)$r['hpp'];
+        }
+        foreach ($discB as $r) {
+            $b = (int)$r['bid'];
+            if (!isset($peta[$b][$r['k']])) $peta[$b][$r['k']] = ['omzet' => 0.0, 'hpp' => 0.0];
+            $peta[$b][$r['k']]['omzet'] -= (float)$r['d'];
+        }
         foreach (branches() as $b) {
-            $bf = $f;
-            $bf['sql'] .= ' AND o.branch_id = ?';
-            $bf['params'][] = (int)$b['id'];
-            $bc = $withCosts ? finance_operational_costs($f, (int)$b['id']) : ['total' => 0.0];
-            $s2 = finance_series_for_branch($bf, $order, $daily, (float)$bc['total'], count($order));
-            $branches[(string)$b['name']] = $s2;
+            $bid = (int)$b['id'];
+            $bc = $withCosts ? finance_operational_costs($f, $bid) : ['total' => 0.0];
+            $perBucketB = $order ? (float)$bc['total'] / count($order) : 0.0;
+            $outB = [];
+            foreach ($order as $k) {
+                $o = round($peta[$bid][$k]['omzet'] ?? 0.0, 2);
+                $h = round($peta[$bid][$k]['hpp'] ?? 0.0, 2);
+                $outB[] = round($o - $h - $perBucketB, 2);
+            }
+            $branches[(string)$b['name']] = $outB;
         }
     }
 
@@ -899,7 +983,14 @@ function finance_series(array $f, ?int $maxBuckets = 24): array
     ];
 }
 
-/** Seri laba bersih untuk satu cabang (memakai bucket yang sama dengan induknya). */
+/**
+ * Seri laba bersih untuk satu cabang (memakai bucket yang sama dengan induknya).
+ *
+ * CATATAN: sejak final audit, `finance_series()` menghitung semua cabang dari SATU
+ * query berkelompok per (cabang, bucket) sehingga fungsi ini tidak lagi dipanggil di
+ * jalur utama (25 cabang = 25 query berat). Dibiarkan tersedia untuk pemakaian lain
+ * dan uji.
+ */
 function finance_series_for_branch(array $bf, array $order, bool $daily, float $costTotal, int $nBuckets): array
 {
     $keyExpr = $daily ? "date(o.created_at)" : "strftime('%Y-%m', o.created_at)";
@@ -939,23 +1030,81 @@ function finance_series_for_branch(array $bf, array $order, bool $daily, float $
  */
 function finance_per_branch(array $f): array
 {
-    $rows = [];
     if ($f['scope'] !== null) {
         $one = one('SELECT id, name, code FROM branches WHERE id = ?', [$f['scope']]);
         $list = $one ? [$one] : [];
     } else {
         $list = branches();
     }
+    $withCosts = finance_mode() === 'lengkap';
+
+    /* SATU lintasan lintas cabang untuk SELURUH cabang, bukan satu ringkasan per cabang
+       (terukur 50 query berat pada 25 cabang). Angka yang dihasilkan identik karena
+       rumusnya sama — hanya cara mengambilnya yang dikelompokkan per cabang. */
+    $itemRows = db_cross_group("SELECT o.branch_id bid,
+            COALESCE(SUM(CASE WHEN oi.item_type='treatment' THEN oi.subtotal ELSE 0 END),0) tr,
+            COALESCE(SUM(CASE WHEN oi.item_type='skincare'  THEN oi.subtotal ELSE 0 END),0) sk,
+            COALESCE(SUM(CASE WHEN oi.item_type='package'   THEN oi.subtotal ELSE 0 END),0) pkg,
+            COALESCE(SUM(CASE WHEN oi.item_type='package'   THEN oi.quantity * oi.hpp ELSE 0 END),0) hpp_pkg,
+            COALESCE(SUM(CASE WHEN oi.item_type='treatment' THEN oi.quantity *
+                CASE WHEN oi.hpp > 0 THEN oi.hpp ELSE COALESCE(t.hpp, 0) END ELSE 0 END),0) hpp_tr,
+            COALESCE(SUM(CASE WHEN oi.item_type='skincare' THEN oi.quantity *
+                COALESCE(s.purchase_price, 0) ELSE 0 END),0) hpp_sk,
+            COALESCE(SUM(CASE WHEN oi.item_type='treatment' THEN oi.quantity ELSE 0 END),0) qty_tr,
+            COALESCE(SUM(CASE WHEN oi.item_type='skincare'  THEN oi.quantity ELSE 0 END),0) qty_sk,
+            COALESCE(SUM(CASE WHEN oi.item_type='package'   THEN oi.quantity ELSE 0 END),0) qty_pkg
+        FROM order_items oi
+        JOIN orders o ON o.id = oi.order_id
+        LEFT JOIN treatments t ON t.id = oi.treatment_id
+        LEFT JOIN skincare_products s ON s.id = oi.skincare_id
+        WHERE {$f['sql']} GROUP BY bid", $f['params'], ['bid']);
+    $ordRows = db_cross_group("SELECT o.branch_id bid, COUNT(*) trx, COALESCE(SUM(o.subtotal),0) subtotal,
+            COALESCE(SUM(o.discount),0) disc, COALESCE(SUM(o.member_discount),0) member_disc,
+            COALESCE(SUM(o.total),0) total
+        FROM orders o WHERE {$f['sql']} GROUP BY bid", $f['params'], ['bid']);
+    $petaItem = []; $petaOrd = [];
+    foreach ($itemRows as $r) $petaItem[(int)$r['bid']] = $r;
+    foreach ($ordRows as $r)  $petaOrd[(int)$r['bid']] = $r;
+
+    $rows = [];
     /* Biaya bersama dibagi RATA ke seluruh cabang (finance_company_share()),
        sehingga jumlah laba seluruh cabang = laba pada tampilan "Semua Cabang". */
     foreach ($list as $b) {
-        $bf = $f;
-        if ($f['scope'] === null) {
-            $bf['sql'] .= ' AND o.branch_id = ?';
-            $bf['params'][] = (int)$b['id'];
-        }
-        $s = finance_summary($bf, finance_mode() === 'lengkap', (int)$b['id']);
-        $s['branch_id'] = (int)$b['id'];
+        $bid = (int)$b['id'];
+        $it = $petaItem[$bid] ?? [];
+        $od = $petaOrd[$bid] ?? [];
+        $tr = (float)($it['tr'] ?? 0); $sk = (float)($it['sk'] ?? 0); $pkg = (float)($it['pkg'] ?? 0);
+        $disc = (float)($od['disc'] ?? 0); $memberDisc = (float)($od['member_disc'] ?? 0);
+        $omzet = round($tr + $sk + $pkg - $disc - $memberDisc, 2);
+        $hppTr = round((float)($it['hpp_tr'] ?? 0), 2);
+        $hppSk = round((float)($it['hpp_sk'] ?? 0), 2);
+        $hppPkg = round((float)($it['hpp_pkg'] ?? 0), 2);
+        $hppTotal = round($hppTr + $hppSk + $hppPkg, 2);
+        $labaKotor = round($omzet - $hppTotal, 2);
+        $costs = $withCosts ? finance_operational_costs($f, $bid)
+            : ['rows' => [], 'total' => 0.0, 'days' => 0, 'months' => 0.0, 'full_total' => 0.0, 'company_share' => 1.0];
+        $labaBersih = round($labaKotor - (float)$costs['total'], 2);
+        $s = [
+            'mode' => finance_mode(), 'with_costs' => $withCosts,
+            'pendapatan_treatment' => round($tr, 2), 'pendapatan_skincare' => round($sk, 2),
+            'pendapatan_paket' => round($pkg, 2),
+            'diskon' => round($disc, 2), 'diskon_member' => round($memberDisc, 2), 'omzet' => $omzet,
+            'hpp_treatment' => $hppTr, 'hpp_produk' => $hppSk, 'hpp_paket' => $hppPkg, 'hpp_total' => $hppTotal,
+            'laba_kotor' => $labaKotor,
+            'biaya_rows' => $costs['rows'], 'biaya_total' => (float)$costs['total'],
+            'biaya_company_share' => (float)($costs['company_share'] ?? 1.0),
+            'biaya_scopes' => (int)($costs['branches'] ?? finance_cost_scope_count()),
+            'biaya_full' => (float)$costs['full_total'],
+            'biaya_days' => (int)$costs['days'], 'biaya_months' => round((float)($costs['months'] ?? 0), 4),
+            'laba_bersih' => $labaBersih,
+            'margin' => $omzet > 0 ? round($labaBersih / $omzet * 100, 1) : null,
+            'trx' => (int)($od['trx'] ?? 0),
+            'qty_treatment' => (float)($it['qty_tr'] ?? 0), 'qty_skincare' => (float)($it['qty_sk'] ?? 0),
+            'qty_paket' => (float)($it['qty_pkg'] ?? 0),
+            'total_bayar' => round((float)($od['total'] ?? 0), 2),
+            'subtotal' => round((float)($od['subtotal'] ?? 0), 2),
+        ];
+        $s['branch_id'] = $bid;
         $s['branch'] = (string)$b['name'];
         $s['branch_code'] = (string)($b['code'] ?? '');
         $rows[] = $s;

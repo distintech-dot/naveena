@@ -39,6 +39,43 @@ function patient_visit_days(int $patientId): int
         )", [$patientId, $patientId]);
 }
 
+/**
+ * EKSPRESI SQL "KUNJUNGAN" — SATU DEFINISI untuk semua daftar/laporan.
+ *
+ * Kunjungan = **jumlah HARI BERBEDA** pasien datang, dihitung dari transaksi
+ * (semua status selain void) **dan** rekam medis. Jadi:
+ *   • 3 transaksi dalam sehari = 1 kunjungan (bukan 3),
+ *   • hari yang hanya berisi rekam medis (tanpa transaksi) tetap terhitung.
+ *
+ * Sama dengan `patient_visit_days()`. Dulu beberapa halaman memakai
+ * `COUNT(*) FROM orders` sebagai "Kunjungan" (itu JUMLAH TRANSAKSI) sehingga angka
+ * pada Daftar Pasien, Detail Pasien, dan Top 10 Pasien saling berbeda — pemilik
+ * bertanya "kunjungan dihitung berdasarkan apa?". Sekarang semuanya memakai
+ * ekspresi ini.
+ *
+ * @param string $aliasP alias tabel patients pada query pemanggil (mis. 'p')
+ * @param string $from   batas awal (Y-m-d) — kosong = tanpa batas
+ * @param string $to     batas akhir (Y-m-d) — kosong = tanpa batas
+ */
+function patient_visits_sql(string $aliasP = 'p', string $from = '', string $to = ''): string
+{
+    /* Tanggal disisipkan langsung (bukan parameter) karena ekspresi ini dipakai di
+       TENGAH query pemanggil — menambah parameter akan menggeser urutan `?` milik
+       pemanggil. Karena itu nilainya WAJIB berbentuk Y-m-d; selain itu diabaikan. */
+    $aman = fn(string $d): bool => (bool)preg_match('/^\d{4}-\d{2}-\d{2}$/', $d);
+    $wO = ''; $wM = '';
+    if ($aman($from)) { $wO .= " AND date(o2.created_at) >= '" . $from . "'"; $wM .= " AND m2.date >= '" . $from . "'"; }
+    if ($aman($to))   { $wO .= " AND date(o2.created_at) <= '" . $to . "'";   $wM .= " AND m2.date <= '" . $to . "'"; }
+    return '(SELECT COUNT(*) FROM (
+                SELECT date(o2.created_at) AS d FROM orders o2
+                 WHERE o2.patient_id = ' . $aliasP . '.id AND o2.status <> \'void\'
+                   AND o2.created_at IS NOT NULL' . $wO . '
+                UNION
+                SELECT m2.date AS d FROM medical_records m2
+                 WHERE m2.patient_id = ' . $aliasP . '.id AND COALESCE(m2.date, \'\') <> \'\'' . $wM . '
+            ))';
+}
+
 /** Daftar tanggal kunjungan (urut menaik) — dipakai untuk keterangan rinci. */
 function patient_visit_dates(int $patientId): array
 {

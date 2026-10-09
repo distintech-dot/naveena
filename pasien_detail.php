@@ -193,7 +193,12 @@ function pd_period_bar(int $patientId, string $period, string $ps, string $pe): 
 
 <div class="grid g3">
   <div class="stat accent"><span class="lbl">Total Pengeluaran</span><span class="val"><?= money($sum['total']) ?></span><span class="sub"><?= num($sum['trx']) ?> transaksi</span></div>
-  <div class="stat"><span class="lbl">Total Kunjungan</span><span class="val"><?= num($sum['trx']) ?></span><span class="sub">Terakhir: <?= e($last['last'] ? tgl($last['last']) : '-') ?></span></div>
+  <?php /* KUNJUNGAN = jumlah HARI berbeda pasien datang (transaksi atau rekam medis),
+     BUKAN jumlah transaksi — dulu kartu ini menampilkan jumlah transaksi sehingga
+     angkanya berbeda dari kolom "Kunjungan" di Top 10 Pasien. Definisi ini memakai
+     `patient_visit_days()` (sama dengan status pasien otomatis). */ ?>
+  <div class="stat"><span class="lbl">Total Kunjungan</span><span class="val"><?= num(patient_visit_days($id)) ?></span>
+    <span class="sub"><?= num($sum['trx']) ?> transaksi · terakhir <?= e($last['last'] ? tgl($last['last']) : '-') ?></span></div>
   <div class="stat"><span class="lbl">Total Treatment</span><span class="val"><?= num($qty['tr_qty']) ?></span><span class="sub">tindakan treatment</span></div>
   <div class="stat"><span class="lbl">Total Skincare</span><span class="val"><?= num($qty['sk_qty']) ?></span><span class="sub">produk dibeli</span></div>
   <div class="stat"><span class="lbl">Bahan Treatment Terpakai</span><span class="val"><?= qty_text($qty['mat_qty']) ?></span>

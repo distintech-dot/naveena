@@ -302,12 +302,30 @@ function order_create(array $in, array $user, int $branchId): array
         audit('Kartu Member Diberikan', 'Pasien', $patientId, ['member' => 0],
             ['member' => 1, 'level' => $sync['to'], 'sumber' => $activateSource],
             'Kartu member otomatis dari transaksi ' . $invoice);
+        /* Kartu BARU = naik dari "belum berkartu" → ikut tampil di menu Membership
+           Upgrade (level lama ditulis "Belum berkartu") beserta email ucapannya. */
+        $upAkt = member_upgrade_after_order($pat, $sync, $orderId, $invoice);
+        if ($upAkt['id'] > 0) $cardMsg .= $upAkt['pesan'];
     } elseif ($sync['changed']) {
-        $cardMsg = ' Level member pasien naik menjadi ' . $sync['status']['level']['label']
-            . ' (akumulasi ' . member_period_label() . ' ' . money($sync['status']['year_total']) . ').';
-        audit('Level Member Naik', 'Pasien', $patientId, ['level' => $sync['from']],
-            ['level' => $sync['to'], 'akumulasi' => $sync['status']['year_total']],
-            'Kenaikan level otomatis dari transaksi ' . $invoice);
+        /* NAIK LEVEL → menu "Membership Upgrade" (ronde 64d): direkam + email ucapan
+           selamat berisi lampiran PDF kartu lengkap (bila setelan otomatis aktif).
+           Fungsi itu juga mencatat Audit Log, sehingga tidak ada pencatatan ganda. */
+        $up = member_upgrade_after_order($pat, $sync, $orderId, $invoice);
+        if ($up['id'] > 0) {
+            $cardMsg = $up['pesan'];
+        } else {
+            /* Bukan kenaikan (mis. level TURUN setelah periode akumulasi berakhir),
+               atau level ini sudah tercatat pada periode berjalan. */
+            $naik = member_upgrade_is_upgrade((string)($sync['from'] ?? ''), (string)$sync['to']);
+            $cardMsg = ' Level member pasien ' . ($naik ? 'naik ' : '')
+                . 'menjadi ' . $sync['status']['level']['label']
+                . ' (akumulasi ' . member_period_label() . ' ' . money($sync['status']['year_total']) . ').';
+            audit($naik ? 'Level Member Naik (sudah tercatat)' : 'Level Member Berubah',
+                'Pasien', $patientId, ['level' => $sync['from']],
+                ['level' => $sync['to'], 'akumulasi' => $sync['status']['year_total']],
+                ($naik ? 'Kenaikan level (sudah tercatat pada periode ini)' : 'Penurunan level otomatis')
+                . ' dari transaksi ' . $invoice);
+        }
     } elseif ($useMemberCard && !$member['eligible'] && $member['reason'] !== '') {
         $cardMsg = ' Catatan kartu member: ' . $member['reason'];
     }
@@ -325,7 +343,17 @@ function order_create(array $in, array $user, int $branchId): array
     $emailInfo = '';
     $patientEmail = trim((string)($pat['email'] ?? ''));
     if (setting('email_receipt_auto') === '1' && $patientEmail !== '') {
-        if (!function_exists('send_receipt_email')) require_once __DIR__ . '/includes/mailer.php';
+        /* PENTING (dua bug yang sudah diperbaiki di final audit):
+             1. letak berkas ini adalah `includes/`, jadi jalur yang benar adalah
+                `__DIR__ . '/mailer.php'` — sebelumnya `'/includes/mailer.php'` yang
+                menunjuk `includes/includes/mailer.php` dan TIDAK ADA;
+             2. `receipt_data()` berada di `includes/receipt.php` dan berkas itu TIDAK
+                pernah dimuat di jalur ini.
+           Keduanya membuat transaksi GAGAL (fatal error) begitu pemilik menyalakan
+           "kirim struk otomatis ke email" — tidak terlihat di produksi karena setelan
+           itu masih 0, sehingga tidak ada uji yang menjalankannya. */
+        if (!function_exists('send_receipt_email')) require_once __DIR__ . '/mailer.php';
+        if (!function_exists('receipt_data')) require_once __DIR__ . '/receipt.php';
         if (!mail_configured()) {
             $emailInfo = ' Struk TIDAK dikirim ke email ' . $patientEmail
                 . ' — layanan email belum dikonfigurasi di Pengaturan Sistem.';

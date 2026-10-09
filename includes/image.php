@@ -42,7 +42,18 @@ function img_limits(string $kind): array
             'biteMax' => 300 * 1024, 'square' => true],
         'medical' => ['dim' => 'photo_max_medical', 'def' => 1400, 'max' => 2000, 'bytes' => 600 * 1024,
             'biteMax' => 500 * 1024],
-        'logo'    => ['dim' => 'photo_max_logo',    'def' => 800,  'max' => 2000, 'bytes' => 400 * 1024],
+        /* LOGO & QRIS (permintaan pemilik): batas berkas sumber **800 KB** — berkas
+           yang lebih besar DITOLAK — dan kompresinya SENGAJA RINGAN karena keduanya
+           dipakai sebagai gambar rinci (QRIS harus tetap tajam saat dipindai, logo
+           tercetak di struk/laporan PDF).
+           `soft` = kompresi ringan: PNG tetap LOSSLESS (level 9), JPEG memakai mutu
+           minimal 92, dan TIDAK ada pengecilan berulang demi mengejar target ukuran
+           berkas. Batas PIKsel (`dim`, bawaan 800 px) tetap berlaku sebagai batas atas
+           supaya pembuatan PDF tetap cepat. */
+        'logo'    => ['dim' => 'photo_max_logo',    'def' => 800,  'max' => 2000, 'bytes' => 400 * 1024,
+            'biteMax' => 800 * 1024, 'soft' => true],
+        'qris'    => ['dim' => 'photo_max_logo',    'def' => 800,  'max' => 2000, 'bytes' => 400 * 1024,
+            'biteMax' => 800 * 1024, 'soft' => true],
         /* Background kartu member: ukuran kartu standar 85,6 × 54 mm @300dpi = 1012 × 638 px.
            `dim` memakai KUNCI setelan (string) — bukan angka — karena img_limits()
            memanggil setting($c['dim']). */
@@ -54,9 +65,13 @@ function img_limits(string $kind): array
     if ($dim > $c['max']) $dim = $c['max'];
     $q = (int)setting('photo_quality', '80');
     if ($q < 40 || $q > 95) $q = 80;
+    /* Mutu untuk kompresi RINGAN: dinaikkan agar hasilnya tidak "berbintik" —
+       logo/QRIS dipakai sebagai gambar rinci & dicetak. */
+    if (!empty($c['soft']) && $q < 92) $q = 92;
     return ['dim' => $dim, 'quality' => $q,
         'targetBytes' => (int)setting('photo_target_kb', '0') * 1024 ?: $c['bytes'],
         'biteMax' => (int)($c['biteMax'] ?? 0),
+        'soft' => !empty($c['soft']),
         'square' => !empty($c['square'])];
 }
 
@@ -104,10 +119,17 @@ function img_process_upload(string $tmpPath, string $origName, string $destDir, 
      * berkas besar (kompresi jadi maksimal & hemat ruang).
      * ------------------------------------------------------------------ */
     if ($lim['biteMax'] > 0 && $origBytes > $lim['biteMax']) {
+        /* Sebutan yang benar per jenis berkas: pengguna logo/QRIS tentu bingung
+           bila pesannya berbunyi "ukuran foto". */
+        $sebut = [
+            'logo' => 'Logo', 'qris' => 'Gambar QRIS',
+            'patient' => 'Foto pasien', 'staff' => 'Foto tenaga medis', 'medical' => 'Foto rekam medis',
+            'membercard' => 'Gambar latar kartu member',
+        ][$kind] ?? 'Foto';
         $kbAsli = num(round($origBytes / 1024), 0);
-        throw new RuntimeException('Ukuran foto melebihi ' . num((int)round($lim['biteMax'] / 1024)) . ' KB — '
-            . 'berkas yang diunggah ' . $kbAsli . ' KB. Mohon perkecil/kompres fotonya terlebih dahulu '
-            . '(mis. dengan aplikasi pengolah foto atau tangkapan layar) lalu unggah kembali.');
+        throw new RuntimeException('Ukuran ' . $sebut . ' melebihi ' . num((int)round($lim['biteMax'] / 1024)) . ' KB — '
+            . 'berkas yang diunggah ' . $kbAsli . ' KB. Mohon perkecil/kompres berkasnya terlebih dahulu '
+            . '(mis. dengan aplikasi pengolah gambar atau tangkapan layar) lalu unggah kembali.');
     }
 
     // --- Bila GD tidak ada: simpan apa adanya, tetapi batasi ukuran berkas ---
@@ -191,6 +213,19 @@ function img_process_upload(string $tmpPath, string $origName, string $destDir, 
     } else {
         $sx = 0; $sy = 0; $side = 0;
         $scale = min(1.0, $dim / max($sw, $sh));
+        /* KOMPRESI RINGAN untuk logo & QRIS (permintaan pemilik: "hanya sedikit,
+           sekitar 30%"). Dua hal yang dijaga:
+             1. BATAS PIKsel `dim` (bawaan 800 px) TETAP berlaku sebagai batas ATAS —
+                ini yang membuat logo/QRIS tidak membengkak (penting untuk kecepatan
+                pembuatan struk/laporan PDF dan agar kode QR tetap terbaca). Dulu di
+                sini ada "lantai skala 0,7" yang MENIMPA batas itu sehingga logo
+                1386 px tersimpan 1386 px (melebihi batas) — tertangkap uji
+                `fitur_check.sh`.
+             2. MUTU TIDAK DITURUNKAN: PNG tetap lossless (level 9) dan JPEG minimal
+                mutu 92, serta tidak ada pengecilan berulang ke 75% seperti pada foto
+                biasa. Itulah "kompresi ringan" — berkasnya mengecil karena dimensi
+                dibatasi & PNG/JPEG dipadatkan, bukan karena mutunya dibuang.
+           Gambar yang sudah lebih kecil dari batas TIDAK diperbesar (scale ≤ 1). */
         $dw = max(1, (int)round($sw * $scale));
         $dh = max(1, (int)round($sh * $scale));
     }
@@ -217,7 +252,9 @@ function img_process_upload(string $tmpPath, string $origName, string $destDir, 
        ke struk/laporan PDF oleh penulis PDF sendiri (includes/png.php) yang hanya
        bisa membaca PNG. Kalau logo disimpan sebagai JPEG, logo akan hilang dari
        semua dokumen PDF tanpa pesan apa pun (pernah terjadi: unggahan .jpg). */
-    $forcePng = ($kind === 'logo');
+    /* QRIS juga SELALU PNG: kode QR yang dikompresi JPEG bisa berbintik dan
+       menyulitkan pemindai (pasien gagal membayar). PNG bersifat lossless. */
+    $forcePng = in_array($kind, ['logo', 'qris'], true);
     $target = $lim['targetBytes'];
     $quality = $lim['quality'];
     $out = null;
@@ -225,12 +262,16 @@ function img_process_upload(string $tmpPath, string $origName, string $destDir, 
     $mime = ($hasAlpha || $forcePng) ? 'image/png' : 'image/jpeg';
 
     if ($hasAlpha || $forcePng) {
-        // PNG: atur level kompresi maksimum
-        for ($lvl = 9; $lvl >= 6; $lvl--) {
+        /* PNG: kompresi MAKSIMUM (level 9) — PNG bersifat LOSSLESS, jadi "level 9"
+           TIDAK menurunkan mutu gambar, hanya ukuran berkas. Untuk unggahan yang
+           meminta kompresi RINGAN (logo/QRIS) loop turun-level tidak dijalankan
+           supaya tidak ada penurunan mutu sedikit pun. */
+        $lvlMin = !empty($lim['soft']) ? 9 : 6;
+        for ($lvl = 9; $lvl >= $lvlMin; $lvl--) {
             ob_start();
             imagepng($dst, null, $lvl);
             $out = ob_get_clean();
-            if (strlen((string)$out) <= $target || $lvl === 6) break;
+            if (strlen((string)$out) <= $target || $lvl === $lvlMin) break;
         }
         // Bila masih terlalu besar dan tidak butuh transparansi ketat -> JPEG
         // (khusus logo: TIDAK boleh, karena PDF hanya bisa menyisipkan PNG)
@@ -246,7 +287,10 @@ function img_process_upload(string $tmpPath, string $origName, string $destDir, 
         }
     }
     if ($out === null) {
-        for ($q = $quality; $q >= 45; $q -= 8) {
+        /* Kompresi RINGAN (logo/QRIS): mutunya tidak diturunkan berulang dan
+           dimensinya TIDAK diperkecil lagi — cukup satu kali encode bermutu tinggi. */
+        $qBawah = !empty($lim['soft']) ? max(88, $quality) : 45;
+        for ($q = $quality; $q >= $qBawah; $q -= 8) {
             ob_start();
             imagejpeg($dst, null, $q);
             $out = ob_get_clean();
@@ -254,7 +298,7 @@ function img_process_upload(string $tmpPath, string $origName, string $destDir, 
         }
         // masih besar -> perkecil lagi dimensinya lalu coba ulang
         $guard = 0;
-        while (strlen((string)$out) > $target && $guard++ < 3) {
+        while (empty($lim['soft']) && strlen((string)$out) > $target && $guard++ < 3) {
             $nw = max(120, (int)round($dw * 0.75));
             $nh = max(120, (int)round($dh * 0.75));
             if ($nw >= $dw) break;

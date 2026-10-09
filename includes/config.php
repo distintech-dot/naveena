@@ -90,7 +90,7 @@ function nv_isolated_mode(): bool
 }
 
 define('BACKUP_DIR', dirname(APP_DIR) . '/naveena_backups');
-define('SCHEMA_VERSION', '1.37.1');
+define('SCHEMA_VERSION', '1.41.0');
 /** Naikkan angka ini setiap kali isi data/icd10.tsv atau data/icd9cm.tsv berubah,
  *  agar kamus pada database yang sudah terpasang ikut dimuat ulang otomatis. */
 define('ICD_DATASET_VERSION', '2');
@@ -103,6 +103,8 @@ require_once __DIR__ . '/member.php';
 require_once __DIR__ . '/appointment.php';
 require_once __DIR__ . '/clinic.php';
 require_once __DIR__ . '/patient.php';
+/* Pembersih baris dokter/terapis kembar (ronde 68). */
+require_once __DIR__ . '/staff_dedup.php';
 require_once __DIR__ . '/retention.php';
 /* AI Developer (ronde 41): bantu revisi/perbaikan/tambah fitur — hanya Super Admin. */
 require_once __DIR__ . '/ai_playbook.php';
@@ -126,11 +128,17 @@ require_once __DIR__ . '/demo_filter.php';
 /* Keamanan login: "ingat saya", batas tidak aktif, 2FA, lupa password, dan
    kode pemulihan. Dimuat lebih awal karena penjaga sesinya dijalankan di bawah. */
 require_once __DIR__ . '/login_security.php';
+/* LOGIN MANAGEMENT (ronde 64e): daftar sesi aktif + kendali perangkat. */
+require_once __DIR__ . '/login_manage.php';
 require_once __DIR__ . '/payment.php';
 require_once __DIR__ . '/order_create.php';
 require_once __DIR__ . '/upload_gc.php';
 require_once __DIR__ . '/finance.php';
 require_once __DIR__ . '/package.php';
+/* RIWAYAT NAIK LEVEL KARTU MEMBER + email ucapan selamat (ronde 64d). Dimuat setelah
+   `member.php` yang menyediakan daftar level; hook perekamannya dipanggil dari
+   `order_create.php` (fungsi, jadi urutan pemuatan tidak menjadi masalah). */
+require_once __DIR__ . '/member_upgrade.php';
 
 if (session_status() !== PHP_SESSION_ACTIVE) {
     // The system default (e.g. /var/lib/php/sessions) is not always present or
@@ -188,13 +196,14 @@ function q(string $sql, array $params = []): PDOStatement
        Pemeriksaan awal yang murah menghindari pemrosesan regex pada setiap SELECT.
        Operasi massal tanpa pembatas cabang oleh akun lintas cabang (mis. menu
        "Hapus Semua Data") dipecah menjadi satu pernyataan per berkas cabang. */
+    /* Kata kerja pernyataan dibaca dengan MELEWATI komentar di awal (mis. penanda
+       `/* cross-branch *​/ DELETE …`). Memeriksa karakter pertama saja membuat
+       pernyataan seperti itu tidak dirutekan sehingga DELETE dijalankan pada TEMP VIEW
+       dan ditolak SQLite ("cannot modify … because it is a view"). */
     $daftar = [$sql];
-    if (isset($sql[0])) {
-        $c = $sql[0];
-        if ($c === 'I' || $c === 'i' || $c === 'U' || $c === 'u' || $c === 'R' || $c === 'r'
-            || $c === 'D' || $c === 'd' || $c === ' ' || $c === '\t' || $c === '\n') {
-            $daftar = db_route_prepare_all($sql, $params);
-        }
+    $c = db_route_sql_verb($sql);
+    if ($c === 'INSERT' || $c === 'UPDATE' || $c === 'REPLACE' || $c === 'DELETE') {
+        $daftar = db_route_prepare_all($sql, $params);
     }
     $st = null;
     foreach ($daftar as $satu) {
@@ -235,9 +244,8 @@ function scalar(string $sql, array $params = [], $default = 0)
 function q_on(PDO $pdo, string $sql, array $params = []): PDOStatement
 {
     $daftar = [$sql];
-    $c = isset($sql[0]) ? $sql[0] : '';
-    if (($c === 'I' || $c === 'i' || $c === 'U' || $c === 'u' || $c === 'R' || $c === 'r'
-         || $c === 'D' || $c === 'd')
+    $c = function_exists('db_route_sql_verb') ? db_route_sql_verb($sql) : '';
+    if (($c === 'INSERT' || $c === 'UPDATE' || $c === 'REPLACE' || $c === 'DELETE')
         && function_exists('db_route_prepare_all')) {
         try {
             /* Hanya untuk KONEKSI APLIKASI — koneksi berkas tersendiri (mis. dipakai
@@ -1533,16 +1541,26 @@ function stock_alerts(int $limit = 8): array
             FROM treatment_materials m JOIN branches b ON b.id = m.branch_id
             WHERE m.status = 'active' AND m.stock <= m.minimum_stock " . str_replace('s.branch_id', 'm.branch_id', $bs) . "
             ORDER BY stock ASC LIMIT " . (int)$limit;
-    $rows = [];
-    $idx = 0;
-    foreach (all($sql, array_merge($bp, $bp)) as $r) { $rows[] = $r; $idx++; }
-    return $rows;
+    /* Daftar peringatan stok memakai penggabungan lintas cabang (`db_cross_top`) supaya
+       pada 10+ cabang peringatannya tetap memuat stok paling menipis dari SELURUH cabang. */
+    $param = array_merge($bp, $bp);
+    if (function_exists('db_cross_top')) {
+        return db_cross_top($sql, $param, 'stock', $limit, true);
+    }
+    return all($sql, $param);
 }
 function stock_alert_count(): int
 {
     [$bs, $bp] = branch_sql('s.branch_id');
-    $a = (int)scalar("SELECT COUNT(*) FROM skincare_products s WHERE s.status='active' AND s.stock <= s.minimum_stock {$bs}", $bp);
     [$bs2, $bp2] = branch_sql('m.branch_id');
+    /* Dihitung lintas cabang (termasuk cabang di luar batas ATTACH) — jumlah peringatan
+       stok TIDAK BOLEH kurang hanya karena ada lebih dari 9 cabang. */
+    if (function_exists('db_cross_sum')) {
+        $a = (int)db_cross_sum("SELECT COUNT(*) n FROM skincare_products s WHERE s.status='active' AND s.stock <= s.minimum_stock {$bs}", $bp, ['n'])['n'];
+        $b = (int)db_cross_sum("SELECT COUNT(*) n FROM treatment_materials m WHERE m.status='active' AND m.stock <= m.minimum_stock {$bs2}", $bp2, ['n'])['n'];
+        return $a + $b;
+    }
+    $a = (int)scalar("SELECT COUNT(*) FROM skincare_products s WHERE s.status='active' AND s.stock <= s.minimum_stock {$bs}", $bp);
     $b = (int)scalar("SELECT COUNT(*) FROM treatment_materials m WHERE m.status='active' AND m.stock <= m.minimum_stock {$bs2}", $bp2);
     return $a + $b;
 }
@@ -1776,4 +1794,7 @@ function local_upload_dir(): string
 /* Penjaga sesi dijalankan LEBIH DULU daripada penegakan mode pemeliharaan
    supaya sesi yang sudah kedaluwarsa dibersihkan dulu. */
 login_security_boot();
+/* LOGIN MANAGEMENT: sesi yang dicabut Super Admin / perangkat yang diblokir
+   dipaksa keluar di sini, dan aktivitas sesi yang sah diperbarui. */
+login_manage_boot();
 maintenance_gate();

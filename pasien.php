@@ -154,6 +154,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                    (foreign_keys=ON). */
                 q('DELETE FROM appointment_treatments WHERE appointment_id IN (SELECT id FROM appointments WHERE patient_id = ?)', [$id]);
                 q('DELETE FROM appointments WHERE patient_id = ?', [$id]);
+                /* Riwayat naik level kartu member menunjuk `patients.id` — wajib
+                   dihapus sebelum pasiennya, kalau tidak FK menolak dan penghapusan
+                   permanen selalu gagal. */
+                q('DELETE FROM member_upgrades WHERE patient_id = ?', [$id]);
                 q('DELETE FROM patients WHERE id = ?', [$id]);
                 $pdo->exec('COMMIT');
             } catch (Throwable $ex) {
@@ -205,8 +209,14 @@ if (gp('status') === 'inactive') { $where[] = 'p.status = "inactive"'; } else { 
 $w = implode(' AND ', $where);
 
 $total = (int)scalar("SELECT COUNT(*) FROM patients p WHERE {$w}", $params);
+/* KUNJUNGAN = jumlah HARI berbeda pasien datang (transaksi non-void atau rekam
+   medis) — definisi bersama patient_visits_sql(), BUKAN jumlah transaksi.
+   JEBAKAN: nilainya diselipkan lewat interpolasi `{$visitsSql}` karena query ini
+   memakai string KUTIP-GANDA — menuliskan ' . fungsi() . ' di dalamnya hanya
+   menjadi teks biasa sehingga SQL-nya rusak (pernah membuat halaman 500). */
+$visitsSql = patient_visits_sql('p');
 $rows  = all("SELECT p.*, b.name AS branch_name,
-                     (SELECT COUNT(*) FROM orders o WHERE o.patient_id = p.id AND o.status='paid') AS visits,
+                     {$visitsSql} AS visits,
                      (SELECT COALESCE(SUM(o.total),0) FROM orders o WHERE o.patient_id = p.id AND o.status='paid') AS spent
               FROM patients p JOIN branches b ON b.id = p.branch_id
               WHERE {$w} ORDER BY p.created_at DESC, p.id DESC LIMIT {$pp} OFFSET " . (($page - 1) * $pp), $params);

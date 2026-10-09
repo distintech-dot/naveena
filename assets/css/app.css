@@ -358,7 +358,24 @@ table.tbl td{padding:11px 14px;border-bottom:1px solid var(--brand-bg3);vertical
 table.tbl tbody tr:hover td{background:var(--brand-hover)}
 table.tbl tbody tr:last-child td{border-bottom:0}
 table.tbl td.num,table.tbl th.num{text-align:right;font-variant-numeric:tabular-nums}
-.row-actions{display:flex;gap:6px;flex-wrap:wrap}
+/* ==================================================================
+   KOLOM AKSI TABEL — SATU BARIS (ronde 67, permintaan pemilik):
+   "tombol pilihan statusnya jadikan satu baris saja dengan tombol yang lain,
+   jangan sendirian jadi tidak proporsional".
+   Penyebabnya: `<form class="inline-form">` berisi `<select class="input">`
+   yang lebarnya 100% → form menjadi selebar sel (terukur 816px pada Reservasi
+   dan 329px pada Rekam Medis) sehingga tombol-tombol lain terlempar ke baris
+   berikutnya. Perbaikannya: semua isi `.row-actions` dibuat selebar isinya
+   (bukan 100%) dan tidak membungkus ke baris baru.
+   Tabelnya sendiri sudah dapat digeser ke samping, jadi satu baris panjang
+   tetap aman (tidak membuat halaman bergeser). */
+.row-actions{display:flex;gap:6px;flex-wrap:nowrap;align-items:center}
+.row-actions > *{flex:0 0 auto}
+.row-actions form,
+.row-actions .inline-form{display:inline-flex;margin:0;align-items:center;gap:0}
+.row-actions .input,
+.row-actions select.input,
+.row-actions select.input-sm{width:auto;max-width:180px;min-width:0;flex:0 0 auto}
 /* Sorotan sementara (mis. bagian pemetaan setelah file import dibaca). */
 .flash-target{box-shadow:0 0 0 3px rgba(233,30,99,.28)!important;transition:box-shadow .2s}
 
@@ -544,6 +561,15 @@ table.tbl tbody tr.o-over .qty-hint,table.tbl tbody tr.o-over .o-stock-warn{colo
 .timeline li::before{content:'';position:absolute;left:-7px;top:3px;width:12px;height:12px;border-radius:50%;background:var(--pink);border:2px solid #fff}
 .pill{display:inline-flex;gap:6px;align-items:center;padding:7px 12px;border-radius:999px;background:#fff;border:1px solid var(--line);font-size:.8rem;font-weight:600}
 .pill.active{background:var(--pink-soft);border-color:var(--pink-soft);color:var(--magenta-dark)}
+/* Nada lencana status (ronde 64d): dipakai tabel Membership Upgrade &
+   daftar lain yang perlu membedakan berhasil / gagal / belum.
+   Warnanya memakai variabel status yang SENGAJA tidak ikut berubah oleh tema. */
+/* Pemberitahuan batas teknis cabang (ronde 65) — terang tetapi tetap mencolok. */
+.banner-cabang-terbatas{border-left:4px solid var(--warn);font-size:.92rem}
+.pill.ok{background:var(--ok-bg);border-color:var(--ok-bg);color:var(--ok)}
+.pill.warn{background:var(--warn-bg);border-color:var(--warn-bg);color:var(--warn)}
+.pill.bad{background:var(--danger-bg);border-color:var(--danger-bg);color:var(--danger)}
+.pill.off{background:#fff;color:var(--ink-soft,#635F82)}
 .cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px}
 .cal .dow{font-size:.72rem;font-weight:700;text-transform:uppercase;color:var(--ink-2);text-align:center;padding:4px 0}
 .cal .day{min-height:88px;border:1px solid var(--line);border-radius:12px;padding:7px 8px;background:#fff;font-size:.78rem}
@@ -1151,3 +1177,243 @@ textarea.auto-grow{min-height:118px;max-height:56vh;overflow-y:auto;resize:verti
 .job-step.is-running{color:var(--ink);font-weight:600}
 .job-step.is-failed{color:#C62828}
 @media (max-width:640px){ .job-steps{grid-template-columns:1fr} }
+
+/* ==================================================================
+   UI SELULER RINGKAS (ronde 66) — permintaan pemilik:
+   "khusus untuk UI seluler dibikin lebih kecil lagi agar lebih nyaman
+   di HP Android/iPhone".
+   Tujuan: LEBIH BANYAK ISI TERLIHAT di layar HP tanpa mengurangi
+   keterbacaan. Yang dikecilkan hanya RUANG (padding/jarak/ukuran huruf
+   judul & label), sedangkan TIGA hal berikut SENGAJA TIDAK disentuh
+   karena sudah dijaga uji `responsive_check.js`:
+     • huruf kolom tabel ≥ 13px;
+     • tombol & kolom isian ≥ 40px (ramah sentuh);
+     • kolom isian berfont 16px (mencegah iOS memperbesar halaman).
+   Blok ini diletakkan PALING AKHIR supaya menang atas aturan sebelumnya.
+   ================================================================== */
+@media screen and (max-width:640px){
+  /* --- SUSUNAN KARTU DI HP (ronde 66–67, permintaan pemilik) ----------------
+     ATURANNYA:
+       1. KARTU STATISTIK (angka) → 2 kolom kiri-kanan. Acuannya kartu
+          "Pendapatan Hari Ini" & "Pendapatan Bulan Ini" di Dashboard.
+       2. KARTU BIASA → 2 kolom HANYA bila sederhana (tanpa tabel, daftar,
+          formulir, atau grafik).
+       3. SATU KARTU SATU BARIS → kartu yang memuat TABEL / daftar / formulir /
+          GRAFIK. Contoh: Detail Pasien (Profil Pasien vs Riwayat Reservasi),
+          Dashboard (Transaksi Terbaru vs Stok Menipis), Laporan (Rincian
+          Treatment vs Rincian Skincare). Grafik memang butuh lebar penuh.
+
+     JEBAKAN SPESIFISITAS (dua kali tertangkap di ronde ini): bila DUA aturan
+     sama-sama memakai `!important`, yang menentukan tetap SPESIFISITAS, bukan
+     urutan penulisan. Karena itu aturan 1 memakai `!important` (untuk menetralkan
+     aturan ≤400px lama yang memaksa statistik jadi 1 kolom) sedangkan aturan 2
+     TIDAK memakai `!important` — sehingga grid bertabel otomatis jatuh ke aturan 3
+     (`.g2` bawaan hanya b=1, kalah dari aturan 2/3). */
+  .grid:has(> .stat){grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px}
+  /* Kartu biasa → 2 kolom HANYA bila sederhana. Syarat pengecualiannya dibungkus
+     `:where(...)` supaya TIDAK menambah spesifisitas: dengan begitu aturan
+     "satu kartu satu baris" di bawah (yang lebih spesifik) selalu menang.
+     TRIK INI PENTING — memakai `:not(:has(...))` biasa membuat spesifisitas
+     aturan ini (0,5,1) melampaui aturan 1 kolom sehingga kartu bertabel di
+     dalam `<form>` (Order Baru) tetap 2 kolom dan halaman jadi bergeser 75px. */
+  .grid:has(> .card):not(:where(:has(.chart-box), :has(form), :has(.table-wrap), :has(.list-clean))){
+    grid-template-columns:repeat(2,minmax(0,1fr));gap:8px
+  }
+  /* SATU KARTU SATU BARIS: bertabel / berdaftar / berformulir / bergrafik,
+     termasuk grid yang dibungkus `<form>` besar (Order Baru). */
+  .grid:has(> .card):has(.table-wrap),
+  .grid:has(> .card):has(table.tbl),
+  .grid:has(> .card):has(.list-clean),
+  .grid:has(> .card):has(form),
+  .grid:has(.chart-box),
+  form .grid:has(> .card){grid-template-columns:1fr;gap:10px}
+  .grid:has(> .card) > .card{margin-bottom:0}
+
+  /* --- Kerangka halaman --- */
+  .content{padding:12px 11px 26px}
+  .foot{padding:10px 12px 18px;font-size:.72rem}
+  h2{font-size:.95rem}
+  h3{font-size:.84rem}
+  /* `.page-head h2`/`.card-head h3` punya spesifisitas lebih tinggi (blok ≤900px
+     dan aturan komponen), jadi keduanya harus ditulis ulang DI SINI supaya benar-
+     benar mengecil — pernah "tidak berpengaruh" karena hanya `h2`/`h3` ditulis. */
+  .page-head h2{font-size:.92rem}
+  .card-head h3{font-size:.84rem}
+  .page-head{margin-bottom:12px;gap:8px}
+  .page-head p.muted{font-size:.78rem;margin:0}
+  .muted{font-size:.8rem}
+  /* `.small` dipakai luas (keterangan di dalam sel tabel juga memakainya), jadi
+     ditahan di .78rem (=13,3px pada html 17px). AMBANG 13px pada respons_check
+     adalah batas keterbacaan yang TIDAK boleh dilanggar — pernah tertangkap uji
+     saat `.small` sempat diturunkan ke .75rem (12,8px) dan langsung gagal. */
+  .small{font-size:.78rem}
+  table.tbl td.small,table.tbl td .small,table.tbl th .small{font-size:.8rem}
+  .section-title,.card-head .muted{font-size:.7rem}
+
+  /* --- Kartu & grid: rapatkan ruang, jangan ubah keterbacaan --- */
+  .card{padding:12px;margin-bottom:12px;border-radius:12px}
+  .card-head{padding:9px 12px;gap:8px}
+  .card-body{padding:12px}
+  .card-body.tight{padding:0}
+  .grid{gap:10px}
+  .grid + .card:not(.mt-0):not(.mt-1):not(.mt-2):not(.mt-3):not(.mt-4){margin-top:12px}
+  .grid + .table-wrap{margin-top:12px}
+  .mt-2{margin-top:10px}.mt-3{margin-top:14px}.mt-4{margin-top:18px}
+  .mb-2{margin-bottom:10px}.mb-3{margin-bottom:14px}
+  .gap-lg{gap:12px}
+
+  /* --- Kartu statistik: dua kolom tetap, tapi jauh lebih pendek ---
+     CATATAN: aturan `.stat .val`/`.lbl`/`.sub` sengaja TIDAK dibatasi pada
+     `.grid:has(> .stat)` — kartu statistik juga muncul di dalam kartu biasa
+     (mis. langkah pembayaran pada Order Baru) dan ukurannya harus ikut ringkas. */
+  .grid:has(> .stat){gap:8px}
+  /* DUA bentuk penulis selector WAJIB ada: blok ≤640px sebelumnya memakai
+     `.grid:has(> .stat) .stat` (spesifisitas lebih tinggi), sehingga aturan
+     `.stat{…}` saja TIDAK akan menang untuk kartu statistik di dalam grid. */
+  .stat,
+  .grid:has(> .stat) .stat{padding:9px 10px;gap:2px;border-radius:11px}
+  .stat .val,
+  .grid:has(> .stat) .stat .val{font-size:1.04rem;letter-spacing:-.01em}
+  .stat .lbl{font-size:.62rem;letter-spacing:.04em}
+  .stat .sub{font-size:.68rem;line-height:1.35}
+  .stat .notice{padding:6px 8px;font-size:.7rem;margin-top:2px}
+
+  /* --- Tombol & aksi: tetap ramah sentuh (≥40px) tetapi tidak gemuk ---
+     UKURAN HURUF DISAMAKAN (permintaan pemilik: "teks pada tombol masih besar,
+     kecilkan saja samakan ke yang lain"): tombol 13,3px · tombol kecil 12,8px.
+     Yang dikecilkan hanya HURUF — tinggi sentuh tetap ≥40px. */
+  .btn{padding:9px 12px;border-radius:10px;gap:6px;font-size:.78rem}
+  .btn-sm{padding:8px 11px;font-size:.75rem;min-height:40px}
+  .page-actions{gap:6px}
+  .page-actions .btn{flex:1 1 44%}
+
+  /* --- Kepala kartu: tombol aksinya boleh MEMBUNGKUS ---
+     Di kartu selebar ±145px (2 kolom pada layar 320px) dua tombol kecil
+     ("PNG" + "Detail") tidak muat dalam satu baris — tanpa pembungkusan keduanya
+     meluber 24px ke luar layar. Dirender bertumpuk, isinya tetap utuh. */
+  .card-head{flex-wrap:wrap}
+  .card-head .flex{flex-wrap:wrap;justify-content:flex-end;min-width:0}
+  .card-head .btn{flex:0 0 auto}
+
+  /* --- Peringatan, lencana, keterangan --- */
+  .alert{padding:9px 11px;border-radius:10px;margin-bottom:10px;font-size:.79rem}
+  .notice{padding:9px 11px;font-size:.77rem;border-radius:10px}
+  .badge{font-size:.65rem;padding:2px 7px}
+  .pill{padding:4px 9px;font-size:.72rem}
+
+  /* --- Tabel: HURUF SERAGAM & SEDIKIT LEBIH KECIL (permintaan pemilik), tetapi
+     sel isi WAJIB tetap ≥13px (ambang keterbacaan yang dijaga
+     `responsive_check.js`). Nilai `.79rem` = 13,4px pada html 17px — masih di atas
+     ambang dengan margin aman (pernah tertangkap uji saat .75rem = 12,8px).
+     JEBAKAN SPESIFISITAS: blok ≤1100px memakai `.table-wrap table.tbl` (lebih
+     spesifik dari `table.tbl`) sehingga aturan itu menang; karena itu bentuk yang
+     sama dipakai di sini. */
+  .table-wrap table.tbl,table.tbl{font-size:.78rem}
+  table.tbl th{font-size:.71rem}
+  /* Sel pendamping (`.small`) DISAMAKAN dengan sel biasa — dulu lebih kecil
+     (.76rem = 12,92px) sehingga teks di dalam tabel tampak tidak seragam dan
+     hampir melampaui ambang keterbacaan 13px. */
+  table.tbl td .small,table.tbl td.small{font-size:.78rem}
+  table.tbl th,table.tbl td{padding:7px 9px}
+  .table-hint{padding:6px 10px 9px;font-size:.7rem}
+  .pagination{padding:10px 11px;gap:8px}
+  .pg{min-width:32px;height:32px;font-size:.78rem}
+
+  /* --- SIDEBAR DI HP: dikecilkan (permintaan pemilik) --------------------
+     Sebelumnya lebar 262px dengan huruf .885rem dan padding lega — terlalu besar
+     untuk layar HP (lebih dari 70% lebar layar). Sekarang 228px, huruf & jarak
+     dirapatkan, tetapi tinggi tiap menu tetap ≥40px agar nyaman disentuh. */
+  .sidebar{width:228px}
+  .sidebar-head{padding:12px 12px 8px}
+  .sidebar .brand-img{padding:5px 8px;border-radius:10px}
+  .sidebar .brand-img .logo-img{height:24px;max-width:120px}
+  .sidebar .brand-text{max-width:calc(228px - 34px)}
+  .nav{padding:4px 8px 10px}
+  .nav-group{margin-top:9px}
+  .nav-group-title{padding:4px 9px;font-size:.6rem;letter-spacing:.1em}
+  .nav-link{padding:9px 9px;gap:8px;font-size:.8rem;border-radius:9px;min-height:40px}
+  .nav-link .ico{width:16px;height:16px;flex-basis:16px}
+  .sidebar-foot{padding:10px;gap:6px}
+  .sf-user{gap:8px}
+  .sf-meta strong{font-size:.79rem}
+  .sf-meta small{font-size:.66rem}
+  .sidebar .avatar{width:30px;height:30px;font-size:.8rem}
+
+  /* --- Topbar: tetap nyaman disentuh, tetapi tidak tinggi --- */
+  .topbar{padding:8px 10px;row-gap:6px}
+  .topbar-title h1{font-size:1rem}
+  .crumb{font-size:.7rem}
+  .brand-sm.brand-img .logo-img{height:28px;max-width:136px}
+
+  /* --- Judul kartu & kepala halaman --- */
+  .chart-cap{font-size:.72rem}
+  .chart-box{height:200px}
+  .chart-box.sm{height:180px}
+  .chart-box.lg{height:215px}
+
+  /* --- Foto & avatar --- */
+  .photo-grid{grid-template-columns:repeat(auto-fill,minmax(124px,1fr));gap:9px}
+  .cap{font-size:.72rem}
+}
+
+/* --- HP KECIL (≤430px): iPhone/Android modern dalam mode potret --- */
+@media screen and (max-width:430px){
+  .content{padding:10px 9px 22px}
+  .card{padding:10px;margin-bottom:10px}
+  .card-head{padding:8px 10px}
+  .card-body{padding:10px}
+  .stat,
+  .grid:has(> .stat) .stat{padding:8px 9px}
+  .card{padding:9px;margin-bottom:9px}
+  .card-head{padding:7px 9px}
+  .card-body{padding:9px}
+  .stat .val,
+  .grid:has(> .stat) .stat .val{font-size:.98rem}
+  /* Label TIDAK diturunkan lagi di sini: di bawah 10px huruf kapital berspasi
+     mulai sulit dibaca di layar HP (keterbacaan lebih penting daripada hemat 1px). */
+  .stat .lbl{font-size:.62rem}
+  .stat .sub{font-size:.66rem}
+  h2,.page-head h2{font-size:.92rem}
+  h3,.card-head h3{font-size:.84rem}
+}
+
+/* --- TABLET & "MODE DESKTOP" DI IPHONE (641–1024px) ---
+   Banyak pengguna iPhone memilih "Situs Desktop" dari menu Safari; lebar tampilan
+   saat itu ±980px sehingga masuk ke rentang ini. Isinya dirapatkan supaya tetap
+   proporsional (tidak "boros" ruang) dan sidebar tetap dapat dibuka-tutup. */
+@media screen and (min-width:641px) and (max-width:1024px){
+  .content{padding:16px 15px 30px}
+  .card{padding:15px;margin-bottom:15px}
+  .card-head{padding:12px 15px}
+  .card-body{padding:15px}
+  .grid{gap:14px}
+  .stat{padding:13px}
+  .stat .val{font-size:1.28rem}
+  /* GRAFIK tetap SATU KOLOM PENUH di rentang ini (permintaan pemilik: "kecuali
+     grafik tidak perlu"). Grid yang memuat grafik sebelumnya ikut 2 kolom karena
+     kelasnya `.g2`, sehingga grafiknya hanya selebar separuh kartu — pada lebar
+     tablet/mode-desktop-HP sumbu & labelnya jadi tidak terbaca. */
+  .grid:has(.chart-box){grid-template-columns:1fr!important}
+  /* Sidebar lebih ringkas juga di sini (drawer tetap nyaman disentuh). */
+  .sidebar{width:238px}
+  .nav-link{padding:8px 10px;font-size:.83rem;min-height:40px}
+  .nav-group-title{font-size:.62rem}
+  .sidebar-foot{padding:12px}
+}
+
+/* ==================================================================
+   KOLOM AKSI LOGIN MANAGEMENT — SATU BARIS (ronde 67)
+   Permintaan pemilik: tombol "Keluarkan" diletakkan di KANAN tombol "Blokir"
+   dan keduanya sebaris supaya tabel tidak memanjang ke bawah. Formulir tiap
+   tombol tidak boleh menjadi blok sendiri (dulu memakai `.mt-1` → bertumpuk).
+   ================================================================== */
+.lm-actions{white-space:nowrap}
+.lm-actions form{display:inline-flex;margin:0}
+.lm-actions .btn{margin:0 0 0 6px;vertical-align:middle}
+.lm-actions .btn:first-child{margin-left:0}
+@media (max-width:640px){
+  /* Di HP kolom aksi tetap satu baris tetapi tombolnya dibuat ringkas
+     (ikon + label pendek) dan tetap ramah sentuh. */
+  .lm-actions .btn{padding:8px 10px;min-height:40px;font-size:.78rem}
+  .lm-actions{gap:0}
+}

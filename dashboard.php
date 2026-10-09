@@ -17,39 +17,83 @@ $scopeLbl = $scope === null ? 'Semua Cabang' : (string)scalar('SELECT name FROM 
 $bo = bscope('o.branch_id');
 $ba = bscope('a.branch_id');
 
-/* ---------------- KPI ---------------- */
-$revToday = (float)scalar("SELECT COALESCE(SUM(o.total),0) FROM orders o WHERE o.status='paid' AND date(o.created_at)=? {$bo[0]}", array_merge([$today], $bo[1]));
-$revMonth = (float)scalar("SELECT COALESCE(SUM(o.total),0) FROM orders o WHERE o.status='paid' AND strftime('%Y-%m',o.created_at)=? {$bo[0]}", array_merge([$month], $bo[1]));
-$trxToday = (int)scalar("SELECT COUNT(*) FROM orders o WHERE o.status='paid' AND date(o.created_at)=? {$bo[0]}", array_merge([$today], $bo[1]));
-$trxMonth = (int)scalar("SELECT COUNT(*) FROM orders o WHERE o.status='paid' AND strftime('%Y-%m',o.created_at)=? {$bo[0]}", array_merge([$month], $bo[1]));
-$visitToday = (int)scalar("SELECT COUNT(DISTINCT o.patient_id) FROM orders o WHERE o.status='paid' AND date(o.created_at)=? {$bo[0]}", array_merge([$today], $bo[1]));
-$resToday = (int)scalar("SELECT COUNT(*) FROM appointments a WHERE a.date=? {$ba[0]}", array_merge([$today], $ba[1]));
+/* ---------------- KPI + perbandingan cabang (SATU lintasan lintas cabang) ----------
+   FINAL AUDIT: sebelumnya setiap angka dihitung dengan query tersendiri pada koneksi
+   aplikasi — dan karena TEMP VIEW hanya memuat cabang yang ter-ATTACH (batas SQLite
+   10 basis data per koneksi), seluruh KPI & baris perbandingan menjadi TIDAK LENGKAP
+   begitu cabangnya lebih dari 9 TANPA pesan kesalahan apa pun. Sekarang seluruh angka
+   diambil dari SATU query per kelompok (dikelompokkan per cabang) yang ikut menjangkau
+   cabang di luar batas lewat fan-out, lalu dijumlahkan bila cakupannya semua cabang. */
+$monthStart = $month . '-01';
+$rowsKpi = db_cross_group(
+    "SELECT o.branch_id bid,
+            COALESCE(SUM(CASE WHEN date(o.created_at) = ? THEN o.total ELSE 0 END),0) rev_today,
+            COALESCE(SUM(CASE WHEN strftime('%Y-%m',o.created_at) = ? THEN o.total ELSE 0 END),0) rev_month,
+            COUNT(DISTINCT CASE WHEN date(o.created_at) = ? THEN o.id END) trx_today,
+            COUNT(DISTINCT CASE WHEN strftime('%Y-%m',o.created_at) = ? THEN o.id END) trx_month,
+            COUNT(DISTINCT CASE WHEN date(o.created_at) = ? THEN o.patient_id END) visit_today
+       FROM orders o
+      WHERE o.status='paid' AND date(o.created_at) >= ? AND date(o.created_at) <= ? {$bo[0]}
+      GROUP BY o.branch_id",
+    array_merge([$today, $month, $today, $month, $today, $monthStart, $today], $bo[1]), ['bid']);
 
-$kpiTreatment = one("SELECT COALESCE(SUM(oi.subtotal),0) s, COALESCE(SUM(oi.quantity),0) q
-    FROM order_items oi JOIN orders o ON o.id=oi.order_id
-    WHERE o.status='paid' AND oi.item_type='treatment' AND date(o.created_at)=? {$bo[0]}", array_merge([$today], $bo[1]));
-$kpiTreatmentM = one("SELECT COALESCE(SUM(oi.subtotal),0) s, COALESCE(SUM(oi.quantity),0) q
-    FROM order_items oi JOIN orders o ON o.id=oi.order_id
-    WHERE o.status='paid' AND oi.item_type='treatment' AND strftime('%Y-%m',o.created_at)=? {$bo[0]}", array_merge([$month], $bo[1]));
-$kpiSkincare = one("SELECT COALESCE(SUM(oi.subtotal),0) s, COALESCE(SUM(oi.quantity),0) q
-    FROM order_items oi JOIN orders o ON o.id=oi.order_id
-    WHERE o.status='paid' AND oi.item_type='skincare' AND date(o.created_at)=? {$bo[0]}", array_merge([$today], $bo[1]));
-$kpiSkincareM = one("SELECT COALESCE(SUM(oi.subtotal),0) s, COALESCE(SUM(oi.quantity),0) q
-    FROM order_items oi JOIN orders o ON o.id=oi.order_id
-    WHERE o.status='paid' AND oi.item_type='skincare' AND strftime('%Y-%m',o.created_at)=? {$bo[0]}", array_merge([$month], $bo[1]));
+$rowsItem = db_cross_group(
+    "SELECT o.branch_id bid, oi.item_type,
+            COALESCE(SUM(oi.subtotal),0) s, COALESCE(SUM(oi.quantity),0) q,
+            COALESCE(SUM(CASE WHEN date(o.created_at) = ? THEN oi.subtotal ELSE 0 END),0) s_today,
+            COALESCE(SUM(CASE WHEN date(o.created_at) = ? THEN oi.quantity ELSE 0 END),0) q_today
+       FROM order_items oi JOIN orders o ON o.id = oi.order_id
+      WHERE o.status='paid' AND strftime('%Y-%m',o.created_at) = ? {$bo[0]}
+      GROUP BY o.branch_id, oi.item_type",
+    array_merge([$today, $today, $month], $bo[1]), ['bid', 'item_type']);
+
+$rowsRes = db_cross_group(
+    "SELECT a.branch_id bid, COUNT(*) n FROM appointments a WHERE a.date = ? {$ba[0]} GROUP BY a.branch_id",
+    array_merge([$today], $ba[1]), ['bid']);
+
+$revToday = $revMonth = $trxToday = $trxMonth = $visitToday = 0;
+foreach ($rowsKpi as $r) {
+    $revToday += (float)$r['rev_today'];  $revMonth += (float)$r['rev_month'];
+    $trxToday += (int)$r['trx_today'];    $trxMonth += (int)$r['trx_month'];
+    $visitToday += (int)$r['visit_today'];
+}
+$resToday = 0;
+foreach ($rowsRes as $r) $resToday += (int)$r['n'];
+
+$itemAgg = [];   // [item_type] => ['s'=>bulan, 'q'=>bulan, 'st'=>hari, 'qt'=>hari]
+foreach ($rowsItem as $r) {
+    $t = (string)$r['item_type'];
+    if (!isset($itemAgg[$t])) $itemAgg[$t] = ['s' => 0.0, 'q' => 0.0, 'st' => 0.0, 'qt' => 0.0];
+    $itemAgg[$t]['s']  += (float)$r['s'];       $itemAgg[$t]['q']  += (float)$r['q'];
+    $itemAgg[$t]['st'] += (float)$r['s_today']; $itemAgg[$t]['qt'] += (float)$r['q_today'];
+}
+$kpiTreatment  = ['s' => $itemAgg['treatment']['s'] ?? 0, 'q' => $itemAgg['treatment']['q'] ?? 0];
+$kpiTreatmentM = ['s' => $itemAgg['treatment']['st'] ?? 0, 'q' => $itemAgg['treatment']['qt'] ?? 0];
+$kpiSkincare   = ['s' => $itemAgg['skincare']['s'] ?? 0, 'q' => $itemAgg['skincare']['q'] ?? 0];
+$kpiSkincareM  = ['s' => $itemAgg['skincare']['st'] ?? 0, 'q' => $itemAgg['skincare']['qt'] ?? 0];
+
+/* Cakupan SATU cabang → ringkas peta di atas menjadi satu baris (perilaku lama tetap). */
+$petaKpi = []; $petaItem = []; $petaRes = [];
+foreach ($rowsKpi as $r)  $petaKpi[(int)$r['bid']] = $r;
+foreach ($rowsRes as $r)  $petaRes[(int)$r['bid']] = (int)$r['n'];
+foreach ($rowsItem as $r) $petaItem[(int)$r['bid']][(string)$r['item_type']] = $r;
 
 /* ---------------- Per-branch comparison (Super Admin) ---------------- */
 $perBranch = [];
 if (is_owner_level()) {
     foreach (branches() as $b) {
+        $bid = (int)$b['id'];
+        $k = $petaKpi[$bid] ?? [];
+        $it = $petaItem[$bid] ?? [];
         $perBranch[] = [
             'name' => $b['name'],
             'code' => $b['code'],
-            'today' => (float)scalar("SELECT COALESCE(SUM(total),0) FROM orders WHERE status='paid' AND branch_id=? AND date(created_at)=?", [$b['id'], $today]),
-            'month' => (float)scalar("SELECT COALESCE(SUM(total),0) FROM orders WHERE status='paid' AND branch_id=? AND strftime('%Y-%m',created_at)=?", [$b['id'], $month]),
-            'trx'   => (int)scalar("SELECT COUNT(*) FROM orders WHERE status='paid' AND branch_id=? AND strftime('%Y-%m',created_at)=?", [$b['id'], $month]),
-            'tr'    => (float)scalar("SELECT COALESCE(SUM(oi.subtotal),0) FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.status='paid' AND oi.item_type='treatment' AND o.branch_id=? AND strftime('%Y-%m',o.created_at)=?", [$b['id'], $month]),
-            'sk'    => (float)scalar("SELECT COALESCE(SUM(oi.subtotal),0) FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.status='paid' AND oi.item_type='skincare' AND o.branch_id=? AND strftime('%Y-%m',o.created_at)=?", [$b['id'], $month]),
+            'today' => (float)($k['rev_today'] ?? 0),
+            'month' => (float)($k['rev_month'] ?? 0),
+            'trx'   => (int)($k['trx_month'] ?? 0),
+            'tr'    => (float)($it['treatment']['s'] ?? 0),
+            'sk'    => (float)($it['skincare']['s'] ?? 0),
+            'res'   => (int)($petaRes[$bid] ?? 0),
         ];
     }
 }
@@ -59,13 +103,13 @@ $days = (int)floor((strtotime($pe) - strtotime($ps)) / 86400) + 1;
 $byMonth = $days > 92;
 $fmt = $byMonth ? "strftime('%Y-%m',o.created_at)" : "date(o.created_at)";
 
-$rowsA = all("SELECT {$fmt} AS d, COUNT(*) c, COALESCE(SUM(o.total),0) t FROM orders o
+$rowsA = db_cross_group("SELECT {$fmt} AS d, COUNT(*) c, COALESCE(SUM(o.total),0) t FROM orders o
               WHERE o.status='paid' AND date(o.created_at) BETWEEN ? AND ? {$bo[0]}
-              GROUP BY d ORDER BY d", array_merge([$ps, $pe], $bo[1]));
-$rowsB = all("SELECT {$fmt} AS d, oi.item_type, COALESCE(SUM(oi.subtotal),0) s, COALESCE(SUM(oi.quantity),0) q
+              GROUP BY d", array_merge([$ps, $pe], $bo[1]), ['d']);
+$rowsB = db_cross_group("SELECT {$fmt} AS d, oi.item_type, COALESCE(SUM(oi.subtotal),0) s, COALESCE(SUM(oi.quantity),0) q
               FROM order_items oi JOIN orders o ON o.id=oi.order_id
               WHERE o.status='paid' AND date(o.created_at) BETWEEN ? AND ? {$bo[0]}
-              GROUP BY d, oi.item_type ORDER BY d", array_merge([$ps, $pe], $bo[1]));
+              GROUP BY d, oi.item_type", array_merge([$ps, $pe], $bo[1]), ['d', 'item_type']);
 
 $agg = [];
 foreach ($rowsA as $r) { $agg[$r['d']] = ['tr' => 0, 'sk' => 0, 'total' => (float)$r['t'], 'trx' => (int)$r['c']]; }
@@ -122,22 +166,27 @@ function top_items(string $type, string $ps, string $pe, ?int $scope): array
        level owner (cakupan semua cabang); akun cabang selalu dibatasi cabangnya. */
     $bSql = $scope === null ? '' : ' AND o.branch_id = ?';
     $bParam = $scope === null ? [] : [$scope];
-    return all("SELECT oi.item_name AS name, COALESCE({$cat},'-') AS category,
+    /* `db_cross_group()` supaya Top 5 memuat item dari SELURUH cabang (bukan hanya
+       cabang yang ter-ATTACH) — lalu diurutkan & dibatasi ulang setelah digabung. */
+    return db_cross_group("SELECT oi.item_name AS name, COALESCE({$cat},'-') AS category,
                        COALESCE(SUM(oi.quantity),0) q, COALESCE(SUM(oi.subtotal),0) s
                 FROM order_items oi
                 JOIN orders o ON o.id = oi.order_id
                 {$join}
                 WHERE o.status='paid' AND oi.item_type = ? AND date(o.created_at) BETWEEN ? AND ? {$bSql}
-                GROUP BY oi.item_name ORDER BY s DESC LIMIT 5",
-        array_merge([$type, $ps, $pe], $bParam));
+                GROUP BY oi.item_name",
+        array_merge([$type, $ps, $pe], $bParam), ['name'], 's', 5);
 }
 $topSk = top_items('skincare', $ps, $pe, $scope);
 $topTr = top_items('treatment', $ps, $pe, $scope);
 
 /* ---------------- Recent & alerts ---------------- */
-$recent = all("SELECT o.*, p.name AS patient_name, b.name AS branch_name
+/* Daftar "transaksi terbaru" memakai `db_cross_top()` supaya 8 baris teratas benar-benar
+   berasal dari SELURUH cabang — bukan hanya dari cabang yang ter-ATTACH. */
+$recent = db_cross_top("SELECT o.*, p.name AS patient_name, b.name AS branch_name
                FROM orders o JOIN patients p ON p.id=o.patient_id JOIN branches b ON b.id=o.branch_id
-               WHERE 1=1 {$bo[0]} ORDER BY o.created_at DESC, o.id DESC LIMIT 8", $bo[1]);
+               WHERE 1=1 {$bo[0]} ORDER BY o.created_at DESC, o.id DESC LIMIT 8", $bo[1], 'id', 8);
+usort($recent, fn($a, $b) => [strval($b['created_at'] ?? ''), (int)($b['id'] ?? 0)] <=> [strval($a['created_at'] ?? ''), (int)($a['id'] ?? 0)]);
 $alerts = stock_alerts(6);
 
 page_head('Dashboard', 'dashboard');

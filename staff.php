@@ -29,6 +29,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             if (!$branch) throw new RuntimeException('Cabang wajib dipilih.');
             assert_branch($branch);
+            /* CEGAH KEMBAR BARU (permintaan pemilik: "banyak duplikat"): nama yang SAMA
+               pada cabang yang sama hampir selalu orang yang sama. Menyimpan baris baru
+               membuat daftar panjang & membingungkan pilihan di Reservasi/Rekam Medis.
+               Karena itu penyimpanan baru DITOLAK dengan petunjuk mengedit baris yang ada;
+               bila memang dua orang berbeda, bedakan namanya (mis. tambahkan gelar/singkatan).
+               Saat MENGEDIT baris yang sama, pemeriksaan ini dilewati. */
+            $dupNama = one("SELECT id, status FROM {$tbl} WHERE branch_id = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?))
+                            AND id <> ? LIMIT 1", [$branch, $name, $id]);
+            if ($dupNama) {
+                throw new RuntimeException('Nama "' . $name . '" sudah terdaftar di cabang ini '
+                    . '(' . strtolower($tbl === 'doctors' ? 'Dokter' : 'Terapis') . ' #' . (int)$dupNama['id']
+                    . ', status ' . (string)$dupNama['status'] . '). Buka baris itu untuk mengubah datanya — '
+                    . 'jika memang dua orang berbeda, bedakan namanya (mis. tambahkan gelar atau singkatan).');
+            }
             $savedId = $id;
             if ($id > 0) {
                 $old = one("SELECT * FROM {$tbl} WHERE id = ?", [$id]);
@@ -76,6 +90,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             audit('Ubah Status Tenaga Medis', 'Pengaturan', $id, ['status' => $r['status']], ['status' => $status], 'Perubahan status');
             flash('Status diubah menjadi ' . $status . '.');
         }
+        if ($act === 'dedup') {
+            /* GABUNGKAN & HAPUS BARIS KEMBAR (permintaan pemilik). Termasuk tindakan
+               merusak data → hanya Super Admin, dengan konfirmasi 2 tahap di tampilan
+               (`data-heavy-confirm`) dan laporan apa adanya setelah dijalankan. */
+            if (!is_super()) deny('Menggabungkan data kembar hanya dapat dilakukan Super Admin.');
+            $r = staff_dup_apply((int)$user['id']);
+            if (!$r['ok']) throw new RuntimeException('Gagal menggabungkan data kembar: ' . $r['error']);
+            flash($r['rows'] > 0
+                ? 'Data kembar dirapikan: ' . num($r['groups']) . ' kelompok (nama+cabang sama), '
+                    . num($r['rows']) . ' baris dihapus, ' . num($r['refs']) . ' rujukan riwayat dipindahkan, '
+                    . num($r['files']) . ' foto dipakai ulang.'
+                : 'Tidak ada data dokter/terapis kembar yang perlu dihapus.');
+        }
         if ($act === 'delete') {
             $id = (int)$_POST['id'];
             $r = one("SELECT * FROM {$tbl} WHERE id = ?", [$id]);
@@ -114,6 +141,13 @@ $rows = all("SELECT d.*, b.name AS branch_name,
 $edit = gp('action') === 'edit' ? one("SELECT * FROM {$table} WHERE id = ?", [(int)gp('id')]) : null;
 if ($edit) assert_branch((int)$edit['branch_id']);
 
+/* PRATINJAU DATA KEMBAR (permintaan pemilik: "di dokter & terapis banyak duplikat").
+   Dihitung untuk SELURUH cabang (alat perapian data) dan ditampilkan sebagai
+   pemberitahuan + tombol gabungkan — bukan dihapus diam-diam. Hanya Super Admin. */
+$dupInfo = is_super()
+    ? staff_dup_scan()
+    : ['rows' => 0, 'doctors' => [], 'therapists' => [], 'files' => 0];
+
 page_head('Dokter & Terapis', 'staff');
 ?>
 <div class="page-head">
@@ -122,6 +156,28 @@ page_head('Dokter & Terapis', 'staff');
     <button class="btn btn-primary" data-modal-open="stModal" onclick="resetStForm()"><?= icon('plus-circle') ?> Tambah <?= e($label) ?></button>
   </div>
 </div>
+
+<?php if ($dupInfo['rows'] > 0): ?>
+<div class="alert alert-warning" id="stDup">
+  <strong>Ditemukan <?= num($dupInfo['rows']) ?> baris KEMBAR</strong> (nama sama pada cabang yang sama) —
+  <?= num(count($dupInfo['doctors'])) ?> kelompok dokter &amp; <?= num(count($dupInfo['therapists'])) ?> kelompok terapis.
+  Baris kembar tidak menambah pilihan di Reservasi/Rekam Medis, tetapi membuat daftar panjang dan
+  membingungkan. Tombol di bawah akan <strong>menggabungkannya</strong>: satu baris dipertahankan
+  (yang paling banyak dipakai riwayat), <strong>seluruh riwayat dipindahkan</strong> ke baris itu,
+  lalu sisanya dihapus.
+  <div class="mt-2">
+    <form method="post" class="inline-form"
+          data-heavy-confirm="GABUNGKAN DATA KEMBAR"
+          data-heavy-warning="Baris dokter/terapis dengan nama sama pada cabang yang sama akan digabung: satu baris dipertahankan dan sisanya DIHAPUS. Reservasi &amp; rekam medis yang menunjuk baris yang dihapus dipindahkan ke baris yang dipertahankan, jadi riwayat tetap utuh. Tindakan ini dibuat snapshot otomatis lebih dulu."
+          data-heavy-confirm2="PERINGATAN KEDUA (terakhir): gabungkan dan hapus data kembar sekarang?">
+      <?= csrf_field() ?><input type="hidden" name="action" value="dedup">
+      <input type="hidden" name="kind" value="<?= e($kind) ?>">
+      <button class="btn btn-danger btn-sm" type="submit"><?= icon('trash') ?> Gabungkan &amp; Hapus <?= num($dupInfo['rows']) ?> Baris Kembar</button>
+    </form>
+    <span class="muted small" style="margin-left:8px">Tindakan ini tercatat di Audit Log dan hanya tersedia untuk Super Admin.</span>
+  </div>
+</div>
+<?php endif; ?>
 
 <div class="tabs">
   <a class="tab<?= $kind === 'dokter' ? ' active' : '' ?>" href="staff.php?kind=dokter">Dokter</a>

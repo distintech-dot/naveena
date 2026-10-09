@@ -45,7 +45,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $u = one('SELECT u.*, r.code AS role_code FROM users u JOIN roles r ON r.id = u.role_id
                   WHERE u.email = ?', [$email]);
-        if ($u && $u['status'] === 'active' && password_verify($pass, $u['password_hash'])) {
+        /* LOGIN MANAGEMENT: perangkat yang diblokir Super Admin (untuk akun ini atau
+           untuk SEMUA akun) ditolak dengan alasan yang jelas. Diletakkan SEBELUM
+           pemeriksaan kata sandi supaya pesannya tidak tertimpa "Email atau password
+           salah" pada penanganan kegagalan di bawah. */
+        $blokirDevice = '';
+        try { $blokirDevice = $u ? device_blocked_reason((int)$u['id']) : ''; } catch (Throwable $e) { $blokirDevice = ''; }
+        if ($blokirDevice !== '') {
+            audit('Login Ditolak (perangkat diblokir)', 'Auth', $u ? (int)$u['id'] : null, null,
+                ['email' => $email], $blokirDevice);
+            $err = $blokirDevice;
+        } elseif ($u && $u['status'] === 'active' && password_verify($pass, $u['password_hash'])) {
             $ingat = (string)($_POST['remember'] ?? '') === '1';
             /* VERIFIKASI 2 LANGKAH: bila level pengguna diwajibkan 2FA DAN
                perangkat authenticator-nya sudah terpasang, minta kode dulu.
@@ -74,6 +84,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                   $_SESSION['2fa_user_id'], $_SESSION['2fa_pending'], $_SESSION['2fa_fail'], $_SESSION['2fa_remember']);
             q("UPDATE users SET last_login = datetime('now','localtime') WHERE id = ?", [$u['id']]);
             audit('Login', 'Auth', $u['id'], null, ['email' => $u['email']], 'Login berhasil');
+            /* LOGIN MANAGEMENT: catat sesi (perangkat, IP, waktu) supaya Super Admin
+               dapat melihat siapa yang sedang masuk dan mengeluarkannya bila perlu. */
+            try { session_register((int)$u['id'], $ingat ? 'ingat-saya' : 'password'); } catch (Throwable $e) { /* jangan blokir login */ }
             /* Pengiriman laporan otomatis tanpa cron: diperiksa saat petugas login. */
             try { if (function_exists('email_auto_run')) { $ar = email_auto_run(); if ($ar) $_SESSION['email_auto_result'] = $ar; } } catch (Throwable $e) { /* jangan blokir login */ }
             /* BACKUP OTOMATIS tanpa cron (platform tidak menyediakan cron):
@@ -112,10 +125,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             header('Location: ' . ($next !== '' ? $next : 'dashboard.php'));
             exit;
         }
-        $_SESSION['login_fail']++;
-        $_SESSION['login_lock'] = time();
-        if ($u) audit('Login Gagal', 'Auth', $u['id'], null, null, 'Password salah untuk ' . $email);
-        $err = 'Email atau password salah.';
+        /* Penanganan kegagalan BIASA. Dilewati bila login ditolak karena perangkat
+           diblokir: tanpa penjaga ini, pesan blokir yang jelas DITIMPA menjadi
+           "Email atau password salah." — persis keluhan yang membuat pemilik tidak
+           tahu kenapa tidak bisa masuk (ditemukan lewat uji ronde 64e). */
+        if ($blokirDevice === '') {
+            $_SESSION['login_fail']++;
+            $_SESSION['login_lock'] = time();
+            if ($u) audit('Login Gagal', 'Auth', $u['id'], null, null, 'Password salah untuk ' . $email);
+            $err = 'Email atau password salah.';
+        }
     }
 }
 if ($notice === '') $notice = trim((string)($_SESSION['deny_notice'] ?? ''));
@@ -125,7 +144,7 @@ unset($_SESSION['deny_notice']);
 <html lang="id">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover">
 <title>Masuk · <?= e(clinic_name()) ?> Management System</title>
 <link rel="stylesheet" href="assets/css/app.css">
 <style id="themeVars"><?= theme_css() ?></style>
