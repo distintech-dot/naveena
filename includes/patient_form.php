@@ -93,7 +93,11 @@ function patient_form_modal(?array $edit = null, string $back = '', bool $open =
                    placeholder="nama@email.com" autocomplete="email">
             <span class="hint">Dipakai untuk mengirim struk transaksi &amp; pengingat ke email pasien.</span></div>
           <div class="field"><label>Tanggal Lahir</label>
-            <input class="input" type="date" name="birth_date" id="p_birth" value="<?= e($edit['birth_date'] ?? '') ?>"></div>
+            <input class="input" type="date" name="birth_date" id="p_birth" value="<?= e($edit['birth_date'] ?? '') ?>">
+            <span class="hint" id="p_umur"><?php
+              $umurForm = age_text($edit['birth_date'] ?? '');
+              echo $umurForm !== '' ? 'Umur: ' . e($umurForm) : 'Umur dihitung otomatis dari tanggal lahir.';
+            ?></span></div>
           <div class="field"><label>Status Pasien</label>
             <select class="input" name="patient_type" id="p_type">
               <?php foreach (['Baru', 'Lama'] as $t): ?>
@@ -141,7 +145,30 @@ function resetPatientForm() {
   var w = document.getElementById('p_photo_wrap'), img = document.getElementById('p_photo_prev');
   if (w) w.style.display = 'none';
   if (img) { img.src = ''; img.removeAttribute('data-zoom'); }
+  pUmurUpdate();
 }
+/* Umur diperbarui langsung saat Tanggal Lahir diisi/diubah. */
+function pUmurUpdate() {
+  var el = document.getElementById('p_birth'), out = document.getElementById('p_umur');
+  if (!el || !out) return;
+  var v = (el.value || '').substring(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) { out.textContent = 'Umur dihitung otomatis dari tanggal lahir.'; return; }
+  var lahir = new Date(v + 'T00:00:00');
+  var now = new Date();
+  if (lahir > now) { out.textContent = 'Tanggal lahir tidak boleh di masa depan.'; return; }
+  var th = now.getFullYear() - lahir.getFullYear();
+  var bl = now.getMonth() - lahir.getMonth();
+  if (now.getDate() < lahir.getDate()) bl--;
+  if (bl < 0) { th--; bl += 12; }
+  var txt = [];
+  if (th > 0) txt.push(th + ' tahun');
+  if (bl > 0) txt.push(bl + ' bulan');
+  out.textContent = txt.length ? 'Umur: ' + txt.join(' ') : 'Umur: kurang dari 1 bulan';
+}
+document.addEventListener('DOMContentLoaded', function () {
+  var el = document.getElementById('p_birth');
+  if (el) el.addEventListener('change', pUmurUpdate);
+});
 </script>
     <?php
 }

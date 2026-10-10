@@ -345,7 +345,6 @@ page_head('Keuangan — ' . finance_mode_label($mode), 'keuangan');
   </div>
   <div class="page-actions">
     <a class="btn" href="export.php?type=keuangan&amp;format=xlsx&amp;<?= e(qs([], [])) ?>"><?= icon('database') ?> Excel</a>
-    <a class="btn" href="keuangan.php?<?= e(qs([], [])) ?>&amp;format=csv"><?= icon('download') ?> CSV</a>
     <a class="btn btn-primary" href="keuangan.php?<?= e(qs([], [])) ?>&amp;format=pdf"><?= icon('download') ?> PDF</a>
     <button class="btn" data-print><?= icon('print') ?> Cetak</button>
   </div>

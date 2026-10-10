@@ -41,7 +41,14 @@ $rows = all("SELECT o.*, p.name AS patient_name, p.patient_number, p.email AS pa
                        paket berharga 0 tidak dihitung sebagai item jual). */
                     (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id=o.id
                       AND oi.item_type IN ('treatment','skincare','package')) items,
-                    (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type = 'material') materials
+                    (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id=o.id AND oi.item_type = 'material') materials,
+                    /* Jumlah baris yang dijual dengan HARGA PROMO (harga normal
+                       dicoret di struk/rincian). Dipakai menandai transaksi pada
+                       daftar Riwayat Order supaya petugas tahu ada harga promo. */
+                    (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id=o.id
+                      AND oi.item_type IN ('treatment','skincare','package')
+                      AND COALESCE(oi.price_normal,0) > 0
+                      AND ABS(COALESCE(oi.price_normal,0) - oi.price) > 0.5) promo_items
              {$base} ORDER BY o.created_at DESC, o.id DESC LIMIT {$pp} OFFSET " . (($page - 1) * $pp), $params);
 
 $cashiers = all('SELECT DISTINCT u.id, u.name FROM users u JOIN orders o ON o.user_id = u.id WHERE 1=1 '
@@ -146,7 +153,10 @@ page_head('Riwayat Order', 'order');
             <div class="small muted">+<?= num($o['materials']) ?> bahan</div><?php endif; ?></td>
           <td class="num"><?= money($o['subtotal']) ?></td>
           <td class="num"><?= money($o['discount']) ?></td>
-          <td class="num"><strong><?= money($o['total']) ?></strong></td>
+          <td class="num"><strong><?= money($o['total']) ?></strong>
+            <?php if ((int)($o['promo_items'] ?? 0) > 0): ?>
+              <div><span class="badge badge-pink" title="<?= num((int)$o['promo_items']) ?> item dijual dengan harga promo — harga normalnya tampak dicoret pada struk &amp; rincian">PROMO <?= num((int)$o['promo_items']) ?></span></div>
+            <?php endif; ?></td>
           <td class="small"><?= e($o['methods'] ?: '-') ?></td>
           <td><?= order_status_badge($o['status']) ?></td>
           <td class="nowrap">

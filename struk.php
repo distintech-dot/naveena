@@ -39,6 +39,7 @@ $template     = str_replace('{LINK}', '(tautan struk PDF)', wa_receipt_template(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Struk <?= e($o['invoice_number']) ?></title>
+<?= function_exists('favicon_link_tag') ? favicon_link_tag() : '' ?>
 <link rel="stylesheet" href="assets/css/app.css">
 <style id="themeVars"><?= theme_css() ?></style>
 <style>
@@ -102,7 +103,16 @@ $template     = str_replace('{LINK}', '(tautan struk PDF)', wa_receipt_template(
       ?>
       <tr>
         <td colspan="2"><strong><?= e($it['item_name']) ?></strong><br>
-          <span class="small"><?= e($itKind === 'treatment' ? 'Treatment' : ($itKind === 'package' ? 'Paket' : 'Skincare')) ?> · <?= qty_text($it['quantity']) ?> x <?= money($it['price']) ?></span></td>
+          <?php
+            /* HARGA NORMAL DICORET bila sedang promo (permintaan pemilik). */
+            $hn = (float)($it['price_normal'] ?? 0);
+            $promo = $hn > 0 && abs($hn - (float)$it['price']) > 0.5;
+            $hargaTxt = $promo
+              ? '<span class="o-price-old">' . money($hn) . '</span> <span class="o-arrow">&rarr;</span> '
+                . '<strong>' . money($it['price']) . '</strong> <span class="badge badge-pink">PROMO</span>'
+              : money($it['price']);
+          ?>
+          <span class="small"><?= e($itKind === 'treatment' ? 'Treatment' : ($itKind === 'package' ? 'Paket' : 'Skincare')) ?> · <?= qty_text($it['quantity']) ?> x <?= $hargaTxt ?></span></td>
       </tr>
       <tr><td></td><td class="right"><?= money($it['subtotal']) ?></td></tr>
     <?php endforeach; ?>

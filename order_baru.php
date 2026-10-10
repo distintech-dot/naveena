@@ -148,14 +148,30 @@ if ($appt) assert_branch((int)$appt['branch_id']);
 $prefill = [];
 if ($appt) {
     foreach (res_treatments((int)$appt['id']) as $t) {
-        $tid = (int)($t['treatment_id'] ?? 0);
-        if ($tid <= 0) continue;
-        $row = one('SELECT id, name, code, normal_price, promo_price, status, branch_id FROM treatments WHERE id = ?', [$tid]);
+        $stored = (int)($t['treatment_id'] ?? 0);
+        if ($stored === 0) continue;
+        /* PAKET (id negatif): dimasukkan sebagai satu baris paket — harga paket
+           dipakai apa adanya, isi paketnya menjadi catatan & pengurang stok. */
+        if ($stored < 0) {
+            $pk = one('SELECT * FROM packages WHERE id = ?', [-$stored]);
+            if (!$pk || (string)$pk['status'] !== 'active') continue;
+            $comps = package_items((int)$pk['id']);
+            $prefill[] = [
+                'type' => 'package', 'id' => (int)$pk['id'], 'name' => (string)$pk['name'],
+                'code' => (string)$pk['code'], 'price' => (float)$pk['price'], 'stock' => null, 'unit' => '',
+                'kind' => (string)$pk['kind'],
+                'components' => array_map(fn($c) => ['type' => $c['item_type'], 'name' => $c['name'],
+                    'qty' => (float)$c['quantity'], 'unit' => $c['unit']], $comps),
+            ];
+            continue;
+        }
+        $row = one('SELECT id, name, code, normal_price, promo_price, status, branch_id FROM treatments WHERE id = ?', [$stored]);
         if (!$row || $row['status'] !== 'active') continue;
         $price = (float)$row['promo_price'] > 0 ? (float)$row['promo_price'] : (float)$row['normal_price'];
         $prefill[] = [
             'type' => 'treatment', 'id' => (int)$row['id'], 'name' => (string)$row['name'],
             'code' => (string)$row['code'], 'price' => $price, 'stock' => null, 'unit' => '',
+            'price_normal' => (float)$row['normal_price'],
         ];
     }
 }
@@ -621,13 +637,20 @@ function qtyCell(i, unit, step) {
     '</td>';
 }
 /* ---- Item yang dijual (treatment / skincare) ---- */
-function addItem(type, id, name, code, price, stock, unit, components, kind) {
+function addItem(type, id, name, code, price, stock, unit, components, kind, priceNormal) {
   var body = document.getElementById('o_items_body');
   var empty = document.getElementById('o_empty_row');
   if (empty) empty.remove();
   var i = O_IDX++;
   var tr = document.createElement('tr');
   tr.dataset.type = type;
+  /* HARGA NORMAL (sebelum promo) — permintaan pemilik: treatment yang sedang
+     promo ditampilkan dengan harga normal DICORET di samping harga promo,
+     supaya pasien tahu ada harga promo. Harga normal TIDAK pernah ikut
+     ditagihkan: yang tersimpan sebagai harga baris tetap harga promo. */
+  priceNormal = Number(priceNormal || 0);
+  var adaPromo = type === 'treatment' && priceNormal > 0 && Math.abs(priceNormal - Number(price)) > 0.5;
+  if (adaPromo) tr.dataset.priceNormal = priceNormal;
   /* Jenis paket (treatment / produk) dipakai pratinjau diskon member supaya
      sama dengan perhitungan di server (cakupan "treatment saja" juga mencakup
      paket treatment, dst). */
@@ -641,17 +664,27 @@ function addItem(type, id, name, code, price, stock, unit, components, kind) {
       return Naveena.angka(c.qty) + '× ' + c.name + (c.unit ? ' (' + c.unit + ')' : '');
     }).join(', ') + ' — stok ikut berkurang saat disimpan</div>';
   }
+  /* Keterangan harga promo pada baris: harga normal dicoret + lencana PROMO,
+     sehingga petugas (dan pasien yang melihat layar) tahu harga aslinya. */
+  var promoNote = adaPromo
+    ? '<div class="o-promo"><span class="o-price-old" title="Harga normal (sebelum promo)">' + fmt(priceNormal) + '</span>'
+      + ' <span class="o-arrow">&rarr;</span> <span class="badge badge-pink">PROMO</span></div>'
+    : '';
   tr.innerHTML =
     '<td><strong class="o-name">' + name + '</strong><div class="small muted">' + code + ' · ' + O_TYPE_LABEL[type] +
       (stock !== undefined && stock !== null ? ' · stok ' + Naveena.angka(stock) + (unit ? ' ' + unit : '') : '') + '</div>' +
+      promoNote +
       compTxt +
       '<input type="hidden" name="items[' + i + '][type]" value="' + type + '">' +
       '<input type="hidden" name="items[' + i + '][id]" value="' + id + '">' +
       '<input type="hidden" name="items[' + i + '][name]" value="' + name.replace(/"/g, '&quot;') + '">' +
       '<input type="hidden" name="items[' + i + '][code]" value="' + code + '">' +
+      '<input type="hidden" name="items[' + i + '][price_normal]" value="' + (adaPromo ? priceNormal : '') + '">' +
     '</td>' +
     qtyCell(i, unit || '', '') +
-    '<td><input class="input input-sm o-price" type="number" min="0" step="500" value="' + Number(price) + '" name="items[' + i + '][price]"></td>' +
+    '<td><input class="input input-sm o-price" type="number" min="0" step="500" value="' + Number(price) + '" name="items[' + i + '][price]">'
+      + (adaPromo ? '<div class="small muted">harga promo' + (Number(price) <= 0 ? ' (gratis)' : '') + '</div>' : '')
+      + '</td>' +
     '<td class="num o-line">Rp 0</td>' +
     '<td><button type="button" class="btn btn-sm btn-danger o-del">Hapus</button></td>';
   body.appendChild(tr);
@@ -992,7 +1025,8 @@ function recalc() {
       var p = numval((tr.querySelector('.o-price') || {}).value);
       var nm = itemName(tr);
       if (q <= 0 || nm.trim() === '') return;
-      baris.push({ nama: nm.trim(), qty: q, harga: p, total: q * p, unit: tr.dataset.unit || '' });
+      baris.push({ nama: nm.trim(), qty: q, harga: p, total: q * p, unit: tr.dataset.unit || '',
+        hargaNormal: Number(tr.dataset.priceNormal || 0) });
     });
     if (!baris.length) {
       kotak.innerHTML = '<span class="muted">Belum ada item yang dipilih.</span>';
@@ -1000,8 +1034,13 @@ function recalc() {
     }
     var html = '<table class="pm-recap-tbl"><tbody>';
     baris.forEach(function (b) {
+      /* Harga normal ditampilkan DICORET bila item sedang promo (permintaan pemilik). */
+      var hargaTxt = (b.hargaNormal > 0 && Math.abs(b.hargaNormal - b.harga) > 0.5)
+        ? '<span class="o-price-old">' + fmt(b.hargaNormal) + '</span> <span class="o-arrow">&rarr;</span> '
+          + '<strong>' + fmt(b.harga) + '</strong> <span class="badge badge-pink">PROMO</span>'
+        : fmt(b.harga);
       html += '<tr><td>' + esc(b.nama) + '<div class="small muted">' + qtyText(b.qty)
-        + (b.unit ? ' ' + esc(b.unit) : '') + ' × ' + fmt(b.harga) + '</div></td>'
+        + (b.unit ? ' ' + esc(b.unit) : '') + ' × ' + hargaTxt + '</div></td>'
         + '<td class="num nowrap">' + fmt(b.total) + '</td></tr>';
     });
     html += '</tbody></table>';
@@ -1223,7 +1262,10 @@ function recalc() {
 document.addEventListener('DOMContentLoaded', function () {
   /* Item dari reservasi dimasukkan sebagai baris item BIASA sehingga bisa
      diubah jumlah/harganya, dihapus, atau ditambah item lain. */
-  (O_PREFILL || []).forEach(function (it) { addItem(it.type, it.id, it.name, it.code, it.price, it.stock, it.unit); });
+  (O_PREFILL || []).forEach(function (it) {
+    addItem(it.type, it.id, it.name, it.code, it.price, it.stock, it.unit, it.components || [],
+            it.kind || 'treatment', it.price_normal);
+  });
   Naveena.suggest({ input: '#o_patient_search', box: '#o_patient_suggest', action: 'patient', params: { branch: O_BRANCH },
     onPick: function (it) {
       /* ===== PASIEN DARI CABANG LAIN → PINDAH KE ORDER BARU CABANG PASIEN =====
@@ -1294,7 +1336,7 @@ document.addEventListener('DOMContentLoaded', function () {
   }
   Naveena.suggest({ input: '#o_treatment_search', box: '#o_treatment_suggest', action: 'treatment', params: { branch: O_BRANCH },
     onPick: function (it) {
-      addItem('treatment', it.id, it.name, it.code, it.price);
+      addItem('treatment', it.id, it.name, it.code, it.price, null, '', [], 'treatment', it.normal_price);
       document.getElementById('o_treatment_search').value = '';
     } });
   Naveena.suggest({ input: '#o_skincare_search', box: '#o_skincare_suggest', action: 'skincare', params: { branch: O_BRANCH },

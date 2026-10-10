@@ -261,7 +261,12 @@ function pd_period_bar(int $patientId, string $period, string $ps, string $pe): 
         </dd>
         <dt>NIK</dt><dd><?= e($p['nik'] ?: '-') ?></dd>
         <dt>Jenis Kelamin</dt><dd><?= e($p['gender'] ?: '-') ?></dd>
-        <dt>Tanggal Lahir</dt><dd><?= e($p['birth_date'] ? tgl($p['birth_date']) : '-') ?></dd>
+        <dt>Tanggal Lahir</dt><dd><?php
+          echo e($p['birth_date'] ? tgl($p['birth_date']) : '-');
+          /* UMUR (permintaan pemilik) — ditampilkan tepat di bawah Tanggal Lahir. */
+          $umur = age_text($p['birth_date'] ?? '');
+          if ($umur !== '') echo '<div class="small muted">Umur: ' . e($umur) . '</div>';
+        ?></dd>
         <dt>Nomor Telepon</dt><dd><?= e($p['phone'] ?: '-') ?></dd>
         <dt>Email</dt><dd><?php if (($p['email'] ?? '') !== ''): ?>
           <a href="mailto:<?= e($p['email']) ?>"><?= e($p['email']) ?></a>

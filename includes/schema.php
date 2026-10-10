@@ -422,6 +422,13 @@ function schema_adds(): array
            sebagai baris terpisah bertipe 'package_item' berharga 0 agar stok &
            jejak pemakaiannya tetap terlihat). */
         ['order_items', 'package_id', 'INTEGER'],
+        /* HARGA NORMAL (sebelum promo) yang BERLAKU SAAT TRANSAKSI.
+           Permintaan pemilik: di Order Baru harga normal ditampilkan dicoret di
+           samping harga promo supaya pasien tahu treatment itu sedang promo.
+           Nilainya disimpan sebagai SNAPSHOT pada baris transaksi (sama polanya
+           dengan HPP) agar struk/riwayat lama tetap menunjukkan harga normal yang
+           benar walau harga master diubah kemudian. */
+        ['order_items', 'price_normal', 'REAL'],
         /* KEAMANAN LOGIN (ronde 38): kunci TOTP (Google Authenticator) per pengguna.
            `totp_enabled` + `totp_confirmed_at` hanya terisi setelah pemilik benar-benar
            memindai QR dan kodenya terbukti benar — jadi 2FA tidak pernah "aktif palsu". */
@@ -1574,6 +1581,9 @@ function schema_ddl_raw(): array
                Tanpa snapshot, mengubah HPP master ikut mengubah laba transaksi
                lama; baris lama bernilai 0 dan dihitung dari master sebagai cadangan. */
             hpp REAL NOT NULL DEFAULT 0,
+            /* HARGA NORMAL (sebelum promo) saat transaksi — dipakai menampilkan
+               harga normal yang dicoret di samping harga promo (snapshot). */
+            price_normal REAL NOT NULL DEFAULT 0,
             FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
         )",
         "CREATE TABLE IF NOT EXISTS payments (
@@ -1771,6 +1781,11 @@ function seed_core(PDO $pdo): void
         'company_phone'       => '0812-0000-0000',
         'company_email'       => 'info@naveenaskincare.id',
         'receipt_footer'      => 'Terima kasih telah mempercayakan perawatan kulit Anda kepada Naveena Skincare.',
+        /* FAVICON klinik (permintaan pemilik): ikon tab peramban, format
+           .ico/.png/.svg maksimal 15 KB. Kosong = memakai ikon bawaan aplikasi. */
+        'favicon_file'        => '',
+        'favicon_bytes'       => '',
+        'favicon_ext'         => '',
         'default_per_page'    => '25',
         'email_service_active' => '0',
         'email_recipient'     => 'superadmin@naveena.id',

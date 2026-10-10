@@ -207,7 +207,15 @@ function icon(string $name): string
 function render_sidebar(array $user, string $active): void
 {
     echo '<aside class="sidebar" id="sidebar">';
-    echo '<div class="sidebar-head">' . brand_block(true) . '</div>';
+    /* TOMBOL LIPAT SIDEBAR (permintaan pemilik): ☰ di bagian ATAS sidebar untuk
+       membuka/menutup menu samping pada laptop/PC/tablet. Saat tertutup, sidebar
+       mengecil ke kiri dan HANYA ikon menu yang tampil (dengan tooltip nama menu).
+       Statusnya disimpan di peramban sehingga tetap sama saat pindah halaman. */
+    echo '<div class="sidebar-head">' . brand_block(true)
+        . '<button class="sidebar-toggle" id="sidebarCollapse" type="button" aria-label="Buka/tutup menu samping"'
+        . ' aria-controls="sidebar" aria-expanded="true" title="Buka/tutup menu samping (ikon saja)">'
+        . icon('menu') . '</button>'
+        . '</div>';
     echo '<nav class="nav">';
     foreach (nav_items() as $item) {
         if (!isset($item[1]) || is_string($item[1])) {
@@ -221,8 +229,12 @@ function render_sidebar(array $user, string $active): void
     echo '</nav>';
     echo '<div class="sidebar-foot"><div class="sf-user"><div class="avatar">' . e(strtoupper(substr($user['name'], 0, 1))) . '</div>';
     echo '<div class="sf-meta"><strong>' . e($user['name']) . '</strong><small>' . e($user['role_name']) . ' · ' . e($user['branch_name'] ?? 'Semua Cabang') . '</small></div></div>';
-    echo '<a class="btn btn-ghost btn-block btn-sm" href="profile.php">Ubah Password</a>';
-    echo '<a class="btn btn-ghost btn-block btn-sm" href="logout.php">' . icon('logout') . ' Keluar</a></div>';
+    /* Label tombol dibungkus <span class="btn-label"> supaya dapat disembunyikan
+       saat sidebar terlipat (ikonnya tetap tampil & tetap dapat diklik). */
+    echo '<a class="btn btn-ghost btn-block btn-sm" href="profile.php" title="Ubah Password">'
+        . icon('user-cog') . '<span class="btn-label">Ubah Password</span></a>';
+    echo '<a class="btn btn-ghost btn-block btn-sm" href="logout.php" title="Keluar">' . icon('logout')
+        . '<span class="btn-label">Keluar</span></a></div>';
     echo '</aside>';
     echo '<div class="sidebar-overlay" id="sidebarOverlay"></div>';
 }
@@ -230,7 +242,11 @@ function nav_link(array $item, string $active): string
 {
     [$href, $label, $ico, $key] = $item;
     $is = $active === $key;
-    return '<a class="nav-link' . ($is ? ' active' : '') . '" href="' . e($href) . '">' . icon($ico) . '<span>' . e($label) . '</span></a>';
+    /* `data-tip` = nama menu yang ditampilkan sebagai TOOLTIP saat sidebar terlipat;
+       `aria-label` menjaga menu tetap terbaca pembaca layar pada keadaan itu. */
+    return '<a class="nav-link' . ($is ? ' active' : '') . '" href="' . e($href) . '"'
+        . ' data-tip="' . e($label) . '" aria-label="' . e($label) . '">'
+        . icon($ico) . '<span>' . e($label) . '</span></a>';
 }
 
 function render_topbar(array $user, string $title): void
@@ -279,6 +295,11 @@ function page_head(string $title, string $active, array $opts = []): void
        bekerja dan sudah ditangani tata letaknya pada rentang ≤1024px. */
     echo '<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover">';
     echo '<title>' . e($fullTitle) . '</title>';
+    /* FAVICON (permintaan pemilik): ikon di tab peramban, diatur dari Identitas Klinik. */
+    if (function_exists('favicon_link_tag')) echo favicon_link_tag();
+    /* STATUS SIDEBAR TERLIPAT diterapkan SEBELUM halaman digambar (dari
+       localStorage) supaya tata letak tidak "melompat" saat halaman dimuat. */
+    echo '<script>try{if(localStorage.getItem("nv_sidebar")==="1")document.documentElement.className+=" nav-collapsed";}catch(e){}</script>';
     echo '<link rel="stylesheet" href="assets/css/app.css">';
     echo '<style id="themeVars">' . theme_css() . '</style>';
     /* GAMBAR LATAR WEB (ronde 64): satu gambar dipilih acak di server setiap halaman

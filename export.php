@@ -1142,6 +1142,7 @@ if ($format === 'pdf') {
     <html lang="id"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title><?= e($title) ?></title>
+<?= function_exists('favicon_link_tag') ? favicon_link_tag() : '' ?>
     <link rel="stylesheet" href="assets/css/app.css">
     <style>
       body{background:#fff;padding:28px}

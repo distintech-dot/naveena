@@ -81,11 +81,44 @@ function monthly_report_email(string $month = ''): array
         . '</strong> untuk periode <strong>' . e(tglIndo($d['first'])) . ' — ' . e(tglIndo($d['last'])) . '</strong>.</p>';
     $html = email_wrap_html('Laporan Bulanan ' . tglIndo($d['first']), $body, $rows);
 
-    /* Rincian yang dilampirkan di isi email: **TOP 10 PASIEN** (permintaan pemilik —
-       bagian "Top 5 Treatment" & "Top 5 Skincare" di bagian bawah DIGANTI, karena
-       rincian treatment/skincare sudah tersedia lebih lengkap di lampiran PDF/Excel
-       dan yang lebih berguna dilihat cepat dari email adalah pasien teratas). */
+    /* ============================================================================
+     * RINCIAN DI ISI EMAIL — URUTAN SESUAI PERMINTAAN PEMILIK (ronde 72):
+     *   1. TOP 5 PENJUALAN TREATMENT
+     *   2. TOP 5 PENJUALAN SKINCARE
+     *   3. TOP 10 PASIEN   (diletakkan DI BAWAH keduanya)
+     * Sebelumnya hanya Top 10 Pasien yang tampil; sekarang ketiganya ada sehingga
+     * penerima email langsung melihat produk terlaris tanpa membuka lampiran.
+     * Urutan ini SERAGAM dengan halaman Top 5 / Top 10 Pasien di aplikasi.
+     * ========================================================================== */
     $extra = '';
+    $topItems = [
+        ['judul' => 'Top 5 Penjualan Treatment', 'catatan' => 'Treatment dengan nilai penjualan terbesar.',
+         'kolom' => 'Treatment', 'data' => array_slice(array_values($d['treatments'] ?? []), 0, 5)],
+        ['judul' => 'Top 5 Penjualan Skincare', 'catatan' => 'Produk skincare dengan nilai penjualan terbesar.',
+         'kolom' => 'Produk', 'data' => array_slice(array_values($d['skincares'] ?? []), 0, 5)],
+    ];
+    foreach ($topItems as $blok) {
+        if (!$blok['data']) continue;
+        $extra .= '<h3 style="font-size:14px;color:' . theme_current()['brand'] . ';margin-top:22px">'
+            . e($blok['judul']) . '</h3>'
+            . '<p style="font-size:12px;color:#6B5A65;margin:0 0 6px">' . e($blok['catatan']) . '</p>'
+            . '<table cellpadding="6" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;font-size:13px">'
+            . '<tr style="background:#F7F7F9"><th align="left">' . e($blok['kolom']) . '</th>'
+            . '<th align="right">Jumlah</th><th align="right">Nilai Penjualan</th></tr>';
+        /* Nama kunci MENGIKUTI report_top_items() ('nama'/'kode'/'kategori'/'q'/'s')
+           supaya angka di email sama persis dengan halaman Top 5 di aplikasi. */
+        foreach ($blok['data'] as $r) {
+            $extra .= '<tr>'
+                . '<td style="border-bottom:1px solid #EDEDED">' . e((string)($r['nama'] ?? ''))
+                . (($r['kode'] ?? '') !== '' ? '<span style="color:#6B5A65"> · ' . e((string)$r['kode']) . '</span>' : '')
+                . (($r['kategori'] ?? '') !== '' && $r['kategori'] !== '-' ? '<span style="color:#6B5A65"> · ' . e((string)$r['kategori']) . '</span>' : '')
+                . '</td>'
+                . '<td align="right" style="border-bottom:1px solid #EDEDED">' . qty_text($r['q'] ?? 0) . '</td>'
+                . '<td align="right" style="border-bottom:1px solid #EDEDED"><strong>' . money((float)($r['s'] ?? 0)) . '</strong></td>'
+                . '</tr>';
+        }
+        $extra .= '</table>';
+    }
     $topPx = array_slice(array_values($d['patients'] ?? []), 0, 10);
     if ($topPx) {
         $extra .= '<h3 style="font-size:14px;color:' . theme_current()['brand'] . ';margin-top:22px">Top 10 Pasien</h3>'
@@ -112,7 +145,8 @@ function monthly_report_email(string $month = ''): array
            sehingga daftar pasien tampil BERKALI-KALI di dalam satu email (pemilik
            melihat "isi masih ada yang sama" di pratinjau). */
         /* Sisipkan SEBELUM catatan kaki ("Dikirim otomatis oleh …") supaya bacanya
-           runtut: ringkasan → per cabang → metode bayar → Top 10 Pasien → catatan kaki.
+           runtut: ringkasan → per cabang → metode bayar → Top 5 Treatment →
+           Top 5 Skincare → Top 10 Pasien → catatan kaki.
            Bila penandanya tidak ditemukan, jatuh ke sebelum penutup terakhir. */
         $kaki = '<p style="font-size:12px;color:#6B5A65';
         $pos = strrpos($html, $kaki);

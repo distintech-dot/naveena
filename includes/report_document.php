@@ -49,6 +49,7 @@ function render_report_document(array $B, array $user): void
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Laporan Lengkap <?= e(clinic_name()) ?> — <?= e(tgl($f['ps'])) ?> s.d. <?= e(tgl($f['pe'])) ?></title>
+<?= function_exists('favicon_link_tag') ? favicon_link_tag() : '' ?>
 <link rel="stylesheet" href="assets/css/app.css">
 <style id="themeVars"><?= theme_css() ?></style>
 <style>

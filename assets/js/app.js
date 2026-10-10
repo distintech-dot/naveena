@@ -642,6 +642,87 @@
     const ov = $('#sidebarOverlay');
     if (ov) ov.addEventListener('click', () => document.body.classList.remove('nav-open'));
 
+    /* ============================================================
+     * SIDEBAR DAPAT DILIPAT (laptop/PC/tablet) — permintaan pemilik
+     * ------------------------------------------------------------
+     *   • tombol ☰ di bagian atas sidebar membuka/menutup menu samping;
+     *   • saat tertutup sidebar mengecil ke kiri, ikon menu tetap terlihat
+     *     dan tetap dapat diklik (teks menu & judul kategori disembunyikan);
+     *   • statusnya DISIMPAN di peramban sehingga tetap sama saat pindah
+     *     halaman atau menyegarkan halaman;
+     *   • nama menu ditampilkan sebagai TOOLTIP saat kursor diarahkan;
+     *   • pada layar HP (≤1024px) sidebar tetap memakai mode "laci" seperti
+     *     sebelumnya — tombol ini tidak ditampilkan di sana.
+     * ============================================================ */
+    (function sidebarCollapse() {
+      const root = document.documentElement;
+      const btn = $('#sidebarCollapse');
+      const KEY = 'nv_sidebar';
+      const minimalPx = 1025;   // sama dengan ambang CSS: >1024px = laptop/PC/tablet
+
+      const tersimpan = () => { try { return localStorage.getItem(KEY) === '1'; } catch (e) { return false; } };
+      const simpan = (on) => { try { localStorage.setItem(KEY, on ? '1' : '0'); } catch (e) {} };
+      const terlipat = () => root.classList.contains('nav-collapsed');
+
+      /* Keadaan awal: mengikuti simpanan (skrip di <head> sudah memasang kelasnya
+         lebih dulu supaya tata letak tidak berkedip saat halaman dimuat). */
+      if (tersimpan()) root.classList.add('nav-collapsed');
+      if (btn) btn.setAttribute('aria-expanded', terlipat() ? 'false' : 'true');
+
+      if (btn) btn.addEventListener('click', () => {
+        const on = !terlipat();
+        root.classList.toggle('nav-collapsed', on);
+        simpan(on);
+        btn.setAttribute('aria-expanded', on ? 'false' : 'true');
+        sembunyikanTip();
+      });
+
+      /* ---- TOOLTIP nama menu (dibuat sekali, menempel pada <body>) ----
+         Tidak memakai ::after CSS karena sidebar memakai `overflow-y:auto`
+         sehingga tooltip di dalamnya akan terpotong. */
+      let tip = null;
+      const ambilTip = () => {
+        if (tip) return tip;
+        tip = document.createElement('div');
+        tip.id = 'navTip';
+        tip.setAttribute('role', 'tooltip');
+        document.body.appendChild(tip);
+        return tip;
+      };
+      function sembunyikanTip() { if (tip) tip.classList.remove('on'); }
+      const tampilkanTip = (el) => {
+        const nama = el.getAttribute('data-tip');
+        if (!nama) return;
+        const r = el.getBoundingClientRect();
+        /* JEBAKAN: `getBoundingClientRect()` SUDAH terdampak setelan "Ukuran Tampilan"
+           (`zoom` pada <html>), sedangkan nilai `style.left/top` masih dikalikan zoom
+           saat digambar. Tanpa dinormalkan, tooltip mendarat di ATAS sidebar (terukur
+           46px padahal tepi sidebar 54px). */
+        const z = parseFloat(getComputedStyle(document.documentElement).zoom || '1') || 1;
+        const t = ambilTip();
+        t.textContent = nama;
+        t.style.top = Math.round((r.top + r.height / 2) / z) + 'px';
+        t.style.left = Math.round(r.right / z + 10) + 'px';
+        t.classList.add('on');
+      };
+      /* Hanya saat TERLIPAT dan layar cukup lebar (di HP ikon sudah punya label di laci). */
+      const aktif = () => terlipat() && window.innerWidth >= minimalPx;
+      const sidebar = $('#sidebar');
+      if (sidebar) {
+        sidebar.addEventListener('mouseover', (e) => {
+          const a = e.target.closest ? e.target.closest('.nav-link') : null;
+          if (a && aktif()) tampilkanTip(a); else sembunyikanTip();
+        });
+        sidebar.addEventListener('mouseleave', sembunyikanTip);
+        /* Menyentuh/klik menu menyembunyikan tooltip (HP/tablet sentuh). */
+        sidebar.addEventListener('click', sembunyikanTip);
+        sidebar.addEventListener('scroll', sembunyikanTip, { passive: true });
+      }
+      window.addEventListener('resize', sembunyikanTip);
+      window.addEventListener('scroll', sembunyikanTip, { passive: true });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') sembunyikanTip(); });
+    })();
+
     // Modals
     $$('[data-modal-open]').forEach((b) => b.addEventListener('click', (e) => {
       e.preventDefault();

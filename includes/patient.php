@@ -144,3 +144,32 @@ function patient_type_rule_text(): string
         . PATIENT_LAMA_MIN_VISITS . ' hari kunjungan yang berbeda (transaksi atau rekam medis). '
         . 'Status hanya naik dan dapat diubah manual oleh petugas bila diperlukan.';
 }
+
+/**
+ * UMUR PASIEN dalam bentuk teks (permintaan pemilik: tampilkan umur di bawah
+ * Tanggal Lahir pada kartu Profil Pasien).
+ *
+ * Dihitung dari tanggal lahir sampai HARI INI (zona waktu aplikasi = WIB),
+ * memakai selisih tahun-bulan-hari yang benar (bukan sekadar selisih hari ÷ 365).
+ * Contoh hasil: "27 tahun 3 bulan" (bulan ditampilkan bila > 0) atau "8 bulan".
+ * Tanggal lahir kosong / tidak sah / di masa depan → '' (tidak ada yang ditampilkan).
+ */
+function age_text(?string $birthDate, bool $withMonths = true): string
+{
+    $b = trim((string)$birthDate);
+    if ($b === '' || !preg_match('/^\d{4}-\d{2}-\d{2}/', $b)) return '';
+    $lahir = substr($b, 0, 10);
+    $now = date('Y-m-d');
+    if ($lahir > $now) return '';
+    [$ty, $tm, $td] = array_map('intval', explode('-', $now));
+    [$ly, $lm, $ld] = array_map('intval', explode('-', $lahir));
+    $tahun = $ty - $ly;
+    $bulan = $tm - $lm;
+    if ($td < $ld) { $bulan--; }        // belum lewat tanggalnya pada bulan ini
+    if ($bulan < 0) { $tahun--; $bulan += 12; }
+    $out = [];
+    if ($tahun > 0) $out[] = num($tahun) . ' tahun';
+    if ($withMonths && $bulan > 0) $out[] = num($bulan) . ' bulan';
+    return implode(' ', $out);
+}
+

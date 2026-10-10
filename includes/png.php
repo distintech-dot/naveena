@@ -204,7 +204,14 @@ function png_to_rgb(string $data, ?int $targetH = null, bool $trackBox = false):
             $line = '';
             for ($i = 0; $i < $stride; $i++) {
                 $x = ord($cur[$i]);
-                $a = $i >= $bpp ? ord($cur[$i - $bpp]) : 0;
+                /* PENTING: tetangga KIRI harus diambil dari baris yang SUDAH
+                   direkonstruksi ($line), bukan dari byte mentah ($cur).
+                   Memakai $cur membuat semua filter Sub/Average/Paeth salah:
+                   logo yang berkas PNG-nya memakai filter tersebut terbaca
+                   sebagai blok GELAP (gambar "rusak hitam") — persis keluhan
+                   "logo di PDF hitam" pada struk/nota. Filter Up ($b/$c dari
+                   baris sebelumnya) sudah benar karena $prev memang hasil rekonstruksi. */
+                $a = $i >= $bpp ? ord($line[$i - $bpp]) : 0;
                 $b = ord($prev[$i]);
                 $c = $i >= $bpp ? ord($prev[$i - $bpp]) : 0;
                 switch ($ft) {
@@ -391,17 +398,38 @@ function png_row_to_rgb(string $row, int $w, int $color, int $depth, string $plt
  * PDF dibuat — terlalu lama untuk satu permintaan web.
  *
  * Berkas cache: <gambar>.c<targetH>-<mtime>-<size>.raw
- * Format: 8 byte lebar + 8 byte tinggi + data RGB mentah.
+ * Format: 8 byte lebar + 8 byte tinggi + 4 byte penanda versi + data RGB mentah.
+ *
+ * PENANDA VERSI (PNG_CACHE_MAGIC) penting: cache LAMA yang dibuat sebelum
+ * perbaikan pendekode PNG non-GD (filter Sub/Average/Paeth) memuat gambar
+ * GELAP/garbage. Tanpa penanda versi, cache rusak itu akan terus dipakai
+ * selamanya sehingga logo tetap "hitam" di PDF walau kodenya sudah benar.
+ * Cache tanpa penanda dianggap tidak sah dan dibuat ulang.
  */
+const PNG_CACHE_MAGIC = 'NVC2';
+
+/** Bongkar isi berkas cache → ['width','height','rgb'], atau null bila tidak sah. */
+function png_cache_parse(string $blob): ?array
+{
+    if (strlen($blob) <= 20 || substr($blob, 16, 4) !== PNG_CACHE_MAGIC) return null;
+    $w = (int)(unpack('J', substr($blob, 0, 8))[1] ?? 0);
+    $h = (int)(unpack('J', substr($blob, 8, 8))[1] ?? 0);
+    $rgb = substr($blob, 20);
+    if ($w <= 0 || $h <= 0 || strlen($rgb) !== $w * $h * 3) return null;
+    return ['width' => $w, 'height' => $h, 'rgb' => $rgb];
+}
+
+/** Susun isi berkas cache dari data RGB. */
+function png_cache_build(array $png): string
+{
+    return pack('J', $png['width']) . pack('J', $png['height']) . PNG_CACHE_MAGIC . $png['rgb'];
+}
+
 function png_cache_exists(string $path, int $targetH): bool
 {
     $key = png_cache_path($path, $targetH);
     if ($key === null || !is_readable($key)) return false;
-    $blob = (string)@file_get_contents($key);
-    if (strlen($blob) <= 16) return false;
-    $w = (int)(unpack('J', substr($blob, 0, 8))[1] ?? 0);
-    $h = (int)(unpack('J', substr($blob, 8, 8))[1] ?? 0);
-    return $w > 0 && $h > 0 && strlen($blob) - 16 === $w * $h * 3;
+    return png_cache_parse((string)@file_get_contents($key)) !== null;
 }
 
 /** Nama berkas cache untuk kombinasi gambar + tinggi tujuan. */
@@ -480,26 +508,17 @@ function png_scaled_cached(string $path, int $targetH): ?array
 {
     if (!is_readable($path)) return null;
     $key = png_cache_path($path, $targetH);
-    if ($key !== null) {
-        if (is_readable($key)) {
-            $blob = (string)file_get_contents($key);
-            if (strlen($blob) > 16) {
-                $w = (int)(unpack('J', substr($blob, 0, 8))[1] ?? 0);
-                $h = (int)(unpack('J', substr($blob, 8, 8))[1] ?? 0);
-                $rgb = substr($blob, 16);
-                if ($w > 0 && $h > 0 && strlen($rgb) === $w * $h * 3) {
-                    return ['width' => $w, 'height' => $h, 'rgb' => $rgb, 'alpha' => false, 'cached' => true];
-                }
-            }
+    if ($key !== null && is_readable($key)) {
+        $cache = png_cache_parse((string)file_get_contents($key));
+        if ($cache !== null) {
+            return $cache + ['alpha' => false, 'cached' => true];
         }
     }
     /* Jalur cepat: GD (tersedia di runtime aplikasi) — sub-detik untuk gambar
        besar, dan sudah memotong bagian kosong. */
     $viaGd = png_scaled_gd($path, $targetH);
     if ($viaGd !== null) {
-        if ($key !== null) {
-            @file_put_contents($key, pack('J', $viaGd['width']) . pack('J', $viaGd['height']) . $viaGd['rgb']);
-        }
+        if ($key !== null) @file_put_contents($key, png_cache_build($viaGd));
         return $viaGd;
     }
 
@@ -530,9 +549,7 @@ function png_scaled_cached(string $path, int $targetH): ?array
     }
     $png = $work;
     if ($png === null) return null;
-    if ($key !== null) {
-        @file_put_contents($key, pack('J', $png['width']) . pack('J', $png['height']) . $png['rgb']);
-    }
+    if ($key !== null) @file_put_contents($key, png_cache_build($png));
     return $png;
 }
 

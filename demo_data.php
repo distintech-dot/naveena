@@ -140,6 +140,8 @@ page_head('Isi Data Demo', '');
  * ======================================================================== */
 $daftarBatch = function_exists('demo_batches_list') ? demo_batches_list() : [];
 ?>
+<div class="page-head">
+  <div>
     <h2><?= icon('database') ?> Isi Data Demo</h2>
     <p class="muted">Khusus Super Admin · mengisi aplikasi dengan data contoh yang siap dihapus kembali.</p>
   </div>

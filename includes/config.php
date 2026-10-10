@@ -69,14 +69,20 @@ function nv_isolated_root(): string
 {
     static $akar = null;
     if ($akar !== null) return $akar;
-    $akar = '';
     $db = (string)getenv('NAVEENA_DB');
     if ($db === '') {
         /* Sebagian skrip uji hanya mengatur folder basis data (NAVEENA_DB_ROOT).
            Proses seperti itu juga TERISOLASI — jangan sampai dianggap pemasangan
-           terbit (penjaga produksi pada skrip seed bergantung pada nilai ini). */
+           terbit (penjaga produksi pada skrip seed bergantung pada nilai ini).
+           PENTING: hasilnya HARUS disimpan ke $akar sebelum keluar. Versi lama
+           menulis `$akar = '';` lebih dulu lalu `return` lebih awal, sehingga
+           panggilan KEDUA pada permintaan yang sama selalu mengembalikan ''
+           walaupun NAVEENA_DB_ROOT diisi — akibatnya pembacaan gambar/berkas
+           (mis. logo PDF) berpindah ke folder PRODUKSI di tengah permintaan
+           (terbukti: logo di PDF memakai cache lama yang hitam). */
         $root = (string)getenv('NAVEENA_DB_ROOT');
-        return $root !== '' ? rtrim($root, '/') : '';
+        $akar = $root !== '' ? rtrim($root, '/') : '';
+        return $akar;
     }
     $akar = rtrim(dirname($db), '/') . '/dbroot-' . preg_replace('/[^A-Za-z0-9_.-]/', '_', basename($db));
     if (!is_dir($akar)) @mkdir($akar, 0770, true);
@@ -98,6 +104,8 @@ define('ICD_DATASET_VERSION', '2');
 require_once __DIR__ . '/schema.php';
 require_once __DIR__ . '/theme.php';
 require_once __DIR__ . '/image.php';
+/* FAVICON klinik (permintaan pemilik) — ikon tab peramban, diunggah dari Identitas Klinik. */
+require_once __DIR__ . '/favicon.php';
 require_once __DIR__ . '/maintenance.php';
 require_once __DIR__ . '/member.php';
 require_once __DIR__ . '/appointment.php';

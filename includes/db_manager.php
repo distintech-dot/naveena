@@ -310,12 +310,50 @@ function db_registry_store(array $r): void
     try {
         $pdo = db_central_conn();
         db_registry_ensure($pdo);
-        $st = $pdo->prepare('INSERT INTO db_registry (kind, branch_id, path, schema_version, size, status, health, last_check)
-           VALUES (?,?,?,?,?,?,?,datetime("now","localtime"))
-           ON CONFLICT(path) DO UPDATE SET kind=excluded.kind, branch_id=excluded.branch_id,
-             schema_version=excluded.schema_version, size=excluded.size, status=excluded.status,
-             health=excluded.health, last_check=datetime("now","localtime")');
-        $st->execute([(string)$r['kind'], $r['branch_id'], (string)$r['path'], (string)$r['version'],
+        $kind = (string)$r['kind'];
+        $branchId = $r['branch_id'] === null ? null : (int)$r['branch_id'];
+        $identitas = db_registry_identity($kind, $branchId);
+        $path = (string)$r['path'];
+
+        /* JALUR DISERAGAMKAN: bila yang ditulis adalah basis data PEMASANGAN INI
+           (identitasnya cocok) tetapi jalurnya diberikan dalam format lain — mis. proses
+           lain melihat berkas yang sama lewat mount berbeda (`/var/lib/...` vs
+           `/home/...`) — yang disimpan adalah jalur AKTIF yang benar. Dengan begitu
+           registry tidak pernah menampilkan jalur yang sudah tidak ada.
+           Basis data LAIN yang berkasnya benar-benar ada tetap memakai jalurnya sendiri
+           (tidak diubah) supaya entri salinan uji tidak tertukar. */
+        $aktifIdent = db_registry_active_identities();
+        if (isset($aktifIdent[$identitas])) {
+            $kanonik = $aktifIdent[$identitas];
+            if ($path !== $kanonik && (!is_file($path) || db_registry_same_file($path, $kanonik))) {
+                $path = $kanonik;
+            }
+        }
+
+        /* SATU basis data = SATU baris (permintaan pemilik). Penulisan dikunci pada
+           IDENTITAS logis, bukan pada `path` — sehingga perubahan format jalur (mis.
+           proses melihat berkas lewat mount yang berbeda) memperbarui baris yang SAMA
+           alih-alih membuat baris kedua. Baris kembar/berjalur lama dibuang lebih dulu
+           (hanya baris tabel registry — bukan berkas basis datanya), DENGAN pengaman:
+           baris yang menunjuk berkas LAIN yang benar-benar ada tidak ikut dibuang
+           (itu basis data berbeda, mis. salinan uji). */
+        foreach ($pdo->query('SELECT id, path FROM db_registry WHERE path_key = '
+                . $pdo->quote($identitas) . ' OR path = ' . $pdo->quote($path))->fetchAll(PDO::FETCH_ASSOC) as $rowLama) {
+            if ((string)$rowLama['path'] === $path) continue;
+            if (is_file((string)$rowLama['path']) && !db_registry_same_file((string)$rowLama['path'], $path)) {
+                $pdo->prepare('UPDATE db_registry SET path_key = NULL WHERE id = ?')->execute([(int)$rowLama['id']]);
+                continue;
+            }
+            $pdo->prepare('DELETE FROM db_registry WHERE id = ?')->execute([(int)$rowLama['id']]);
+        }
+
+        $st = $pdo->prepare('INSERT INTO db_registry
+              (kind, branch_id, path, path_key, schema_version, size, status, health, last_check)
+           VALUES (?,?,?,?,?,?,?,?,datetime("now","localtime"))
+           ON CONFLICT(path_key) DO UPDATE SET kind=excluded.kind, branch_id=excluded.branch_id,
+             path=excluded.path, schema_version=excluded.schema_version, size=excluded.size,
+             status=excluded.status, health=excluded.health, last_check=datetime("now","localtime")');
+        $st->execute([$kind, $branchId, $path, $identitas, (string)$r['version'],
             (int)$r['size'], (string)$r['status'], (string)$r['health']]);
     } catch (Throwable $e) {
         /* registry bersifat informatif — jangan sampai menggagalkan aplikasi */
@@ -588,6 +626,11 @@ function db_central_registry_ready(): void
 
 function db_registry_ensure(PDO $pdo): void
 {
+    static $siap = [];                 // sekali per koneksi — fungsi ini dipanggil sering
+    $kunci = spl_object_id($pdo);
+    if (isset($siap[$kunci])) return;
+    $siap[$kunci] = true;
+
     $pdo->exec("CREATE TABLE IF NOT EXISTS db_registry (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         kind TEXT NOT NULL,
@@ -601,6 +644,26 @@ function db_registry_ensure(PDO $pdo): void
         created_at TEXT DEFAULT (datetime('now','localtime'))
     )");
     $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_db_registry_path ON db_registry(path)');
+    /* IDENTITAS LOGIS (permintaan pemilik): satu basis data = satu baris registry.
+       MASALAH YANG DIPERBAIKI: identitas baris dulu hanya `path`, dan jalur basis data
+       bisa berbentuk BERBEDA untuk BERKAS YANG SAMA (`/home/<user>/workspace/...` vs
+       jalur mount `/var/lib/.../workspace-btrfs/mnt/<user>/...`) tergantung proses yang
+       membukanya. Akibatnya satu central bisa punya DUA baris registry (terukur 6 baris
+       untuk 3 basis data), dan baris lama tidak pernah dibersihkan karena berkasnya
+       masih "ada" menurut jalurnya sendiri.
+       Kolom `path_key` menyimpan identitas yang TIDAK bergantung format jalur
+       (`central` atau `branch:<id>`), dan `path` turun peran menjadi lokasi yang
+       dilaporkan saja. */
+    if (!table_has_column($pdo, 'db_registry', 'path_key')) {
+        $pdo->exec('ALTER TABLE db_registry ADD COLUMN path_key TEXT');
+    }
+    try {
+        $punyaIdx = (int)$pdo->query("SELECT COUNT(*) FROM sqlite_master WHERE type='index'
+                                      AND name='idx_db_registry_key'")->fetchColumn();
+    } catch (Throwable $e) {
+        $punyaIdx = 1;
+    }
+    if (!$punyaIdx) db_registry_normalize($pdo);
     $pdo->exec("CREATE TABLE IF NOT EXISTS db_migrations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         db_path TEXT,
@@ -622,6 +685,209 @@ function db_registry_ensure(PDO $pdo): void
     if (!$adaIdx || $dinorm !== '1') {
         db_migrations_cleanup($pdo);
     }
+}
+
+/**
+ * IDENTITAS LOGIS sebuah basis data pada registry — TIDAK bergantung format jalur.
+ *
+ * central → `central`; berkas cabang → `branch:<id cabang>`. Inilah kunci yang dipakai
+ * untuk memastikan setiap basis data hanya punya SATU baris registry, walau jalur
+ * berkasnya dilaporkan berbeda oleh proses yang berbeda (format mount berlainan).
+ */
+function db_registry_identity(string $kind, ?int $branchId): string
+{
+    if (strtolower($kind) !== 'branch') return 'central';
+    return 'branch:' . max(0, (int)$branchId);
+}
+
+/**
+ * Identitas logis dari data sebuah baris registry.
+ *
+ * Urutan penentuannya: kolom `path_key` (bila sudah terisi) → `kind` + `branch_id` →
+ * nama berkas pada `path`. Dua sumber terakhir dipakai untuk baris LAMA yang belum
+ * punya `path_key` (mis. baris ber-`branch_id` 0 yang berasal dari migrasi tanpa
+ * konteks cabang).
+ */
+function db_registry_row_identity(array $row): string
+{
+    $pk = trim((string)($row['path_key'] ?? ''));
+    if ($pk !== '') return $pk;
+    $kind = strtolower((string)($row['kind'] ?? ''));
+    $bid = (int)($row['branch_id'] ?? 0);
+    $path = (string)($row['path'] ?? '');
+    if (preg_match('/branch_(\d+)\.sqlite$/', $path, $m)) return 'branch:' . (int)$m[1];
+    if ($kind === 'branch' && $bid > 0) return 'branch:' . $bid;
+    return 'central';
+}
+
+/**
+ * Identitas logis sebuah basis data berdasarkan jalurnya (tanpa melihat registry).
+ * Dipakai untuk menyaring baris yang memang milik pemasangan ini.
+ */
+function db_registry_path_identity(string $path): string
+{
+    if (preg_match('/branch_(\d+)\.sqlite$/', $path, $m)) return 'branch:' . (int)$m[1];
+    return 'central';
+}
+
+/**
+ * IDENTITAS BASIS DATA YANG SEDANG DIPAKAI pemasangan ini → identitas => jalur nyata.
+ *
+ * @return array<string,string>
+ */
+function db_registry_active_identities(): array
+{
+    $out = [db_registry_path_identity(db_central_path()) => db_central_path()];
+    foreach (db_route_branch_ids() as $bid) {
+        $p = db_branch_path((int)$bid);
+        $out[db_registry_path_identity($p)] = $p;
+    }
+    return $out;
+}
+
+/**
+ * RAPIAKAN tabel registry: isi `path_key`, buang baris GANDA untuk basis data yang sama
+ * (mempertahankan baris yang menunjuk lokasi AKTIF), lalu pasang indeks unik.
+ *
+ * TIDAK menghapus basis data maupun data operasional — hanya baris tabel registry.
+ * Baris basis data dari pemasangan LAIN (mis. salinan uji di folder berbeda) tidak
+ * dihapus di sini; baris seperti itu dilaporkan terpisah (`db_registry_foreign_rows()`).
+ *
+ * @return array{sebelum:int,sesudah:int,dihapus:int,tetap:array<int,string>}
+ */
+function db_registry_normalize(PDO $pdo, bool $buangAsing = false, ?array $aktif = null): array
+{
+    $hasil = ['sebelum' => 0, 'sesudah' => 0, 'dihapus' => 0, 'tetap' => []];
+    try {
+        $rows = $pdo->query('SELECT id, kind, branch_id, path, path_key, last_check FROM db_registry ORDER BY id')
+            ->fetchAll(PDO::FETCH_ASSOC);
+        $hasil['sebelum'] = count($rows);
+        /* `$aktif` boleh diberikan (dipakai uji: memeriksa keputusan penggabungan dengan
+           peta jalur aktif buatan tanpa menyentuh basis data sungguhan). */
+        if ($aktif === null) $aktif = db_registry_active_identities();   // identitas => jalur aktif
+
+        /* Kelompokkan per identitas logis. */
+        $grup = [];
+        foreach ($rows as $r) {
+            $id = db_registry_row_identity($r);
+            $r['_id'] = $id;
+            $grup[$id][] = $r;
+        }
+
+        $hapus = [];
+        foreach ($grup as $id => $anggota) {
+            $jalurAktif = $aktif[$id] ?? null;
+
+            /* Baris yang menunjuk basis data LAIN (berkasnya ADA dan bukan berkas yang
+               sama dengan jalur aktif) TIDAK digabungkan — itu memang basis data
+               berbeda (mis. salinan uji). Baris seperti itu diberi `path_key` kosong
+               agar tidak ikut skema identitas (indeks unik mengizinkan banyak NULL). */
+            $lain = [];
+            if ($jalurAktif !== null) {
+                foreach ($anggota as $r) {
+                    $p = (string)$r['path'];
+                    if ($p === $jalurAktif) continue;
+                    if (is_file($p) && !db_registry_same_file($p, $jalurAktif)) $lain[] = $r;
+                }
+            }
+            $kandidat = array_values(array_filter($anggota, fn($r) => !in_array($r, $lain, true)));
+            foreach ($lain as $r) {
+                $pdo->prepare('UPDATE db_registry SET path_key = NULL WHERE id = ?')->execute([(int)$r['id']]);
+            }
+
+            if (!$kandidat) continue;                      // semua barisnya basis data lain
+
+            /* Pilih SATU yang dipertahankan: (a) baris yang menunjuk jalur AKTIF;
+               bila tidak ada, (b) `last_check` terbaru; bila sama, id terkecil. */
+            $pertahankan = null;
+            if ($jalurAktif !== null) {
+                foreach ($kandidat as $r) if ((string)$r['path'] === $jalurAktif) { $pertahankan = $r; break; }
+            }
+            if ($pertahankan === null) {
+                usort($kandidat, fn($a, $b) => strcmp((string)$b['last_check'], (string)$a['last_check'])
+                    ?: ((int)$a['id'] <=> (int)$b['id']));
+                $pertahankan = $kandidat[0];
+            }
+            /* Sisanya adalah alias/berkas mati untuk basis data yang SAMA → dibuang
+               (hanya baris tabel registry; berkas basis datanya tidak disentuh). */
+            foreach ($kandidat as $r) {
+                if ((int)$r['id'] === (int)$pertahankan['id']) continue;
+                $hapus[] = (int)$r['id'];
+            }
+            if ($jalurAktif !== null) {
+                db_registry_set_identity($pdo, (int)$pertahankan['id'], $id, $jalurAktif);
+            } else {
+                $pdo->prepare('UPDATE db_registry SET path_key = ? WHERE id = ?')
+                    ->execute([$id, (int)$pertahankan['id']]);
+                if ($buangAsing) $hapus[] = (int)$pertahankan['id'];
+            }
+        }
+
+        /* Indeks unik pada `path` bisa menghalangi penulisan jalur BARU untuk identitas
+           yang sudah punya baris menunjuk jalur lama — buang baris yang akan dilewati. */
+        foreach (array_unique($hapus) as $id) {
+            try {
+                $st = $pdo->prepare('DELETE FROM db_registry WHERE id = ?');
+                $st->execute([$id]);
+                $hasil['dihapus'] += (int)$st->rowCount();
+            } catch (Throwable $e) { /* lanjut */ }
+        }
+        $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_db_registry_key ON db_registry(path_key)');
+        $hasil['sesudah'] = (int)$pdo->query('SELECT COUNT(*) FROM db_registry')->fetchColumn();
+        foreach ($aktif as $id => $jalur) $hasil['tetap'][] = $id;
+        $pdo->prepare("INSERT INTO settings (key, value) VALUES ('db_registry_norm', '1')
+                       ON CONFLICT(key) DO UPDATE SET value = '1'")->execute();
+    } catch (Throwable $e) {
+        /* perapian bersifat informatif */
+    }
+    return $hasil;
+}
+
+/**
+ * Apakah dua jalur menunjuk BERKAS YANG SAMA?
+ *
+ * Dipakai untuk membedakan "jalur berbeda untuk berkas yang sama" (mis. `/home/<user>/…`
+ * vs jalur mount `/var/lib/…/workspace-btrfs/mnt/<user>/…` — inilah penyebab 6 baris
+ * registry untuk 3 basis data) dari "dua basis data berbeda di folder berbeda"
+ * (salinan uji) yang TIDAK boleh digabungkan.
+ *
+ * Urutan: realpath (mengikuti symlink) → inode+device → nama berkas relatif.
+ */
+function db_registry_same_file(string $a, string $b): bool
+{
+    if ($a === '' || $b === '') return false;
+    if ($a === $b) return true;
+    $ra = @realpath($a);
+    $rb = @realpath($b);
+    if ($ra !== false && $rb !== false && $ra === $rb) return true;
+    /* realpath gagal (mis. berkas sudah tidak ada) → bandingkan sisa jalur yang
+       menyerupai (…/naveena_storage/databases/…). */
+    $norm = function (string $p): string {
+        $p = str_replace('\\', '/', $p);
+        foreach (['/naveena_storage/', '/databases/'] as $penanda) {
+            $pos = strpos($p, $penanda);
+            if ($pos !== false) return ltrim(substr($p, $pos + 1), '/');
+        }
+        return $p;
+    };
+    $na = $norm($a); $nb = $norm($b);
+    if ($na === $nb && strpos($na, '/') !== false) return true;
+    /* Terakhir: inode + device (dua jalur keras ke berkas yang sama). */
+    $sa = @stat($a); $sb = @stat($b);
+    if ($sa && $sb && $sa['ino'] === $sb['ino'] && $sa['dev'] === $sb['dev']) return true;
+    return false;
+}
+
+/** Tetapkan identitas + jalur AKTIF pada satu baris registry (buang jalur lama miliknya). */
+function db_registry_set_identity(PDO $pdo, int $id, string $pathKey, string $pathAktif): void
+{
+    try {
+        /* Baris LAIN dengan jalur yang sama (kalau ada) dibuang lebih dulu supaya indeks
+           unik `path` tidak menolak penulisan. */
+        $pdo->prepare('DELETE FROM db_registry WHERE path = ? AND id <> ?')->execute([$pathAktif, $id]);
+        $pdo->prepare('UPDATE db_registry SET path_key = ?, path = ? WHERE id = ?')
+            ->execute([$pathKey, $pathAktif, $id]);
+    } catch (Throwable $e) { /* informatif */ }
 }
 
 /**
@@ -750,12 +1016,31 @@ function db_registry_list(bool $hanyaPemasanganIni = true): array
         return [];
     }
     if (!$hanyaPemasanganIni) return $rows;
-    $aktif = [db_central_path() => true];
-    foreach (db_route_branch_ids() as $bid) $aktif[db_branch_path((int)$bid)] = true;
-    return array_values(array_filter($rows, fn($r) => isset($aktif[(string)$r['path']])));
+    /* Penyaringan memakai IDENTITAS logis (kind+branch), bukan bentuk jalur: baris yang
+       jalurnya ditulis dengan format berbeda tetap diakui sebagai basis data pemasangan
+       ini — dan karena penulisan registry sudah dikunci pada identitas, baris kembarnya
+       tidak ada lagi. */
+    /* Baris dianggap milik pemasangan ini hanya bila jalurnya memang jalur AKTIF
+       (atau berkas lain yang menunjuk berkas yang SAMA, mis. lewat symlink).
+       Baris berjalur lama untuk identitas yang sama (mis. jalur mount yang sudah tidak
+       ada) TIDAK ikut ditampilkan — baris seperti itu dilaporkan & dirapikan terpisah,
+       sehingga panel tidak pernah menampilkan basis data yang sama dua kali. */
+    $aktif = db_registry_active_identities();          // identitas => jalur aktif
+    return array_values(array_filter($rows, function ($r) use ($aktif) {
+        $id = db_registry_row_identity($r);
+        if (!isset($aktif[$id])) return false;
+        $p = (string)$r['path'];
+        $aktifPath = $aktif[$id];
+        if ($p === $aktifPath) return true;
+        return is_file($p) && db_registry_same_file($p, $aktifPath);
+    }));
 }
 
-/** Baris registry yang BUKAN bagian pemasangan ini (sisa folder lain / pemindahan). */
+/**
+ * Baris registry yang BUKAN bagian pemasangan ini: jalurnya bukan basis data aktif
+ * dan bukan berkas lain yang menunjuk berkas yang sama (sisa jalur mount lama,
+ * salinan uji, atau basis data di folder lain).
+ */
 function db_registry_foreign_rows(): array
 {
     $semua = db_registry_list(false);

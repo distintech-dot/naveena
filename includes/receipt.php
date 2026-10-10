@@ -106,8 +106,18 @@ function render_receipt(MiniPdf $p, array $o, bool $isCopy = false): void
         elseif ($isPk) { $pkQty += (float)$it['quantity']; $pkSum += (float)$it['subtotal']; }
         else       { $skQty += (float)$it['quantity']; $skSum += (float)$it['subtotal']; }
         $p->kvWrap((string)$it['item_name'], money($it['subtotal']), 8.2);
-        $p->line(($isTr ? 'Treatment' : ($isPk ? 'Paket' : 'Skincare')) . ' - ' . qty_text($it['quantity'])
-            . ' x ' . money($it['price']), 6.8, false, 0);
+        /* HARGA NORMAL DICORET bila sedang promo — di PDF coretan tidak mungkin,
+           jadi harga normal ditulis lebih dulu dengan keterangan "(normal)" lalu
+           harga promo + tanda *. */
+        $hn = (float)($it['price_normal'] ?? 0);
+        $promo = $hn > 0 && abs($hn - (float)$it['price']) > 0.5;
+        if ($promo) {
+            $p->line(($isTr ? 'Treatment' : ($isPk ? 'Paket' : 'Skincare')) . ' - ' . qty_text($it['quantity'])
+                . ' x ' . money($hn) . ' (harga normal) -> PROMO ' . money($it['price']), 6.4, false, 0);
+        } else {
+            $p->line(($isTr ? 'Treatment' : ($isPk ? 'Paket' : 'Skincare')) . ' - ' . qty_text($it['quantity'])
+                . ' x ' . money($it['price']), 6.8, false, 0);
+        }
     }
     $p->hr();
 
@@ -162,6 +172,42 @@ function render_receipt(MiniPdf $p, array $o, bool $isCopy = false): void
 /* ------------------------------------------------------------------ *
  * Pesan WhatsApp
  * ------------------------------------------------------------------ */
+
+/**
+ * Rincian item transaksi sebagai teks (untuk variabel {rincian} pada WhatsApp/email).
+ *
+ * Harga normal ditandai "(harga normal …)" bila item sedang PROMO — permintaan
+ * pemilik: pasien tahu harga aslinya sebelum potongan promo. Bahan treatment &
+ * isi paket (berharga 0) dilewati karena bukan barang yang ditagihkan.
+ */
+function receipt_items_text(array $o, string $linePrefix = '- '): string
+{
+    $out = [];
+    foreach (($o['items'] ?? []) as $it) {
+        $t = (string)($it['item_type'] ?? '');
+        if ($t === 'material' || $t === 'package_item') continue;
+        $hn = (float)($it['price_normal'] ?? 0);
+        $promo = $hn > 0 && abs($hn - (float)$it['price']) > 0.5;
+        $out[] = $linePrefix . $it['item_name'] . ' ' . qty_text($it['quantity']) . ' x '
+            . ($promo ? money($hn) . ' (harga normal) -> PROMO ' . money($it['price']) : money($it['price']))
+            . ' = ' . money($it['subtotal']);
+    }
+    return implode("\n", $out);
+}
+
+/** Baris keterangan PROMO saja (kosong bila tidak ada item promo). */
+function receipt_promo_text(array $o, string $linePrefix = ''): string
+{
+    $out = [];
+    foreach (($o['items'] ?? []) as $it) {
+        $hn = (float)($it['price_normal'] ?? 0);
+        if ($hn > 0 && abs($hn - (float)$it['price']) > 0.5) {
+            $out[] = $linePrefix . $it['item_name'] . ': ' . money($hn) . ' -> PROMO ' . money($it['price']);
+        }
+    }
+    return implode("\n", $out);
+}
+
 function wa_receipt_template(array $o): string
 {
     $tpl = setting('wa_receipt_template');
@@ -174,8 +220,10 @@ function wa_receipt_template(array $o): string
              . "Struk digital: {link}\n\nSalam sehat,\n{$cn} {cabang}";
     }
     $methods = implode(', ', array_map(fn($p) => (string)$p['method'], $o['payments']));
+    $promoTxt = receipt_promo_text($o);
     return str_replace(
-        ['{nama}', '{pasien}', '{klinik}', '{cabang}', '{invoice}', '{tanggal}', '{total}', '{metode}', '{alamat}', '{link}'],
+        ['{nama}', '{pasien}', '{klinik}', '{cabang}', '{invoice}', '{tanggal}', '{total}', '{metode}', '{alamat}', '{link}',
+         '{rincian}', '{promo}'],
         [
             (string)$o['patient_name'],
             (string)$o['patient_name'],
@@ -187,6 +235,8 @@ function wa_receipt_template(array $o): string
             $methods !== '' ? $methods : '-',
             (string)($o['branch_address'] ?: ''),
             '{LINK}',   // placeholder, diisi setelah PDF tersedia
+            receipt_items_text($o),
+            $promoTxt !== '' ? $promoTxt : '-',
         ],
         $tpl
     );

@@ -75,6 +75,7 @@ $status = mail_status_text();
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover">
 <title>Lupa Kata Sandi · <?= e(clinic_name()) ?></title>
+<?= function_exists('favicon_link_tag') ? favicon_link_tag() : '' ?>
 <link rel="stylesheet" href="assets/css/app.css">
 <style id="themeVars"><?= theme_css() ?></style>
 <?= function_exists('wallpaper_style_tag') ? wallpaper_style_tag(true) : '' ?>

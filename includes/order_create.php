@@ -152,8 +152,11 @@ function order_create(array $in, array $user, int $branchId): array
         $hppUnit = $type === 'skincare'
             ? (float)($row['purchase_price'] ?? 0)
             : (float)($row['hpp'] ?? 0);
+        /* HARGA NORMAL (sebelum promo) sebagai SNAPSHOT — hanya treatment yang
+           punya harga normal & promo terpisah; produk skincare memakai harga jual. */
+        $priceNormal = $type === 'treatment' ? (float)($row['normal_price'] ?? 0) : 0.0;
         $clean[] = ['type' => $type, 'id' => $iid, 'name' => $name, 'code' => $code, 'qty' => $qty,
-            'price' => $price, 'line' => $line, 'hpp' => $hppUnit];
+            'price' => $price, 'line' => $line, 'hpp' => $hppUnit, 'price_normal' => $priceNormal];
     }
     if (!$clean) throw new RuntimeException('Transaksi gagal disimpan. Belum ada item treatment/skincare — bahan treatment saja tidak cukup untuk membuat transaksi (bahan tidak dijual ke pasien).');
     if ($discount > $subtotal) throw new RuntimeException('Diskon tidak boleh melebihi subtotal.');
@@ -228,13 +231,14 @@ function order_create(array $in, array $user, int $branchId): array
 
         foreach ($clean as $c) {
             q('INSERT INTO order_items (order_id, item_type, treatment_id, skincare_id, package_id, item_code, item_name,
-                    quantity, price, subtotal, hpp)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                    quantity, price, price_normal, subtotal, hpp)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
                 [$orderId, $c['type'],
                  $c['type'] === 'treatment' ? $c['id'] : null,
                  $c['type'] === 'skincare' ? $c['id'] : null,
                  $c['type'] === 'package' ? $c['id'] : null,
-                 $c['code'], $c['name'], $c['qty'], $c['price'], $c['line'], (float)($c['hpp'] ?? 0)]);
+                 $c['code'], $c['name'], $c['qty'], $c['price'], (float)($c['price_normal'] ?? 0),
+                 $c['line'], (float)($c['hpp'] ?? 0)]);
             if ($c['type'] === 'skincare') {
                 inv_apply('skincare', $c['id'], -1 * $c['qty'], 'Penjualan', 'Penjualan invoice ' . $invoice,
                     ['ref_type' => 'order', 'ref_id' => $orderId]);

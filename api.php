@@ -131,11 +131,20 @@ try {
                          ORDER BY t.name LIMIT 20", [$branch, $term, $term, $term]);
             foreach ($rows as $r) {
                 $price = (float)$r['promo_price'] > 0 ? (float)$r['promo_price'] : (float)$r['normal_price'];
+                /* HARGA PROMO ditampilkan pada daftar saran: harga normal DICORET
+                   supaya petugas (dan pasien di layar) tahu treatment itu sedang promo
+                   — sama seperti pada baris item yang dipilih (permintaan pemilik). */
+                $hn = (float)$r['normal_price'];
+                $promo = (float)$r['promo_price'] > 0 && abs($hn - $price) > 0.5;
+                $hargaLabel = $promo
+                    ? '<span class="o-price-old">' . money($hn) . '</span> ' . money($price) . ' PROMO'
+                    : money($price);
                 $out['items'][] = [
                     'id' => (int)$r['id'], 'code' => $r['code'], 'name' => $r['name'], 'category' => $r['category'],
-                    'price' => $price, 'normal_price' => (float)$r['normal_price'], 'promo_price' => (float)$r['promo_price'],
+                    'price' => $price, 'normal_price' => $hn, 'promo_price' => (float)$r['promo_price'],
+                    'promo' => $promo,
                     'duration' => (int)$r['duration'], 'branch_id' => (int)$r['branch_id'],
-                    'label' => '<strong>' . e($r['name']) . '</strong><small>' . e($r['code']) . ' · ' . e($r['category']) . ' · ' . money($price) . ' · ' . num($r['duration']) . ' menit</small>',
+                    'label' => '<strong>' . e($r['name']) . '</strong><small>' . e($r['code']) . ' · ' . e($r['category']) . ' · ' . $hargaLabel . ' · ' . num($r['duration']) . ' menit</small>',
                 ];
             }
             break;
@@ -252,6 +261,17 @@ try {
             $out['branch_name'] = (string)scalar('SELECT name FROM branches WHERE id = ?', [$bid], '');
             $out['treatments'] = array_map(fn($r) => ['id' => (int)$r['id'], 'name' => (string)$r['name']],
                 all('SELECT id, name FROM treatments WHERE status="active" AND branch_id = ? ORDER BY name', [$bid]));
+            /* PAKET treatment/produk milik cabang itu ikut ditawarkan (permintaan
+               pemilik) — dikirim sebagai id NEGATIF oleh halaman reservasi supaya
+               tidak bertabrakan dengan id treatment. */
+            $out['items'] = array_merge(
+                array_map(fn($r) => ['id' => (int)$r['id'], 'name' => (string)$r['name'], 'kind' => 'treatment'],
+                    all('SELECT id, name FROM treatments WHERE status="active" AND branch_id = ? ORDER BY name', [$bid])),
+                array_map(fn($r) => ['id' => (int)$r['id'], 'name' => (string)$r['name'], 'kind' => 'package',
+                                     'pkg_kind' => (string)$r['kind'], 'price' => (float)$r['price'],
+                                     'price_text' => money($r['price'])],
+                    all('SELECT id, name, kind, price FROM packages WHERE status="active" AND branch_id = ? ORDER BY name', [$bid]))
+            );
             $out['doctors'] = array_map(fn($r) => ['id' => (int)$r['id'], 'name' => (string)$r['name']],
                 all('SELECT id, name FROM doctors WHERE status="active" AND branch_id = ? ORDER BY name', [$bid]));
             $out['therapists'] = array_map(fn($r) => ['id' => (int)$r['id'], 'name' => (string)$r['name']],

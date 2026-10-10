@@ -76,7 +76,6 @@ page_head('Laporan Lengkap', 'laporan');
   <div class="page-actions">
     <button class="btn" type="button" onclick="Naveena.chartsPng('laporan')"><?= icon('download') ?> Unduh Semua Grafik (PNG)</button>
     <?php if (has_perm('export.data')): ?>
-      <a class="btn" href="export.php?type=keuangan&format=csv&<?= e(qs([], ['page', 'per_page'])) ?>">CSV</a>
       <a class="btn btn-primary" href="export.php?type=laporan&format=xlsx&<?= e(qs([], ['page', 'per_page'])) ?>"><?= icon('download') ?> Excel Lengkap + Grafik</a>
       <a class="btn btn-primary" href="export.php?type=laporan&format=pdfserver&<?= e(qs([], ['page', 'per_page'])) ?>"><?= icon('download') ?> PDF Lengkap + Grafik</a>
       <?php if (finance_report_include()): ?>
@@ -543,8 +542,8 @@ page_head('Laporan Lengkap', 'laporan');
     <div class="flex gap-sm">
       <span class="muted"><?= num(count($perMember)) ?> tingkat</span>
       <?php if (has_perm('export.data')): ?>
+        <?php /* Tombol CSV DIHAPUS (permintaan pemilik): Excel-nya sudah lebih lengkap. */ ?>
         <a class="btn btn-sm" href="export.php?type=laporan_member&format=excel&<?= e(qs([], ['page','per_page'])) ?>">Excel</a>
-        <a class="btn btn-sm" href="export.php?type=laporan_member&format=csv&<?= e(qs([], ['page','per_page'])) ?>">CSV</a>
       <?php endif; ?>
     </div>
   </div>
@@ -591,8 +590,8 @@ page_head('Laporan Lengkap', 'laporan');
     <div class="flex gap-sm">
       <span class="muted"><?= num(count($perMaterials)) ?> jenis bahan</span>
       <?php if (has_perm('export.data')): ?>
+        <?php /* Tombol CSV DIHAPUS (permintaan pemilik): Excel-nya sudah lebih lengkap. */ ?>
         <a class="btn btn-sm" href="export.php?type=pemakaian_bahan&format=excel&<?= e(qs([], ['page','per_page'])) ?>">Excel</a>
-        <a class="btn btn-sm" href="export.php?type=pemakaian_bahan&format=csv&<?= e(qs([], ['page','per_page'])) ?>">CSV</a>
       <?php endif; ?>
     </div>
   </div>

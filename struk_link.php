@@ -56,6 +56,7 @@ $methods = implode(', ', array_map(fn($p) => (string)$p['method'], $o['payments'
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Struk <?= e($o['invoice_number']) ?> — <?= e(clinic_name()) ?></title>
+<?= function_exists('favicon_link_tag') ? favicon_link_tag() : '' ?>
 <link rel="stylesheet" href="assets/css/app.css">
 <style id="themeVars"><?= theme_css() ?></style>
 <style>

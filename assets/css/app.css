@@ -1140,6 +1140,13 @@ textarea.auto-grow{min-height:118px;max-height:56vh;overflow-y:auto;resize:verti
 
 /* ---------- Rincian item pada kartu pembayaran (ronde 48) ---------- */
 .pm-recap{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;max-height:34vh;overflow:auto}
+/* HARGA NORMAL DICORET (permintaan pemilik): dipakai di Order Baru, langkah
+   pembayaran, rincian transaksi, dan struk — supaya pasien tahu harga aslinya
+   saat ada harga promo. Harga promo tetap yang ditagihkan. */
+.o-price-old{color:var(--muted);text-decoration:line-through;font-weight:500}
+.o-promo{margin-top:3px;font-size:.8rem;line-height:1.5}
+.o-arrow{color:var(--muted);font-weight:600;padding:0 2px}
+.o-promo .badge{margin-left:4px}
 .pm-recap-tbl{width:100%;border-collapse:collapse;font-size:.84rem}
 .pm-recap-tbl td{padding:5px 4px;border-bottom:1px dashed var(--line);vertical-align:top}
 .pm-recap-tbl tr:last-child td{border-bottom:none}
@@ -1400,6 +1407,74 @@ textarea.auto-grow{min-height:118px;max-height:56vh;overflow-y:auto;resize:verti
   .nav-group-title{font-size:.62rem}
   .sidebar-foot{padding:12px}
 }
+
+/* ==================================================================
+   SIDEBAR DAPAT DILIPAT (laptop/PC/tablet) — permintaan pemilik
+   ------------------------------------------------------------------
+   Tombol ☰ di bagian atas sidebar mengecilkan menu ke kiri; hanya IKON yang
+   tampil (teks menu & judul kategori disembunyikan) dan nama menu muncul
+   sebagai tooltip saat kursor diarahkan. Lebarnya dianimasikan 0,3 detik dan
+   area konten ikut menyesuaikan (`.main` memakai `--sidebar-w`).
+   HANYA berlaku >1024px: di HP/tablet kecil sidebar tetap memakai mode "laci"
+   (`#menuToggle` di topbar) seperti sebelumnya.
+   ================================================================== */
+.sidebar-toggle{display:none}
+@media screen and (min-width:1025px){
+  /* Animasi geser/lebar yang halus (0,3 detik). */
+  .sidebar{transition:width .3s ease}
+  .main{transition:margin-left .3s ease}
+  .sidebar-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .sidebar-toggle{
+    display:grid;place-items:center;flex:0 0 auto;width:36px;height:36px;
+    border-radius:10px;cursor:pointer;color:#fff;
+    background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.28);
+    transition:background .15s ease;
+  }
+  .sidebar-toggle:hover{background:rgba(255,255,255,.3)}
+  .sidebar-toggle:focus-visible{outline:2px solid #fff;outline-offset:2px}
+  .sidebar-toggle .ico{width:19px;height:19px;flex-basis:19px}
+
+  /* ---- KEADAAN TERLIPAT ---- */
+  html.nav-collapsed{--sidebar-w:68px}
+  html.nav-collapsed .sidebar-head{
+    flex-direction:column;align-items:center;justify-content:flex-start;
+    gap:10px;padding:14px 8px 10px;
+  }
+  html.nav-collapsed .sidebar .brand-text{display:none}
+  html.nav-collapsed .sidebar .brand-img{padding:5px;border-radius:10px}
+  html.nav-collapsed .sidebar .brand-img .logo-img{height:26px;max-width:44px;object-fit:contain}
+  /* Judul kategori & teks menu disembunyikan — ikon tetap terlihat & bisa diklik. */
+  html.nav-collapsed .nav{padding:6px 8px 12px}
+  html.nav-collapsed .nav-group-title{display:none}
+  html.nav-collapsed .nav-group{margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.14)}
+  html.nav-collapsed .nav-group:first-child{margin-top:0;padding-top:0;border-top:none}
+  html.nav-collapsed .nav-link{justify-content:center;gap:0;padding:11px 0}
+  html.nav-collapsed .nav-link > span{display:none}
+  html.nav-collapsed .nav-link .ico{width:21px;height:21px;flex-basis:21px}
+  /* Penanda menu terkunci (mode pemeliharaan) tetap tampil sebagai titik kecil. */
+  html.nav-collapsed .nav-link-locked::after{margin-left:2px;font-size:.6rem}
+  html.nav-collapsed .sidebar-foot{align-items:center;padding:10px 8px}
+  html.nav-collapsed .sf-meta{display:none}
+  html.nav-collapsed .sf-user{justify-content:center}
+  html.nav-collapsed .sidebar-foot .btn{padding:9px 0}
+  html.nav-collapsed .sidebar-foot .btn .btn-label{display:none}
+}
+/* Sidebar TETAP dapat digulir vertikal pada kedua keadaan (menu banyak). */
+.sidebar{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.35) transparent}
+.sidebar::-webkit-scrollbar{width:8px}
+.sidebar::-webkit-scrollbar-thumb{background:rgba(255,255,255,.3);border-radius:8px}
+.sidebar::-webkit-scrollbar-track{background:transparent}
+
+/* TOOLTIP nama menu saat sidebar terlipat — elemen ini menempel pada <body>
+   (bukan di dalam sidebar) supaya tidak terpotong oleh `overflow-y:auto`. */
+#navTip{
+  position:fixed;z-index:120;pointer-events:none;opacity:0;transform:translateY(-50%) scale(.96);
+  transition:opacity .12s ease,transform .12s ease;
+  background:#241B33;color:#fff;font-size:.8rem;font-weight:500;line-height:1.2;
+  padding:7px 11px;border-radius:9px;box-shadow:0 6px 20px rgba(20,6,30,.35);white-space:nowrap;
+  max-width:min(70vw,320px);overflow:hidden;text-overflow:ellipsis;
+}
+#navTip.on{opacity:1;transform:translateY(-50%) scale(1)}
 
 /* ==================================================================
    KOLOM AKSI LOGIN MANAGEMENT — SATU BARIS (ronde 67)

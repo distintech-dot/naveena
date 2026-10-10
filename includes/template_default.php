@@ -21,6 +21,8 @@
 function template_default_keys(): array
 {
     return ['email_receipt_subject', 'email_receipt_body',
+        /* Email konfirmasi Reservasi (tombol Email Pasien / Email Dokter). */
+        'email_reservation_subject', 'email_reservation_body',
         'wa_template', 'wa_template_doctor', 'wa_receipt_template',
         /* Membership Upgrade (ronde 64d) — ucapan selamat saat level naik. */
         'email_member_upgrade_subject', 'email_member_upgrade_body', 'wa_member_upgrade_template'];
@@ -32,6 +34,9 @@ function template_default_groups(): array
     return [
         'email' => ['label' => 'Email Struk ke Pasien',
             'keys' => ['email_receipt_subject', 'email_receipt_body']],
+        /* Email konfirmasi reservasi (dipakai tombol Email Pasien/Dokter di Reservasi). */
+        'reservasi' => ['label' => 'Email Konfirmasi Reservasi',
+            'keys' => ['email_reservation_subject', 'email_reservation_body']],
         'wa' => ['label' => 'WhatsApp',
             'keys' => ['wa_template', 'wa_template_doctor', 'wa_receipt_template']],
         /* Dipisah email vs WhatsApp karena tombolnya punya dua kata kunci konfirmasi
@@ -64,6 +69,14 @@ function template_code_default(string $key): string
                 . "Total: {total}\nMetode: {metode}\n\n"
                 . "Struk PDF juga dapat diunduh pada tautan berikut (berlaku " . $hari . " hari):\n{link}\n\n"
                 . "Salam sehat,\n{klinik}";
+        case 'email_reservation_subject':
+            return function_exists('reservation_email_default_subject') ? reservation_email_default_subject() : 'Konfirmasi Reservasi {no_reservasi} — {klinik}';
+        case 'email_reservation_body':
+            if (function_exists('reservation_email_default_body')) return reservation_email_default_body();
+            return "Halo {nama},\n\nBerikut detail reservasi Anda di {klinik} {cabang}:\n"
+                . "No. Reservasi: {no_reservasi}\nTanggal: {tanggal}\nJam: {jam}\n"
+                . "Treatment: {treatment}\nDokter/Terapis: {staff}\nCatatan: {catatan}\n\n"
+                . "Mohon konfirmasi kehadiran Anda. Terima kasih.\n\nSalam sehat,\n{klinik}";
         case 'wa_template':
             return "Halo Kak {nama}\n\nKami dari {klinik} {cabang}.\nMengingatkan reservasi Kakak:\n"
                 . "Tanggal: {tanggal}\nJam: {jam}\nTreatment: {treatment}\nDokter/Terapis: {dokter}\n\n"

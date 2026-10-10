@@ -1357,7 +1357,25 @@ $contoh = [
           <?php if ((string)$d['test_status'] !== ''): ?><div class="muted"><?= e((string)$d['test_status']) ?></div><?php endif; ?></td>
         <td><?= badge($dlbl, $dtone) ?></td>
         <td class="small muted"><?= e(tgl((string)$d['created_at'], true)) ?></td>
-        <td><a class="btn btn-sm" href="ai_developer.php?id=<?= (int)$d['id'] ?>">Buka</a></td>
+        <td class="nowrap">
+          <?php /* Tombol "Hapus" di sebelah KANAN tombol "Buka" (permintaan pemilik) supaya
+                   riwayat permintaan dapat dirapikan dari daftar ini tanpa harus membuka
+                   tiap tugas. Aksi `hapus` sudah ada & memakai pengaman yang sama seperti
+                   di halaman rincian: konfirmasi, CSRF, dan PENOLAKAN bila perubahannya
+                   sudah diterapkan (harus "Batalkan" lebih dulu) — jadi tombolnya tidak
+                   dirender untuk tugas berstatus `applied` agar tidak menyesatkan. */ ?>
+          <div class="flex gap-sm" style="align-items:center">
+            <a class="btn btn-sm" href="ai_developer.php?id=<?= (int)$d['id'] ?>">Buka</a>
+            <?php if ((string)$d['status'] !== 'applied'): ?>
+              <form method="post" style="display:inline"
+                    data-confirm="Hapus riwayat permintaan #<?= (int)$d['id'] ?>? Riwayat, langkah proses, percakapan, jejak kerja, dan lampirannya ikut dihapus.">
+                <?= csrf_field() ?><input type="hidden" name="action" value="hapus">
+                <input type="hidden" name="id" value="<?= (int)$d['id'] ?>">
+                <button class="btn btn-sm btn-danger" type="submit" title="Hapus riwayat permintaan ini">Hapus</button>
+              </form>
+            <?php endif; ?>
+          </div>
+        </td>
       </tr>
     <?php endforeach; ?>
     </tbody>

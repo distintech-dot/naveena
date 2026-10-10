@@ -143,6 +143,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             flash('Logo dihapus. Halaman memakai logo bawaan sistem.');
         }
 
+        if ($act === 'favicon') {
+            /* FAVICON KLINIK (permintaan pemilik): .ico/.png/.svg, maksimal 15 KB.
+               Berkas lama dibuang supaya folder unggahan tidak menumpuk. */
+            if (!is_super() && !has_perm('settings.manage')) deny('Pengaturan favicon hanya dapat diubah pemegang izin Pengaturan Sistem.');
+            if (empty($_FILES['favicon']['name']) || ($_FILES['favicon']['error'] ?? 1) !== UPLOAD_ERR_OK) {
+                throw new RuntimeException('Pilih berkas favicon terlebih dahulu.');
+            }
+            $res = favicon_store((string)$_FILES['favicon']['tmp_name'], (string)$_FILES['favicon']['name']);
+            $oldFav = (string)setting('favicon_file');
+            set_setting('favicon_file', $res['file']);
+            set_setting('favicon_bytes', (string)$res['bytes']);
+            set_setting('favicon_ext', (string)$res['ext']);
+            settings(true);
+            /* Berkas favicon LAMA dibuang (hanya di dalam folder unggahan aplikasi). */
+            if ($oldFav !== '' && $oldFav !== $res['file']) {
+                $old = local_upload_dir() . '/' . basename($oldFav);
+                if (is_file($old) && basename($old) !== basename($res['file'])) @unlink($old);
+            }
+            audit('Ubah Favicon', 'Pengaturan', null, ['favicon' => $oldFav ?: '(belum ada)'],
+                ['favicon' => $res['file'], 'ukuran_kb' => round($res['bytes'] / 1024, 1)],
+                'Favicon klinik diperbarui (format .' . $res['ext'] . ', ' . num((int)round($res['bytes'] / 1024), 0) . ' KB)');
+            flash('Favicon tersimpan (. ' . $res['ext'] . ', ' . num((int)round($res['bytes'] / 1024), 0)
+                . ' KB) — ikon tab peramban langsung memakai berkas ini.');
+        }
+        if ($act === 'favicon_remove') {
+            if (!is_super() && !has_perm('settings.manage')) deny('Pengaturan favicon hanya dapat diubah pemegang izin Pengaturan Sistem.');
+            $oldFav = (string)setting('favicon_file');
+            if ($oldFav !== '') {
+                $p = local_upload_dir() . '/' . basename($oldFav);
+                if (is_file($p)) @unlink($p);
+            }
+            set_setting('favicon_file', '');
+            set_setting('favicon_bytes', '');
+            set_setting('favicon_ext', '');
+            settings(true);
+            audit('Hapus Favicon', 'Pengaturan', null, ['favicon' => $oldFav], ['favicon' => 'bawaan aplikasi'],
+                'Favicon dikembalikan ke ikon bawaan aplikasi');
+            flash('Favicon dihapus — ikon tab peramban kembali ke bawaan aplikasi.');
+        }
         if ($act === 'company') {
             /* Nama klinik SENGAJA tidak ikut di sini: penggantian nama klinik
                hanya boleh dilakukan Super Admin lewat aksi `clinic_name`
@@ -947,6 +986,50 @@ foreach ([2, 7, 12, 24] as $cgN) {
           </form>
           <?php endif; ?>
           <div class="notice mt-2">Logo ini otomatis dipakai di sidebar, halaman login, struk, dan dokumen laporan.</div>
+          <?php /* ================= FAVICON (permintaan pemilik) =================
+                  Ikon kecil di TAB PERAMBAN. Diletakkan tepat di bawah logo karena
+                  keduanya sama-sama identitas visual klinik. Format .ico/.png/.svg,
+                  maksimal 15 KB. */ ?>
+          <div class="section-title mt-2">Favicon (ikon tab peramban)</div>
+          <?php
+            $favPath = favicon_path();
+            $favExt  = $favPath !== '' ? strtolower(pathinfo($favPath, PATHINFO_EXTENSION)) : '';
+            $favBytes = $favPath !== '' ? (int)@filesize($favPath) : 0;
+          ?>
+          <div class="flex flex-wrap gap-lg" style="align-items:flex-start">
+            <div style="min-width:150px">
+              <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center">
+                <img src="<?= e(favicon_url()) ?>" alt="Favicon" style="max-height:64px;max-width:64px">
+              </div>
+              <div class="small muted mt-1">
+                <?php if ($favPath !== ''): ?>
+                  Favicon Anda · .<?= e($favExt) ?> · <?= num(round($favBytes / 1024, 1), 1) ?> KB
+                <?php else: ?>
+                  Masih memakai ikon bawaan aplikasi.
+                <?php endif; ?>
+              </div>
+            </div>
+            <div class="grow">
+              <form method="post" enctype="multipart/form-data">
+                <?= csrf_field() ?><input type="hidden" name="action" value="favicon">
+                <div class="field"><label>Unggah Favicon Baru</label>
+                  <input class="input" type="file" name="favicon" accept=".ico,.png,.svg,image/x-icon,image/png,image/svg+xml" required>
+                  <span class="hint">Format <strong>.ico / .png / .svg</strong> saja (format .jpg tidak dipakai peramban
+                    untuk favicon), maksimal <strong><?= num(favicon_max_kb()) ?> KB</strong>. Ukuran <strong>32×32</strong> atau
+                    <strong>64×64 px</strong> sudah cukup — berkas lebih besar ditolak, bukan dipotong diam-diam.</span></div>
+                <button class="btn btn-primary btn-sm" type="submit"><?= icon('upload') ?> Simpan Favicon</button>
+              </form>
+              <?php if ($favPath !== ''): ?>
+              <form method="post" class="mt-1" data-confirm="Hapus favicon dan kembalikan ke ikon bawaan aplikasi?">
+                <?= csrf_field() ?><input type="hidden" name="action" value="favicon_remove">
+                <button class="btn btn-sm" type="submit">Hapus Favicon</button>
+              </form>
+              <?php endif; ?>
+              <div class="notice mt-2">Favicon tampil sebagai ikon di <strong>tab peramban</strong>, penanda
+                halaman favorit, dan ikon saat aplikasi dipasang di layar utama HP. Logo klinik tidak berubah
+                oleh favicon — keduanya diatur terpisah.</div>
+            </div>
+          </div>
           <?php if ($logoDim && !$logoCached && ($logoDim['width'] > 2000 || $logoDim['height'] > 2000)): ?>
             <div class="alert alert-warning mt-2">
               Logo saat ini berukuran <strong><?= num($logoDim['width']) ?>×<?= num($logoDim['height']) ?> px</strong> —
@@ -1231,7 +1314,9 @@ $wpContoh = array_slice($wpPool, 0, 6);
         (setelah kasir selesai input order) dan Riwayat Order. Isi otomatis dari data transaksi; variabel yang tersedia:
         <code>{nama}</code> <code>{invoice}</code> <code>{tanggal}</code> <code>{total}</code>
         <code>{subtotal}</code> <code>{diskon}</code> <code>{metode}</code> <code>{cabang}</code> <code>{klinik}</code>
-        <code>{link}</code>.</p>
+        <code>{link}</code> <code>{rincian}</code> <code>{promo}</code>.
+        <strong>{rincian}</strong> berisi daftar item transaksi, sedangkan <strong>{promo}</strong> berisi keterangan
+        harga normal → harga promo (tanda “-” bila tidak ada item promo).</p>
       <div class="form-grid g2">
         <div class="field"><label>Kirim Struk Otomatis ke Email Pasien</label>
           <select class="input" name="email_receipt_auto">
@@ -1534,7 +1619,8 @@ $payInfo = pay_clinic_info();
         <div class="field" style="grid-column:1/-1"><label>Template Pesan Struk</label>
           <textarea class="input" name="wa_receipt_template" rows="8"><?= e(setting('wa_receipt_template')) ?></textarea>
           <span class="hint">Variabel: {nama} {pasien} {klinik} {cabang} {invoice} {tanggal} {total} {metode} {alamat} {link}
-            — <code>{klinik}</code> otomatis menjadi <strong><?= e(clinic_name()) ?></strong>.</span></div>
+            {rincian} {promo} — <code>{klinik}</code> otomatis menjadi <strong><?= e(clinic_name()) ?></strong>.
+            <code>{rincian}</code> = daftar item; <code>{promo}</code> = keterangan harga normal → harga promo.</span></div>
       </div>
     </div>
     <?php /* Lihat catatan pada kartu Email: tombol default di sebelah kiri tombol simpan,

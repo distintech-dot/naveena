@@ -211,6 +211,7 @@ function maintenance_page(string $reason = '', int $code = 503): void
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><?= e($info['title']) ?> · <?= e($company) ?></title>
+<?= function_exists('favicon_link_tag') ? favicon_link_tag() : '' ?>
 <link rel="stylesheet" href="assets/css/app.css">
 <?php if (function_exists('theme_css')): ?><style id="themeVars"><?= theme_css() ?></style><?php endif; ?>
 <?php if ($_SERVER['REQUEST_METHOD'] === 'GET' && !$u): /* pengunjung umum: periksa ulang otomatis */

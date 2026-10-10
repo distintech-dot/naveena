@@ -420,7 +420,20 @@ page_head('Detail Transaksi ' . $o['invoice_number'], 'order');
           <td class="small"><?= e($it['item_code'] ?: '-') ?></td>
           <td><?= e($it['item_name']) ?></td>
           <td class="num"><?= qty_text($it['quantity']) ?></td>
-          <td class="num"><?= money($it['price']) ?></td>
+          <td class="num"><?php
+            /* HARGA NORMAL DICORET bila item sedang promo (permintaan pemilik) —
+               jadi rincian transaksi menunjukkan harga asli sebelum potongan promo. */
+            $hargaNormal = (float)($it['price_normal'] ?? 0);
+            $sedangPromo = $hargaNormal > 0 && abs($hargaNormal - (float)$it['price']) > 0.5;
+            if ($sedangPromo) {
+                echo '<span class="o-price-old" title="Harga normal (sebelum promo)">' . money($hargaNormal) . '</span> ';
+                echo '<span class="o-arrow">&rarr;</span> ';
+                echo '<strong>' . money($it['price']) . '</strong>';
+                echo '<div><span class="badge badge-pink">PROMO</span></div>';
+            } else {
+                echo money($it['price']);
+            }
+          ?></td>
           <td class="num"><?= money($it['subtotal']) ?></td>
         </tr>
       <?php endforeach; ?>

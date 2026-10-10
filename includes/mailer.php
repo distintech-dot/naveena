@@ -742,9 +742,13 @@ function receipt_email_replace(string $tpl, array $o): string
         $disc[] = 'Diskon member ' . money($o['member_discount'])
             . (!empty($o['member_tier']) ? ' (' . $o['member_tier'] . ')' : '');
     }
+    /* Rincian & catatan PROMO hidup di includes/receipt.php; dijaga dengan
+       function_exists supaya pemanggil yang belum memuat berkas itu tetap aman. */
+    $rincian = function_exists('receipt_items_text') ? receipt_items_text($o) : '';
+    $ptxt = function_exists('receipt_promo_text') ? receipt_promo_text($o) : '';
     return str_replace(
         ['{nama}', '{pasien}', '{invoice}', '{tanggal}', '{total}', '{subtotal}', '{diskon}',
-         '{metode}', '{klinik}', '{cabang}', '{alamat}', '{link}'],
+         '{metode}', '{klinik}', '{cabang}', '{alamat}', '{link}', '{rincian}', '{promo}'],
         [
             (string)($o['patient_name'] ?? ''),
             (string)($o['patient_name'] ?? ''),
@@ -758,9 +762,83 @@ function receipt_email_replace(string $tpl, array $o): string
             (string)($o['branch_name'] ?? ''),
             (string)($o['branch_address'] ?? ''),
             receipt_public_link($o),
+            $rincian,
+            $ptxt !== '' ? $ptxt : '-',
         ],
         $tpl
     );
+}
+
+/* ============================================================================
+ * EMAIL KONFIRMASI RESERVASI
+ * ============================================================================
+ * Dipakai tombol "Email Pasien" / "Email Dokter" pada halaman Reservasi.
+ * Sama polanya dengan email struk: teks diambil dari Pengaturan Sistem
+ * (`email_reservation_subject` / `email_reservation_body`) — bila belum diisi
+ * dipakai teks bawaan, dan petugas masih boleh mengubahnya sebelum dikirim.
+ */
+
+/** Subjek email reservasi bawaan (dipakai sebagai nilai awal Pengaturan). */
+function reservation_email_default_subject(): string
+{
+    return 'Konfirmasi Reservasi {no_reservasi} — {klinik}';
+}
+
+/** Isi email reservasi bawaan. */
+function reservation_email_default_body(): string
+{
+    return "Halo {nama},\n\nBerikut detail reservasi Anda di {klinik} {cabang}:\n"
+         . "No. Reservasi: {no_reservasi}\nTanggal: {tanggal}\nJam: {jam}\n"
+         . "Treatment: {treatment}\nDokter/Terapis: {staff}\n"
+         . "Catatan: {catatan}\n\n"
+         . "Mohon konfirmasi kehadiran Anda. Terima kasih.\n\nSalam sehat,\n{klinik}";
+}
+
+/** Ganti variabel pada subjek/isi email reservasi. */
+function reservation_email_replace(string $tpl, array $a): string
+{
+    $treatment = trim((string)($a['treatments_all'] ?? ''));
+    if ($treatment === '') $treatment = trim((string)($a['treatment_name'] ?? ''));
+    $staff = function_exists('staff_both_text')
+        ? staff_both_text((string)($a['doctor_name'] ?? ''), (string)($a['therapist_name'] ?? ''))
+        : trim((string)($a['doctor_name'] ?? '') . ' ' . (string)($a['therapist_name'] ?? ''));
+    return str_replace(
+        ['{nama}', '{pasien}', '{no_reservasi}', '{tanggal}', '{jam}', '{treatment}',
+         '{dokter}', '{terapis}', '{staff}', '{catatan}', '{telepon}', '{klinik}', '{cabang}', '{alamat}'],
+        [
+            (string)($a['patient_name'] ?? ''),
+            (string)($a['patient_name'] ?? ''),
+            (string)($a['appointment_number'] ?? ''),
+            isset($a['date']) ? tgl((string)$a['date']) : '',
+            substr((string)($a['time'] ?? ''), 0, 5),
+            $treatment !== '' ? $treatment : '-',
+            (string)($a['doctor_name'] ?? ''),
+            (string)($a['therapist_name'] ?? ''),
+            $staff !== '' ? $staff : '-',
+            trim((string)($a['notes'] ?? '')) !== '' ? trim((string)$a['notes']) : '-',
+            (string)($a['patient_phone'] ?? ''),
+            clinic_name(),
+            (string)($a['branch_name'] ?? ''),
+            (string)($a['branch_address'] ?? ''),
+        ],
+        $tpl
+    );
+}
+
+/** Subjek email reservasi (dari Pengaturan, variabel terisi). */
+function reservation_email_subject(array $a): string
+{
+    $tpl = trim((string)setting('email_reservation_subject'));
+    if ($tpl === '') $tpl = reservation_email_default_subject();
+    return reservation_email_replace($tpl, $a);
+}
+
+/** Isi email reservasi (dari Pengaturan, variabel terisi). */
+function reservation_email_body(array $a): string
+{
+    $tpl = trim((string)setting('email_reservation_body'));
+    if ($tpl === '') $tpl = reservation_email_default_body();
+    return reservation_email_replace($tpl, $a);
 }
 
 /**

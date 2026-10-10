@@ -39,6 +39,7 @@ $masalahSesi = (bool)preg_match('/token|sesi|terkirim lengkap|muat ulang/i', $pe
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Akses Ditolak · <?= htmlspecialchars($klinik, ENT_QUOTES, 'UTF-8') ?></title>
+<?= function_exists('favicon_link_tag') ? favicon_link_tag() : '' ?>
 <link rel="stylesheet" href="assets/css/app.css">
 <?php /* Gaya mandiri: warna ditulis LANGSUNG (tanpa var(--...)) supaya tombol tidak
        pernah tampil kosong walau variabel tema belum disuntikkan. */ ?>

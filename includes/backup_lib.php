@@ -849,7 +849,7 @@ function backup_media_inventory(): array
         }
     } catch (Throwable $e) { /* tabel belum ada */ }
     foreach (['logo_file' => 'Logo klinik', 'member_card_bg_file' => 'Latar kartu member',
-              'pay_qris_file' => 'Gambar QRIS'] as $key => $label) {
+              'pay_qris_file' => 'Gambar QRIS', 'favicon_file' => 'Favicon klinik'] as $key => $label) {
         $val = (string)setting($key, '');
         if ($val !== '') $tambah('', $val, $label);
     }
