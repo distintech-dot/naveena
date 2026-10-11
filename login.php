@@ -165,7 +165,10 @@ unset($_SESSION['deny_notice']);
         $loginBranchTxt = implode(' · ', array_slice($loginBranches, 0, 4));
         if (count($loginBranches) > 4) $loginBranchTxt .= ' · +' . (count($loginBranches) - 4) . ' lainnya';
         ?>
-        <p>Klinik Kecantikan <strong><?= e(clinic_name()) ?></strong><?= $loginBranchTxt !== '' ? ' — ' . e($loginBranchTxt) : '' ?></p>
+        <?php /* `.auth-lead` = informasi lengkap yang SENGAJA disembunyikan di HP
+                 (app.css blok ≤767px) supaya header tidak menghabiskan layar
+                 pertama; desktop & tablet tetap menampilkannya penuh. */ ?>
+        <p class="auth-lead">Klinik Kecantikan <strong><?= e(clinic_name()) ?></strong><?= $loginBranchTxt !== '' ? ' — ' . e($loginBranchTxt) : '' ?></p>
         <ul>
           <li>Multi-cabang &amp; hak akses berbasis role</li>
           <li>Reservasi, rekam medis, dan order terhubung</li>

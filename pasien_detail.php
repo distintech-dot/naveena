@@ -142,7 +142,7 @@ function pd_period_bar(int $patientId, string $period, string $ps, string $pe): 
 {
     ?>
 <div class="card tight">
-  <form class="filter-bar" method="get">
+  <form class="filter-bar pd-filter" method="get">
     <input type="hidden" name="id" value="<?= $patientId ?>">
     <div class="field"><label>Periode</label>
       <select class="input input-sm" name="period" data-period data-autosubmit>
@@ -157,8 +157,11 @@ function pd_period_bar(int $patientId, string $period, string $ps, string $pe): 
       <input type="date" class="input input-sm" name="end" value="<?= e($pe) ?>"></div>
     <button class="btn btn-sm btn-primary" type="submit">Terapkan</button>
     <div class="field"><label>Per halaman</label><?= per_page_inline() ?></div>
-    <span class="muted">Berlaku untuk <strong>transaksi, rekam medis, reservasi, dan bahan</strong> di bawah —
-      periode terpilih <strong><?= e(tglIndo($ps)) ?> — <?= e(tglIndo($pe)) ?></strong></span>
+    <?php /* Keterangan rentang tanggal: diringkas (permintaan pemilik) tetapi isinya
+             tetap sama — berlaku untuk SEMUA daftar di halaman ini. Di HP ia duduk
+             sebaris dengan tombol Terapkan (lihat `.pd-filter` di app.css). */ ?>
+    <span class="muted">Berlaku untuk semua daftar di bawah ·
+      <strong><?= e(tglIndo($ps)) ?> — <?= e(tglIndo($pe)) ?></strong></span>
   </form>
 </div>
     <?php

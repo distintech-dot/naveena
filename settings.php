@@ -932,24 +932,28 @@ foreach ([2, 7, 12, 24] as $cgN) {
     <div class="card-head"><h3>Identitas Klinik</h3>
       <span class="muted small">logo, tagline, alamat &amp; kontak</span></div>
     <div class="card-body" style="border-bottom:1px solid var(--line)">
+      <?php /* TATA LETAK BARIS MEDIA (ronde 73): pratinjau & formulir memakai komponen
+              yang SAMA untuk logo dan favicon (`.media-row`) supaya sejajar rapi. Dulu
+              blok favicon berada DI DALAM kolom formulir logo sehingga menjorok ke dalam
+              dan tampak berantakan (keluhan pemilik). */ ?>
       <div class="section-title" style="margin-top:0">Logo Klinik</div>
-      <div class="flex flex-wrap gap-lg">
-        <div style="min-width:190px">
+      <div class="media-row">
+        <div class="media-preview">
           <?php if (brand_logo_src() !== ''): ?>
-            <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center">
-              <img src="<?= e(brand_logo_src()) ?>" alt="Logo klinik" style="max-height:70px;max-width:200px">
+            <div class="media-thumb">
+              <img src="<?= e(brand_logo_src()) ?>" alt="Logo klinik">
             </div>
-            <div class="small muted mt-1">
+            <div class="media-meta">
               <?= setting('logo_file') !== '' ? 'Tersimpan di penyimpanan aplikasi' : 'Tersimpan di penyimpanan media' ?>
             </div>
           <?php else: ?>
-            <div style="background:#fff;border:1px dashed var(--line);border-radius:12px;padding:14px;text-align:center">
+            <div class="media-thumb dashed">
               <?= brand_block(true) ?>
             </div>
-            <div class="small muted mt-1">Masih memakai logo bawaan sistem.</div>
+            <div class="media-meta">Masih memakai logo bawaan sistem.</div>
           <?php endif; ?>
         </div>
-        <div class="grow">
+        <div class="media-form">
           <form method="post" enctype="multipart/form-data">
             <?= csrf_field() ?><input type="hidden" name="action" value="logo">
             <div class="field"><label>Unggah Logo Baru</label>
@@ -979,59 +983,14 @@ foreach ([2, 7, 12, 24] as $cgN) {
             <button class="btn btn-sm" type="submit"><?= icon('database') ?> Siapkan Versi Kecil Logo (sekali saja)</button>
           </form>
           <?php endif; ?>
-          <?php if (brand_logo_src() !== ''): ?>
-          <form method="post" class="mt-1" data-confirm="Hapus logo dan kembalikan ke logo bawaan sistem?">
-            <?= csrf_field() ?><input type="hidden" name="action" value="logo_remove">
-            <button class="btn btn-sm" type="submit">Hapus Logo</button>
-          </form>
-          <?php endif; ?>
-          <div class="notice mt-2">Logo ini otomatis dipakai di sidebar, halaman login, struk, dan dokumen laporan.</div>
-          <?php /* ================= FAVICON (permintaan pemilik) =================
-                  Ikon kecil di TAB PERAMBAN. Diletakkan tepat di bawah logo karena
-                  keduanya sama-sama identitas visual klinik. Format .ico/.png/.svg,
-                  maksimal 15 KB. */ ?>
-          <div class="section-title mt-2">Favicon (ikon tab peramban)</div>
-          <?php
-            $favPath = favicon_path();
-            $favExt  = $favPath !== '' ? strtolower(pathinfo($favPath, PATHINFO_EXTENSION)) : '';
-            $favBytes = $favPath !== '' ? (int)@filesize($favPath) : 0;
-          ?>
-          <div class="flex flex-wrap gap-lg" style="align-items:flex-start">
-            <div style="min-width:150px">
-              <div style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center">
-                <img src="<?= e(favicon_url()) ?>" alt="Favicon" style="max-height:64px;max-width:64px">
-              </div>
-              <div class="small muted mt-1">
-                <?php if ($favPath !== ''): ?>
-                  Favicon Anda · .<?= e($favExt) ?> · <?= num(round($favBytes / 1024, 1), 1) ?> KB
-                <?php else: ?>
-                  Masih memakai ikon bawaan aplikasi.
-                <?php endif; ?>
-              </div>
-            </div>
-            <div class="grow">
-              <form method="post" enctype="multipart/form-data">
-                <?= csrf_field() ?><input type="hidden" name="action" value="favicon">
-                <div class="field"><label>Unggah Favicon Baru</label>
-                  <input class="input" type="file" name="favicon" accept=".ico,.png,.svg,image/x-icon,image/png,image/svg+xml" required>
-                  <span class="hint">Format <strong>.ico / .png / .svg</strong> saja (format .jpg tidak dipakai peramban
-                    untuk favicon), maksimal <strong><?= num(favicon_max_kb()) ?> KB</strong>. Ukuran <strong>32×32</strong> atau
-                    <strong>64×64 px</strong> sudah cukup — berkas lebih besar ditolak, bukan dipotong diam-diam.</span></div>
-                <button class="btn btn-primary btn-sm" type="submit"><?= icon('upload') ?> Simpan Favicon</button>
-              </form>
-              <?php if ($favPath !== ''): ?>
-              <form method="post" class="mt-1" data-confirm="Hapus favicon dan kembalikan ke ikon bawaan aplikasi?">
-                <?= csrf_field() ?><input type="hidden" name="action" value="favicon_remove">
-                <button class="btn btn-sm" type="submit">Hapus Favicon</button>
-              </form>
-              <?php endif; ?>
-              <div class="notice mt-2">Favicon tampil sebagai ikon di <strong>tab peramban</strong>, penanda
-                halaman favorit, dan ikon saat aplikasi dipasang di layar utama HP. Logo klinik tidak berubah
-                oleh favicon — keduanya diatur terpisah.</div>
-            </div>
+          <div class="media-actions">
+            <?php if (brand_logo_src() !== ''): ?>
+            <button class="btn btn-sm" type="submit" form="logoRemoveForm"
+                    data-confirm="Hapus logo dan kembalikan ke logo bawaan sistem?">Hapus Logo</button>
+            <?php endif; ?>
           </div>
           <?php if ($logoDim && !$logoCached && ($logoDim['width'] > 2000 || $logoDim['height'] > 2000)): ?>
-            <div class="alert alert-warning mt-2">
+            <div class="alert alert-warning" style="margin-top:8px">
               Logo saat ini berukuran <strong><?= num($logoDim['width']) ?>×<?= num($logoDim['height']) ?> px</strong> —
               jauh lebih besar dari yang dibutuhkan (600×600 px sudah sangat cukup). Gambar sebesar ini membuat
               pembuatan PDF lambat, sehingga <strong>logo tidak dicetak di struk/laporan PDF</strong> sampai
@@ -1039,8 +998,64 @@ foreach ([2, 7, 12, 24] as $cgN) {
               (maksimal 2000×2000 px) — unggahan akan otomatis menyiapkan versi kecilnya.
             </div>
           <?php endif; ?>
+          <div class="media-note">Logo ini otomatis dipakai di sidebar, halaman login, struk, dan dokumen laporan.</div>
+          </div>
+        </div><!-- /media-row logo -->
+
+        <?php /* ================= FAVICON =================
+                Ikon kecil di TAB PERAMBAN — memakai baris media yang SAMA dengan logo
+                supaya sejajar rapi. Format .ico/.png/.svg, maksimal 15 KB. */ ?>
+        <?php
+          $favPath = favicon_path();
+          $favExt  = $favPath !== '' ? strtolower(pathinfo($favPath, PATHINFO_EXTENSION)) : '';
+          $favBytes = $favPath !== '' ? (int)@filesize($favPath) : 0;
+        ?>
+        <div class="section-title">Favicon (ikon tab peramban)</div>
+        <div class="media-row">
+          <div class="media-preview">
+            <div class="media-thumb sq">
+              <img src="<?= e(favicon_url()) ?>" alt="Favicon">
+            </div>
+            <div class="media-meta">
+              <?php if ($favPath !== ''): ?>
+                Favicon Anda · .<?= e($favExt) ?> · <?= num(round($favBytes / 1024, 1), 1) ?> KB
+              <?php else: ?>
+                Masih memakai ikon bawaan aplikasi.
+              <?php endif; ?>
+            </div>
+          </div>
+          <div class="media-form">
+            <form method="post" enctype="multipart/form-data">
+              <?= csrf_field() ?><input type="hidden" name="action" value="favicon">
+              <div class="field"><label>Unggah Favicon Baru</label>
+                <input class="input" type="file" name="favicon" accept=".ico,.png,.svg,image/x-icon,image/png,image/svg+xml" required>
+                <span class="hint">Format <strong>.ico / .png / .svg</strong> saja (format .jpg tidak dipakai peramban
+                  untuk favicon), maksimal <strong><?= num(favicon_max_kb()) ?> KB</strong>. Ukuran <strong>32×32</strong> atau
+                  <strong>64×64 px</strong> sudah cukup — berkas lebih besar ditolak, bukan dipotong diam-diam.</span></div>
+              <div class="media-actions">
+                <button class="btn btn-primary btn-sm" type="submit"><?= icon('upload') ?> Simpan Favicon</button>
+                <?php if ($favPath !== ''): ?>
+                <button class="btn btn-sm" type="submit" form="faviconRemoveForm"
+                        data-confirm="Hapus favicon dan kembalikan ke ikon bawaan aplikasi?">Hapus Favicon</button>
+                <?php endif; ?>
+              </div>
+            </form>
+            <div class="media-note">Favicon tampil sebagai ikon di <strong>tab peramban</strong>, penanda halaman
+              favorit, dan ikon saat aplikasi dipasang di layar utama HP. Logo klinik tidak berubah oleh favicon —
+              keduanya diatur terpisah.</div>
+          </div>
         </div>
-      </div>
+
+        <?php /* Formulir aksi TERPISAH (dipanggil tombol lewat atribut `form=`) — supaya
+                tidak ada formulir bersarang di dalam formulir unggahan. */ ?>
+        <?php if (brand_logo_src() !== ''): ?>
+        <form method="post" id="logoRemoveForm"><?= csrf_field() ?>
+          <input type="hidden" name="action" value="logo_remove"></form>
+        <?php endif; ?>
+        <?php if ($favPath !== ''): ?>
+        <form method="post" id="faviconRemoveForm"><?= csrf_field() ?>
+          <input type="hidden" name="action" value="favicon_remove"></form>
+        <?php endif; ?>
     </div>
     <form method="post">
       <?= csrf_field() ?><input type="hidden" name="action" value="company">

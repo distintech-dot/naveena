@@ -368,6 +368,98 @@
       const v = h.length === 3 ? h[0] + h[0] + h[1] + h[1] + h[2] + h[2] : h;
       const n = parseInt(v, 16);
       return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + (alpha == null ? 1 : alpha) + ')';
+    },
+    /**
+     * ==================================================================
+     * KETERANGAN PANJANG DILIPAT (ronde 77) — khusus tampilan HP.
+     *
+     * Permintaan pemilik: "Rapikan teks bantuan/keterangan di bawah kolom.
+     * Keterangan panjang yang tidak penting boleh dibuat collapsible, tetapi
+     * jangan dihapus."
+     *
+     * Cara kerjanya: setiap `.hint`/`.field .hint` yang isinya LEBIH dari
+     * `minPanjang` huruf diberi kelas `hint-collapsed` + tombol
+     * "Selengkapnya". Pelipatannya hanya berlaku di layar ≤640px (lihat app.css),
+     * jadi tampilan desktop tetap menampilkan keterangan utuh. ISI KETERANGAN
+     * TIDAK PERNAH DIHAPUS — hanya dipotong tampilannya (3 baris) dan dapat
+     * dibuka lagi; tombolnya `type="button"` sehingga tidak mengirim formulir.
+     * ==================================================================
+     */
+    hintCollapse(minPanjang) {
+      /* Ambang 110 huruf: pada HP keterangan sepanjang itu sudah memakan ±3 baris
+         (diukur pada layar 390px), jadi layak dilipat — tetap dapat dibuka. */
+      const batas = Number(minPanjang) || 110;
+      /* Pelipatan HANYA untuk layar HP (≤640px). Di desktop/tablet keterangan
+         tetap tampil utuh dan kelas pelipatannya dibersihkan kembali (mis. saat
+         jendela diperkecil lalu diperbesar lagi). */
+      const hp = window.matchMedia && window.matchMedia('(max-width:640px)').matches;
+      if (!hp) {
+        document.querySelectorAll('.field .hint.hint-collapsed').forEach((h) => {
+          h.classList.remove('hint-collapsed', 'hint-open');
+          delete h.dataset.hintReady;
+          const t = h.nextElementSibling;
+          if (t && t.classList && t.classList.contains('hint-toggle')) t.remove();
+        });
+        return 0;
+      }
+      /* HANYA keterangan milik sebuah kolom isian (`.field .hint`) yang dilipat.
+         Peringatan/penjelasan penting yang berdiri sendiri (`.notice`, `.alert`,
+         halaman pemeliharaan) TIDAK disentuh sama sekali — keterangan yang
+         mengancam data harus selalu terbaca penuh. */
+      const daftar = Array.prototype.slice.call(document.querySelectorAll('.field .hint'));
+      let dilipat = 0;
+      daftar.forEach((h) => {
+        if (h.dataset.hintReady === '1') return;      // jangan dipasang dua kali
+        h.dataset.hintReady = '1';
+        if (h.closest('.notice,.alert,.maint-banner')) return;
+        const teks = (h.textContent || '').trim();
+        if (teks.length < batas) return;
+        /* Keterangan yang memuat KOLOM ISIAN atau TOMBOL tidak dilipat (isinya
+           dipakai untuk mengisi/menekan sesuatu). Tautan (`<a>`) BOLEH ikut
+           dilipat: isinya tetap dapat dijangkau dengan menekan "Selengkapnya". */
+        if (h.querySelector('input,select,textarea,button')) return;
+        h.classList.add('hint-collapsed');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'hint-toggle';
+        btn.textContent = 'Selengkapnya';
+        btn.setAttribute('aria-expanded', 'false');
+        btn.addEventListener('click', () => {
+          const terbuka = h.classList.toggle('hint-open');
+          btn.textContent = terbuka ? 'Ringkas' : 'Selengkapnya';
+          btn.setAttribute('aria-expanded', terbuka ? 'true' : 'false');
+        });
+        h.insertAdjacentElement('afterend', btn);
+        dilipat++;
+      });
+      return dilipat;
+    },
+    /**
+     * ==================================================================
+     * PETUNJUK GESER KALENDER (ronde 77).
+     *
+     * Kalender reservasi di HP memakai kolom tanggal 68px sehingga lebarnya
+     * melebihi layar dan bergeser ke samping DI DALAM wadahnya sendiri. Fungsi
+     * ini menampilkan satu baris petunjuk HANYA bila kalender memang perlu
+     * digeser (di tablet/desktop tidak tampil sama sekali).
+     * ==================================================================
+     */
+    calScroll() {
+      const wraps = Array.prototype.slice.call(document.querySelectorAll('.cal-scroll'));
+      wraps.forEach((w) => {
+        const perlu = w.scrollWidth > w.clientWidth + 2;
+        const induk = w.parentElement;
+        let hint = induk ? induk.querySelector('.cal-hint') : null;
+        if (!perlu) { if (hint) hint.classList.add('off'); return; }
+        if (!hint) {
+          hint = document.createElement('p');
+          hint.className = 'cal-hint';
+          hint.innerHTML = '<span class="arw">&#8596;</span> Geser kalender ke samping untuk melihat hari lainnya.';
+          w.insertAdjacentElement('beforebegin', hint);
+        }
+        hint.classList.remove('off');
+      });
+      return wraps.length;
     }
   };
 
@@ -622,6 +714,9 @@
   document.addEventListener('DOMContentLoaded', function () {
     window.Naveena.tableScroll();
     window.Naveena.tableDragScroll();
+    /* Keterangan panjang dilipat & kalender diberi petunjuk geser (ronde 77). */
+    window.Naveena.hintCollapse();
+    window.Naveena.calScroll();
     /* Tabel yang dibangun JavaScript (mis. baris item pada Order Baru) atau
        lebar layar berubah ikut diperiksa, tanpa perlu memanggil ulang manual. */
     const refresh = () => {
@@ -631,6 +726,8 @@
         /* Tabel baru (dibangun JavaScript) juga mendapat fitur geser-tahan-klik;
            fungsi ini melewati wadah yang sudah dipasangi agar tidak dobel. */
         window.Naveena.tableDragScroll();
+        window.Naveena.hintCollapse();
+        window.Naveena.calScroll();
       }, 120);
     };
     window.addEventListener('resize', refresh);

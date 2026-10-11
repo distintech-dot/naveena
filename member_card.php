@@ -126,7 +126,9 @@ page_head('Kartu Member — ' . $p['name'], 'pasien');
   </div>
 <?php endif; ?>
 
-<div class="card">
+<?php /* id dipakai tata letak HP: pratinjau kartu memakai lebar penuh halaman
+   (rongga kartu ditiadakan) supaya kartu tidak makin kecil di layar HP. */ ?>
+<div class="card" id="kartuMemberPreview">
   <div class="card-head">
     <h3>Pratinjau Kartu</h3>
     <span class="muted">Ukuran kartu standar (85,6 × 54 mm) · 2 sisi · siap dicetak</span>
@@ -150,15 +152,24 @@ page_head('Kartu Member — ' . $p['name'], 'pasien');
               <?php endif; ?>
               <div class="mcard-line"></div>
             </div>
-            <div class="mcard-id">
-              <div class="mcard-name"><?= e($p['name']) ?></div>
-              <div class="mcard-level">Member Card - <?= e($level['label']) ?></div>
-            </div>
-            <div class="mcard-rows">
-              <div><span>No. Member</span><strong><?= e($p['member_number']) ?></strong></div>
-              <div><span>No. Pasien</span><strong><?= e($p['patient_number']) ?></strong></div>
-              <div><span>Member Sejak</span><strong><?= e(tglIndo($since)) ?></strong></div>
-              <div><span>Cabang</span><strong><?= e($p['branch_name']) ?></strong></div>
+            <?php /* KELOMPOK INFORMASI DI TENGAH (permintaan pemilik, ronde 74):
+                    nama, level, nomor member/pasien, tanggal, dan cabang disusun sebagai
+                    SATU kelompok yang dipusatkan secara VERTIKAL di area bebas di bawah
+                    garis pink — memakai `flex:1` + `justify-content:center`, bukan
+                    margin/padding tetap. Karena itu jarak kosong di atas kelompok dan di
+                    bawahnya selalu SEIMBANG, dan bila nama/cabang membungkus menjadi
+                    beberapa baris tingginya bertambah tanpa keluar dari kartu. */ ?>
+            <div class="mcard-body">
+              <div class="mcard-id">
+                <div class="mcard-name"><?= e($p['name']) ?></div>
+                <div class="mcard-level">Member Card - <?= e($level['label']) ?></div>
+              </div>
+              <div class="mcard-rows">
+                <div><span>No. Member</span><strong><?= e($p['member_number']) ?></strong></div>
+                <div><span>No. Pasien</span><strong><?= e($p['patient_number']) ?></strong></div>
+                <div><span>Member Sejak</span><strong><?= e(tglIndo($since)) ?></strong></div>
+                <div><span>Cabang</span><strong><?= e($p['branch_name']) ?></strong></div>
+              </div>
             </div>
           </div>
         </div>

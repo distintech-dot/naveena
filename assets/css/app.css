@@ -264,7 +264,14 @@ p{margin:.35rem 0}
 .section-title{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-2);font-weight:700;margin:26px 0 12px}
 
 /* ---------- Buttons ---------- */
-.btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;color:var(--ink);
+/* PENTING: `line-height` diset EKSPLISIT (1,45 — mendekati line-height body yang
+   sudah dipakai sebelumnya, jadi tinggi tombol TIDAK menyusut). Tanpa ini,
+   `<a class="btn">` mewarisi line-height body (±1,42) sedangkan `<button class="btn">`
+   memakai `normal` (lebih kecil) sehingga keduanya BEDA TINGGI ±2px walau kelasnya
+   sama — itulah sebab sederetan tombol pada baris yang sama tampak tidak sejajar
+   ("tidak nyambung"). Dijaga uji `ronde73_check.js` (semua tombol dalam satu
+   kelompok aksi wajib sama tinggi, selisih maksimal 1px). */
+.btn{display:inline-flex;align-items:center;justify-content:center;line-height:1.45;gap:8px;border:1px solid var(--line);background:#fff;color:var(--ink);
   padding:9px 15px;border-radius:11px;font-size:.86rem;font-weight:600;cursor:pointer;text-decoration:none;transition:.15s;font-family:inherit}
 .btn:hover{text-decoration:none;border-color:var(--pink-soft);color:var(--magenta)}
 .btn-primary{background:var(--btn-grad);border-color:transparent;color:#fff;box-shadow:0 6px 16px rgba(194,24,91,.25)}
@@ -298,6 +305,29 @@ textarea.input{min-height:96px;resize:vertical}
 .inline-form{display:inline-flex;gap:8px;align-items:center;margin:0}
 .filter-bar{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;padding:16px 20px;border-bottom:1px solid var(--line);background:var(--brand-tint)}
 .filter-bar .field{min-width:150px}
+/* ==================================================================
+   SATU TINGGI UNTUK SELURUH KONTROL DI BILAH FILTER (ronde 73)
+   ------------------------------------------------------------------
+   Permintaan pemilik: "cek juga tombol lain yang tidak sinkron yang mungkin saya
+   terlewat". Terukur sebelum perbaikan: dalam SATU bilah filter ada sampai LIMA
+   tinggi berbeda (24px tombol · 27px input tanggal · 29px pemilih · 30–32px input
+   lain) karena `.input`, `.input-sm`, `select`, dan `.btn` masing-masing punya
+   padding & min-height sendiri. Sekarang semuanya mengikuti SATU nilai
+   (`--filter-h`), sehingga deretan filter sejajar rapi.
+   Di HP nilainya 40px (kolom isian wajib ≥40px — dijaga uji), di desktop 34px. */
+.filter-bar{--filter-h:34px}
+.filter-bar .input,
+.filter-bar select.input,
+.filter-bar input.input,
+.filter-bar .input-sm,
+.filter-bar select.input-sm,
+.filter-bar textarea.input,
+.filter-bar .btn,
+.filter-bar .btn-sm{
+  height:var(--filter-h);min-height:0;padding-top:0;padding-bottom:0;box-sizing:border-box;
+}
+.filter-bar .inline-form,.filter-bar form{height:var(--filter-h);align-items:center}
+.filter-bar .btn{display:inline-flex;align-items:center}
 .req{color:var(--pink)}
 fieldset{border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:0}
 legend{padding:0 6px;font-size:.78rem;font-weight:700;color:var(--ink-2);text-transform:uppercase;letter-spacing:.08em}
@@ -334,7 +364,25 @@ body.table-dragging{user-select:none;-webkit-user-select:none}
    setelan `finance_calc_max_px` supaya kartu tidak memanjang ke bawah saat pos
    biaya atau cabang bertambah — isinya tetap dapat digulir seperti tabel biasa.
    Lebar tetap punya guliran sendiri (sumbu X) seperti tabel lain. */
-.table-wrap.scroll-y{overflow-y:auto;overscroll-behavior-y:contain;scrollbar-width:thin}
+/* PENTING (ronde 78) — GULIRAN HARUS LANJUT KE HALAMAN (keluhan pemilik:
+   "kartu perhitungan laporan lengkap tidak bisa discroll ke atas bawah dan
+   beberapa tabel kartu juga sama — kalau sudah mentok di dalam tabel harus bisa
+   lanjut scroll").
+   Penyebabnya `overscroll-behavior`: begitu wadah dapat digulir DUA ARAH, nilai
+   `contain` (termasuk `overscroll-behavior-x` dari `.table-wrap`) membuat guliran
+   TIDAK diteruskan ke halaman sehingga terasa terkunci — dibuktikan dengan uji
+   peramban: `contain` → halaman tetap diam, `auto` → halaman lanjut 754px.
+   Karena itu wadah ber-batas-tinggi (`.table-wrap.scroll-y`) memakai
+   `overscroll-behavior:auto` (kedua sumbu) sehingga tabel digulir lebih dulu lalu
+   halaman lanjut. Untuk wadah yang HANYA mendatar (tabel biasa, tingginya mengikuti
+   isi) `overscroll-behavior-x:contain` tetap dipakai — pada kasus itu guliran tegak
+   tidak pernah tertahan (juga sudah dibuktikan dengan uji peramban). */
+.table-wrap.scroll-y{overflow-y:auto;overscroll-behavior:auto;scrollbar-width:thin}
+/* PENGAMAN (ronde 78): wadah tabel yang tingginya dibatasi lewat atribut `style`
+   sebaris (mis. `style="max-height:360px"`) juga WAJIB memakai perilaku `auto`,
+   supaya tidak ada satu pun tabel yang "terkunci" saat gulirannya mentok.
+   Pemilih atribut dipakai karena nilainya ditulis sebaris (tidak terlihat CSS). */
+.table-wrap[style*="max-height"]{overscroll-behavior:auto}
 /* Keterangan gulir memakai blok biasa (BUKAN flex): di dalam flex, potongan teks
    antar elemen menjadi item yang tidak boleh membungkus sehingga keterangan ini
    bisa melebarkan halaman di layar sempit (≤320px). */
@@ -371,11 +419,57 @@ table.tbl td.num,table.tbl th.num{text-align:right;font-variant-numeric:tabular-
    tetap aman (tidak membuat halaman bergeser). */
 .row-actions{display:flex;gap:6px;flex-wrap:nowrap;align-items:center}
 .row-actions > *{flex:0 0 auto}
+/* Formulir pembungkus (ubah status / hapus / aktifkan) TIDAK boleh lebih tinggi
+   maupun lebih rendah daripada tombol di sebelahnya: tingginya dipatok sama dengan
+   kelompok aksi supaya semua tombol benar-benar satu baris & sejajar. */
 .row-actions form,
-.row-actions .inline-form{display:inline-flex;margin:0;align-items:center;gap:0}
+.row-actions .inline-form{display:inline-flex;margin:0;align-items:center;gap:0;height:100%}
 .row-actions .input,
 .row-actions select.input,
 .row-actions select.input-sm{width:auto;max-width:180px;min-width:0;flex:0 0 auto}
+/* ==================================================================
+   KELOMPOK AKSI BARIS TABEL — SATU TINGGI, RAPAT, SEJAJAR (ronde 73)
+   ------------------------------------------------------------------
+   Permintaan pemilik: "tombol status masih terlihat besar dan tombol yang lain
+   seperti Lihat/Edit/WA/Email masih terpisah tidak nyambung dengan tombol status,
+   melompat sendiri dari kartu tabel."
+   Penyebab yang terukur:
+     • `select` status = 29px (desktop) / 40px (HP) dengan huruf 16px sedangkan
+       tombol lain 22,6px (desktop) / 32px (HP) → tampak besar & tidak sejajar;
+     • `<a class="btn">` 4px lebih tinggi daripada `<button class="btn">`;
+     • form pembungkus setinggi select sehingga menggeser tombol lain.
+   Perbaikannya: SEMUA anak kelompok aksi dipatok tinggi yang SAMA (34px desktop —
+   sama dengan ukuran yang sudah biasa dilihat pemilik — dan 32px di HP) serta
+   disusun center, sehingga tidak ada lagi tombol yang "melompat" dari barisnya. Huruf `select` TETAP 16px di HP (anti-zoom iOS) —
+   jadi yang mengecil hanya KOTAKNYA, bukan hurufnya. */
+/* SISTEM SATU TINGGI: setiap KELOMPOK AKSI mendefinisikan `--aksi-h`, lalu SELURUH
+   isinya (tombol, tautan bertombol, pemilih, dan form pembungkus) dipatok setinggi
+   nilai itu. Konsekuensinya: apa pun jenis elemennya — `<a>`, `<button>`, `<select>`,
+   atau `<form>` — tingginya SAMA dan sejajar, sehingga tidak ada lagi tombol yang
+   "melompat" dari barisnya. Nilai di HP ditimpa pada blok ≤640px. */
+.row-actions,
+.page-actions,
+.card-head,
+.lm-actions,
+.fc-actions{--aksi-h:34px}
+.card-head{--aksi-h:30px}
+.lm-actions,.fc-actions{--aksi-h:32px}
+.row-actions > .btn, .row-actions .btn, .row-actions .btn-sm,
+.row-actions select, .row-actions .input, .row-actions .input-sm,
+.row-actions form, .row-actions .inline-form,
+.page-actions .btn, .page-actions .btn-sm, .page-actions select,
+.page-actions .input, .page-actions .input-sm, .page-actions form, .page-actions .inline-form,
+.card-head .btn, .card-head .btn-sm, .card-head select,
+.card-head .input, .card-head .input-sm, .card-head form, .card-head .inline-form,
+.lm-actions .btn, .lm-actions .btn-sm, .lm-actions form,
+.fc-actions .btn, .fc-actions .btn-sm, .fc-actions form{
+  height:var(--aksi-h);min-height:0;padding-top:0;padding-bottom:0;box-sizing:border-box;
+}
+.row-actions select, .page-actions select, .card-head select{
+  /* Pemilih di dalam kelompok aksi: kotaknya seramping tombol, HURUF tetap 16px
+     saat di HP (anti-zoom iOS) — yang mengecil hanya kotaknya. */
+  padding-left:8px;padding-right:6px;
+}
 /* Sorotan sementara (mis. bagian pemetaan setelah file import dibaca). */
 .flash-target{box-shadow:0 0 0 3px rgba(233,30,99,.28)!important;transition:box-shadow .2s}
 
@@ -695,13 +789,16 @@ table.tbl tbody tr.o-over .qty-hint,table.tbl tbody tr.o-over .o-stock-warn{colo
   width:100%;height:100%;font-size:clamp(.78rem,4.4cqw,1.2rem);font-weight:800;line-height:1;
   letter-spacing:0;color:rgba(255,255,255,.96);text-transform:uppercase;text-align:center}
 .mcard-tag i{font-style:normal;display:block}
-/* Isi kartu disusun TIGA kelompok dan jaraknya dibagi rata (space-between):
-   (1) logo, (2) nama + "Member Card - level", (3) rincian nomor/cabang.
-   Dengan begitu ruang kosong tidak menumpuk di satu tempat sehingga kartu
-   terlihat proporsional (dulu logo diposisikan absolute sehingga bertumpuk
-   dengan tulisan MEMBER di pita kiri). */
+/* Isi kartu disusun DUA bagian (permintaan pemilik, ronde 74):
+   (1) KEPALA — logo + garis pink, selalu di bagian atas;
+   (2) KELOMPOK INFORMASI — nama, level, nomor member/pasien, tanggal, cabang —
+       dipusatkan VERTIKAL di area tersisa di bawah garis pink oleh `.mcard-body`
+       (`flex:1` + `justify-content:center`), jadi ruang kosong atas = bawah.
+   TIDAK memakai margin/padding atas tetap, sehingga nama/cabang yang membungkus
+   2 baris tetap terpusat. (Dulu `space-between` → kelompok teks menempel dasar
+   kartu dan ruang kosong menumpuk di tengah.) */
 .mcard-front-body{position:relative;z-index:1;padding:6% 5.5% 6% 5%;display:flex;flex-direction:column;
-  justify-content:space-between;gap:1.5%;min-width:0}
+  justify-content:flex-start;gap:0;min-width:0}
 .mcard.has-bg .mcard-front-body{padding-left:6%}
 /* Logo di bagian ATAS kartu (di atas garis), bukan lagi menumpuk di pita kiri. */
 .mcard-logo{display:flex;align-items:center;min-height:0;flex:0 0 auto}
@@ -713,6 +810,12 @@ table.tbl tbody tr.o-over .qty-hint,table.tbl tbody tr.o-over .o-stock-warn{colo
 .mcard-head{display:flex;flex-direction:column;gap:clamp(6px,3cqw,14px)}
 .mcard-line{height:2px;background:var(--mcard-brand,#C2185B);border-radius:2px;flex:0 0 auto}
 .mcard-id{display:flex;flex-direction:column;gap:2%}
+/* Wadah kelompok informasi: mengambil SEMUA tinggi sisa di bawah garis pink lalu
+   memusatkan isinya secara vertikal (ruang atas = ruang bawah). */
+.mcard .mcard-body{
+  flex:1 1 auto;min-height:0;display:flex;flex-direction:column;justify-content:center;
+  gap:clamp(4px,2.4cqw,12px);
+}
 .mcard-name{font-size:clamp(.85rem,3.1cqw + .6rem,1.18rem);font-weight:800;line-height:1.15;color:#000;
   overflow-wrap:anywhere;word-break:break-word;max-height:2.4em;overflow:hidden}
 .mcard-level{font-size:clamp(.6rem,1.5cqw + .45rem,.78rem);font-weight:750;letter-spacing:.03em;color:#000}
@@ -721,7 +824,13 @@ table.tbl tbody tr.o-over .qty-hint,table.tbl tbody tr.o-over .o-stock-warn{colo
 .mcard-rows span{display:block;font-size:clamp(.5rem,1cqw + .38rem,.62rem);letter-spacing:.05em;
   text-transform:uppercase;color:#444}
 .mcard-rows strong{display:block;font-size:clamp(.62rem,1.2cqw + .5rem,.84rem);color:#000;overflow-wrap:anywhere}
-.mcard-back{position:absolute;inset:0;padding:5% 6%;display:flex;flex-direction:column;gap:2%;min-width:0}
+/* SISI BELAKANG (ronde 74): seluruh kelompok informasi (judul → garis → daftar
+   level → garis → ketentuan) DIPUSATKAN vertikal sehingga ruang kosong atas &
+   bawah seimbang, dengan jarak konsisten — garis diberi rongganya sendiri supaya
+   tulisan tidak rapat dengan garis. */
+.mcard-back{position:absolute;inset:0;padding:5% 6%;display:flex;flex-direction:column;
+  justify-content:center;gap:clamp(2px,1.4cqw,8px);min-width:0}
+.mcard-back > .mcard-line{margin:clamp(1px,.9cqw,6px) 0}
 .mcard-back-title{font-size:clamp(.66rem,1.6cqw + .5rem,.9rem);font-weight:800;letter-spacing:.04em;color:#000}
 .mcard-benefits{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1%}
 .mcard-benefits li{font-size:clamp(.56rem,1.3cqw + .42rem,.76rem);color:#000;line-height:1.3}
@@ -1070,17 +1179,12 @@ form.is-submitting{position:relative}
   .row-actions .btn-sm{min-height:36px}
 }
 
-/* ---------- Penutup: ukuran sentuh tombol kecil di HP ----------
-   Diletakkan paling akhir agar tidak tertimpa aturan `.row-actions .btn-sm`
-   pada blok tablet (spesifisitasnya lebih tinggi). */
-@media (max-width:640px){
-  .row-actions .btn-sm,
-  .filter-bar .btn-sm,
-  .pagination .btn-sm,
-  .card-head .btn-sm,
-  .page-actions .btn-sm{min-height:40px;padding:11px 14px;font-size:.84rem}
-  .row-actions{gap:8px}
-}
+/* ---------- CATATAN: ukuran tombol kecil di HP ----------
+   Blok lama di sini memaksa SEMUA tombol kecil di kelompok aksi menjadi
+   `min-height:40px` + padding lega, sehingga tombol menjadi besar dan berbeda
+   tinggi dengan pemilih status di baris tabel yang sama (keluhan pemilik).
+   Ukurannya kini diatur oleh SISTEM SATU TINGGI per kelompok aksi (lihat
+   "SISTEM SATU TINGGI" di atas) — jangan hidupkan kembali blok itu. */
 
 /* ---------- Daftar BIAYA OPERASIONAL (menu Keuangan) ----------
    SATU form untuk seluruh daftar (satu tombol Simpan di bawah) dan satu pillihan
@@ -1129,7 +1233,9 @@ form.is-submitting{position:relative}
    Kartu "Percakapan & Proses" dan "Rincian teknis" bisa menjadi sangat panjang
    (puluhan langkah / puluhan baris diff). Batas tinggi + gulir membuat halaman
    tidak memanjang ke bawah dan prosesnya tetap nyaman dibaca. */
-.ai-scrollbox{overflow-y:auto;overscroll-behavior:contain;padding-right:6px}
+.ai-scrollbox{overflow-y:auto;padding-right:6px}
+/* (ronde 78) tanpa `overscroll-behavior:contain` supaya guliran lanjut ke halaman
+   begitu kotak ini mentok ke atas/bawah — sama seperti tabel lain. */
 .ai-scrollbox::-webkit-scrollbar{width:10px}
 .ai-scrollbox::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px}
 .ai-scrollbox::-webkit-scrollbar-track{background:transparent}
@@ -1491,4 +1597,1133 @@ textarea.auto-grow{min-height:118px;max-height:56vh;overflow-y:auto;resize:verti
      (ikon + label pendek) dan tetap ramah sentuh. */
   .lm-actions .btn{padding:8px 10px;min-height:40px;font-size:.78rem}
   .lm-actions{gap:0}
+}
+
+/* ==================================================================
+   BARIS UNGGAHAN MEDIA (Logo & Favicon) — Identitas Klinik (ronde 73)
+   ------------------------------------------------------------------
+   Permintaan pemilik: "baris logo klinik & favicon icon belum rapi, rapikan".
+   Sebelumnya keduanya memakai susunan berbeda: pratinjau logo memakai
+   `.flex` dengan lebar tetap 190px sedangkan blok favicon DIBUNGKUS di dalam
+   kolom formulir logo, sehingga sejajarannya tidak sama dan terlihat berantakan.
+   Sekarang keduanya memakai komponen yang sama: KIRI pratinjau (kolom tetap),
+   KANAN formulir. Di HP susunannya menjadi mendatar (pratinjau kecil + keterangan)
+   supaya tidak memakan tinggi halaman.
+   ================================================================== */
+.media-row{display:grid;grid-template-columns:200px minmax(0,1fr);gap:18px;align-items:start}
+.media-row + .media-row{margin-top:14px}
+.media-row + .section-title{margin-top:18px}
+.media-preview{min-width:0}
+.media-thumb{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;
+  display:grid;place-items:center;min-height:96px}
+.media-thumb.dashed{border-style:dashed}
+.media-thumb img{max-height:70px;max-width:100%;width:auto;object-fit:contain}
+.media-thumb.sq img{max-height:64px;max-width:64px}
+.media-meta{font-size:.74rem;color:var(--ink-2);margin-top:6px;line-height:1.45;overflow-wrap:anywhere}
+.media-form{min-width:0}
+.media-form .field{margin-bottom:10px}
+.media-form .field:last-child{margin-bottom:0}
+.media-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
+.media-actions form{display:inline-flex;margin:0}
+.media-note{font-size:.74rem;color:var(--ink-2);line-height:1.5;margin-top:10px}
+@media (max-width:640px){
+  /* HP: pratinjau & keterangan berdampingan (hemat tinggi), formulir di bawahnya. */
+  .media-row{grid-template-columns:1fr;gap:8px}
+  .media-row + .media-row{margin-top:12px}
+  .media-row + .section-title{margin-top:14px}
+  .media-preview{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:center}
+  .media-thumb{padding:7px;min-height:56px;border-radius:10px}
+  .media-thumb img{max-height:44px}
+  .media-thumb.sq img{max-height:40px;max-width:40px}
+  .media-meta{margin-top:0;font-size:.72rem}
+  .media-actions{margin-top:6px}
+}
+
+/* ==================================================================
+   TAMPILAN HP YANG RINGKAS & KONSISTEN (ronde 73) — GLOBAL, SEMUA HALAMAN
+   ------------------------------------------------------------------
+   Permintaan pemilik: "Optimalkan UI/UX seluruh halaman Naveena khusus HP/mobile
+   agar lebih compact, rapi, profesional, dan nyaman digunakan… Tampilan HP terasa
+   seperti aplikasi mobile profesional, bukan tampilan desktop yang diperbesar."
+
+   ATURAN YANG TIDAK BOLEH DILANGGAR (dijaga `naveena_dev/test/responsive_check.js`):
+     • tabel TETAP berbentuk TABEL (bukan daftar kartu) dan digeser ke samping di
+       dalam `.table-wrap` — horizontal scroll hanya di dalam wadah tabel;
+     • huruf sel tabel ≥ 13px (batas keterbacaan);
+     • kolom isian (`input/select/textarea.input`) tinggi ≥ 40px & huruf 16px
+       (mencegah iOS memperbesar halaman saat mengetik);
+     • ikon topbar ≥ 40px;
+     • tidak ada satu pun halaman yang meluber ke samping.
+
+   YANG DIKECILKAN: huruf JUDUL/tombol AKSI, padding & jarak antarblok, tinggi
+   topbar, tinggi baris tabel (tombol aksi 32px & satu baris), serta area FILTER
+   (dua kolom, bukan satu kolom penuh per kolom filter).
+   Blok ini diletakkan PALING AKHIR berkas supaya menang atas blok ≤640px
+   sebelumnya (URUTAN yang menentukan bila spesifisitasnya sama; untuk selector
+   yang lebih spesifik — mis. `.grid:has(> .stat) .stat` — bentuk yang sama
+   diulang di sini seperti yang sudah dilakukan blok-blok sebelumnya).
+   ================================================================== */
+@media screen and (max-width:640px){
+  /* ---------------- 1. TIPOGRAFI (skala 17px: html = 17px di HP) ----------------
+     Judul halaman 17,3px · judul kartu 14,3px · isi tabel 13,3px · label 11,6px ·
+     keterangan 12,6px. Semua dalam rentang yang diminta pemilik. */
+  .page-head h2{font-size:1.02rem;line-height:1.3;letter-spacing:-.01em}
+  .card-head h3,.modal-head h3{font-size:.84rem;line-height:1.3}
+  h4,.chart-cap,.section-title{font-size:.7rem;letter-spacing:.08em}
+  .muted,.page-head p.muted,.card-head .muted{font-size:.76rem;line-height:1.45}
+  .small,.foot{font-size:.74rem}
+  .hint{font-size:.72rem;line-height:1.45}
+  .badge{font-size:.66rem;padding:2px 7px;border-radius:20px}
+  .pill{padding:3px 9px;font-size:.7rem}
+  .alert{padding:9px 11px;font-size:.76rem;border-radius:10px;margin-bottom:9px;line-height:1.5}
+  .notice{padding:9px 11px;font-size:.75rem;border-radius:10px;line-height:1.5}
+  /* Isi sel tabel TIDAK boleh < 13px walau memakai kelas pendamping `.small`
+     maupun `.muted` (ambang keterbacaan dijaga uji). Baris kosong ber-`colspan`
+     juga memakai `.muted`, jadi keduanya harus disamakan. */
+  table.tbl td.small,table.tbl td .small,table.tbl td.muted,table.tbl td .muted,
+  table.tbl th .small,table.tbl th .muted{font-size:.78rem}
+
+  /* ---------------- 2. KERANGKA HALAMAN: rapat tapi tidak sesak ---------------- */
+  .content{padding:10px 9px 20px}
+  .foot{padding:8px 10px 14px}
+  .page-head{margin-bottom:10px;gap:6px;align-items:flex-start}
+  .card{padding:10px;margin-bottom:10px;border-radius:12px}
+  .card.tight{padding:0}
+  .card-head{padding:8px 10px;gap:6px;flex-wrap:wrap}
+  .card-body{padding:10px}
+  .card-body.tight{padding:0}
+  .grid{gap:8px}
+  .grid + .card:not(.mt-0):not(.mt-1):not(.mt-2):not(.mt-3):not(.mt-4){margin-top:10px}
+  .grid + .table-wrap{margin-top:10px}
+  /* Dua `.grid` yang berdampingan (mis. Dashboard & Laporan) sebelumnya MENEMPEL
+     (jarak 0px) karena `.grid` hanya punya `gap` di dalam dirinya. Diberi jarak
+     yang sama dengan blok lain supaya irama vertikal halaman rata. */
+  .grid + .grid{margin-top:10px}
+  /* Judul bagian: 26px bawaan terlalu jauh di layar HP (irama lain 10px). */
+  .section-title{margin-top:14px}
+  .mt-1{margin-top:6px}.mt-2{margin-top:8px}.mt-3{margin-top:12px}.mt-4{margin-top:16px}
+  .mb-2{margin-bottom:8px}.mb-3{margin-bottom:12px}
+  .gap-lg{gap:10px}
+  hr,.hr{margin:10px 0}
+
+  /* ---------------- 3. TOPBAR: dua baris, setipis mungkin ----------------
+     Baris 1: ☰ + judul halaman. Baris 2: pemilih cabang + ikon notifikasi/akun/keluar.
+     Tinggi tiap baris mengikuti ukuran sentuh minimal 40px (dijaga uji), jadi yang
+     dihemat adalah PADDING & JARAK (dulu 110px/3 baris → sekarang ±92px/2 baris). */
+  /* SATU BARIS: ☰ · judul (menyusut, dipotong dengan elipsis) · pemilih cabang ·
+     ikon notifikasi/akun/keluar. Judul lengkap tetap terlihat pada judul halaman di
+     bawah topbar, jadi memotongnya di sini tidak menghilangkan informasi. */
+  .topbar{padding:5px 8px;gap:6px;flex-wrap:nowrap}
+  .topbar-title{flex:1 1 auto;min-width:0}
+  .topbar-title h1{font-size:.92rem;line-height:1.2}
+  .crumb{font-size:.66rem;line-height:1.15}
+  .topbar-actions{width:auto;margin-left:auto;gap:5px;justify-content:flex-end;flex-wrap:nowrap;flex:0 0 auto}
+  .branch-switch{flex:0 1 auto;min-width:0;display:flex;max-width:132px}
+  .branch-switch select{width:100%;min-width:0;max-width:none;padding:8px 7px;font-size:16px}
+  .topbar-actions .icon-btn{flex:0 0 auto}
+  /* Ukuran sentuh ikon topbar TETAP 40px (dijaga uji) — yang dihemat padding/jarak. */
+  .icon-btn{width:40px;height:40px;border-radius:10px}
+  .icon-btn .ico{width:17px;height:17px;flex-basis:17px}
+  .mobile-only{width:40px;height:40px;border-radius:10px}
+  .bell .dot{font-size:.6rem;padding:0 4px;top:-4px;right:-4px}
+
+  /* ---------------- 4. FILTER: DUA KOLOM (bukan satu kolom penuh tiap kolom) ----
+     Sebelumnya setiap kolom filter memakai lebar penuh sehingga filter Riwayat Order
+     menjadi 10 baris (±1.000px). Sekarang dua kolom per baris, kolom pencarian tetap
+     penuh, dan tombol Filter/Reset + pemilih "per halaman" sebaris di bawah. */
+  .filter-bar{flex-direction:row;flex-wrap:wrap;align-items:flex-end;gap:7px;padding:9px 10px;--filter-h:40px}
+  .filter-bar .field{flex:1 1 calc(50% - 4px);min-width:0;width:auto;max-width:none}
+  .filter-bar .field.searchbox,.filter-bar .field.wide{flex-basis:100%}
+  .filter-bar .field > .input,.filter-bar .field select,.filter-bar .field input,
+  .filter-bar .field textarea{width:100%}
+  .filter-bar label{font-size:.68rem;letter-spacing:.02em;margin-bottom:2px}
+  .filter-bar .btn{width:auto;flex:0 1 auto}
+  .filter-bar > .btn,.filter-bar > a.btn{flex:0 0 auto}
+  .filter-bar > select.input{flex:1 1 calc(50% - 4px);width:auto}
+  .filter-bar .inline-form{width:auto;flex:1 1 calc(50% - 4px);display:flex;gap:7px;align-items:flex-end}
+  .filter-bar form.inline-form{width:auto}
+  .filter-bar .inline-form select,.filter-bar .inline-form .input{width:100%}
+  .filter-bar > .muted,.filter-bar > .hint,.filter-bar > .notice{flex:1 1 100%}
+  /* kolom isian filter: ringkas TETAPI tetap ≥40px & 16px (anti-zoom iOS) */
+  .input,select.input,textarea.input{font-size:16px;padding:9px 10px;min-height:40px;border-radius:10px}
+  .input-sm,select.input-sm{padding:9px 10px;font-size:16px;min-height:40px}
+  textarea.input{min-height:74px;line-height:1.45}
+  .input[type=file]{padding:7px 9px}
+
+  /* ---------------- 5. TOMBOL AKSI: ringkas, 12px, jarak 5px ----------------
+     `min-height:34px` (bukan 40) KHUSUS kelompok tombol AKSI (baris tabel, aksi
+     halaman, kepala kartu, filter, kaki sidebar) supaya baris tabel & susunan
+     tombol tidak lagi memakan tinggi. Tombol utama lain (Simpan/Batal di modal,
+     tombol formulir) TETAP ≥40px agar nyaman disentuh — lihat uji. */
+  .btn{min-height:40px;padding:9px 12px;font-size:.74rem;gap:6px;border-radius:10px}
+  .btn .ico{width:15px;height:15px;flex-basis:15px}
+  /* `.btn-sm` yang berdiri sendiri (tombol formulir, mis. "Tambah treatment")
+     TETAP 40px; yang ringkas hanya tombol di kelompok AKSI (daftar di bawah). */
+  .btn-sm{min-height:40px;padding:7px 10px;font-size:.72rem;border-radius:9px}
+  /* Aksi halaman disusun DUA KOLOM: label panjang dibungkus di dalam tombol
+     sehingga susunannya rata (dulu satu tombol per baris karena label panjang). */
+  /* Nilai tinggi kelompok aksi di HP (menggantikan nilai desktop di blok atas). */
+  .page-actions,.card-head,.lm-actions,.fc-actions{--aksi-h:32px}
+  .page-actions{width:100%;gap:5px;flex-wrap:wrap;display:flex}
+  .page-actions .btn,.page-actions .btn-sm{
+    flex:0 1 calc(50% - 3px);min-width:0;padding:0 9px;font-size:.72rem;gap:5px;
+    justify-content:center;text-align:center;white-space:normal;line-height:1.25
+  }
+  .page-actions .inline-form,.page-actions form{flex:0 1 calc(50% - 3px);min-width:0;margin:0}
+  .page-actions .inline-form .input,.page-actions form .input{width:100%}
+  .page-actions .btn .ico{width:14px;height:14px;flex-basis:14px}
+  .card-head .btn,.card-head .btn-sm{padding:0 9px;font-size:.71rem;gap:5px}
+  .card-head .btn .ico{width:13px;height:13px;flex-basis:13px}
+  /* Tombol filter DISAMAKAN dengan tinggi kolom isian (40px) supaya sejajar. */
+  .filter-bar .btn,.filter-bar .btn-sm{padding:0 11px;font-size:.73rem}
+  .sidebar-foot .btn,.sidebar-foot .btn-sm{min-height:36px;padding:7px 10px;font-size:.74rem}
+  .btn-block{width:100%}
+
+  /* ---------------- 6. TABEL: tetap TABEL, baris rendah, aksi SATU BARIS -------
+     Tabel TIDAK pernah berubah menjadi daftar kartu. Yang dirapatkan: padding sel,
+     tinggi tombol aksi (32px), dan aksi dipaksa SATU BARIS (`nowrap`) sehingga tinggi
+     baris turun (dulu 61px karena tombol 40px bertumpuk dua baris → sekarang ±46px).
+     Lebar tabel tetap mengikuti isinya; bila lebih lebar dari layar, ia digeser ke
+     samping DI DALAM `.table-wrap` (halaman tidak ikut bergeser). */
+  .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
+  .table-wrap table.tbl,table.tbl{font-size:.78rem}
+  table.tbl th,table.tbl td{padding:6px 8px;vertical-align:middle}
+  table.tbl th{font-size:.71rem;white-space:nowrap}
+  table.tbl td{line-height:1.4}
+  table.tbl th.num,table.tbl td.num{white-space:nowrap}
+  .row-actions{flex-wrap:nowrap;gap:5px;align-items:center;white-space:nowrap;--aksi-h:32px}
+  .row-actions .btn,.row-actions .btn-sm{
+    padding:0 8px;font-size:.71rem;gap:4px;border-radius:8px;flex:0 0 auto
+  }
+  .row-actions .btn .ico{width:13px;height:13px;flex-basis:13px}
+  .row-actions form{display:inline-flex;margin:0;height:32px}
+  /* Pemilih status di dalam baris tabel: KOTAKNYA dibuat seramping tombol (32px)
+     sementara HURUFNYA tetap 16px supaya iOS tidak memperbesar halaman saat
+     disentuh. Lebar dibatasi agar tidak mendorong tombol lain keluar kartu. */
+  .row-actions select,.row-actions .input-sm,.row-actions .input{
+    padding:0 7px;font-size:16px;width:auto;max-width:132px
+  }
+  .row-actions .badge{font-size:.62rem;padding:2px 6px}
+  .row-actions .lm-actions .btn{margin-left:4px}
+  .table-hint{padding:5px 9px 8px;font-size:.68rem}
+  .lm-actions .btn{padding:6px 9px;min-height:32px;font-size:.71rem}
+  /* Pagination ringkas (tombol nomor halaman). */
+  .pagination{padding:8px 9px;gap:5px;font-size:.74rem}
+  .pg{min-width:30px;height:30px;font-size:.74rem;border-radius:8px}
+
+  /* ---------------- 7. KARTU STATISTIK & GRAFIK (dashboard/laporan/keuangan) --- */
+  .stat,.grid:has(> .stat) .stat{padding:8px 9px;gap:2px;border-radius:10px}
+  .stat .val,.grid:has(> .stat) .stat .val{font-size:1rem;letter-spacing:-.01em}
+  .stat .lbl{font-size:.68rem;letter-spacing:.03em;line-height:1.25}
+  .stat .sub{font-size:.7rem;line-height:1.3}
+  .grid:has(> .stat){grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:7px}
+  .chart-box{height:170px}
+  .chart-box.sm{height:156px}
+  .chart-box.lg{height:184px}
+  .chart-cap{font-size:.7rem}
+  .card-head .flex{gap:5px;flex-wrap:wrap;justify-content:flex-end;min-width:0}
+
+  /* ---------------- 8. SUSUNAN KARTU: satu kartu satu baris untuk tabel/daftar/
+     formulir/grafik (statistik tetap 2 kolom). Aturan yang sama seperti blok
+     sebelumnya — termasuk pembungkusan `:where()` agar spesifisitasnya tidak
+     mengalahkan aturan "satu kartu satu baris" di bawahnya. */
+  .grid:has(> .card):not(:where(:has(.chart-box), :has(form), :has(.table-wrap), :has(.list-clean))){
+    grid-template-columns:repeat(2,minmax(0,1fr));gap:7px
+  }
+  .grid:has(> .card):has(.table-wrap),
+  .grid:has(> .card):has(table.tbl),
+  .grid:has(> .card):has(.list-clean),
+  .grid:has(> .card):has(form),
+  .grid:has(.chart-box),
+  form .grid:has(> .card){grid-template-columns:1fr;gap:8px}
+  .grid:has(> .card) > .card{margin-bottom:0}
+
+  /* ---------------- 9. SIDEBAR (laci di HP) ---------------------------------- */
+  .sidebar{width:236px}
+  .sidebar-head{padding:10px 10px 8px}
+  .sidebar .brand-img{padding:5px 8px;border-radius:10px}
+  .sidebar .brand-img .logo-img{height:22px;max-width:118px}
+  .sidebar .brand-text{max-width:calc(236px - 34px)}
+  .nav{padding:4px 8px 8px;gap:1px}
+  .nav-group{margin-top:7px}
+  .nav-group-title{padding:4px 8px;font-size:.6rem;letter-spacing:.09em}
+  .nav-link{padding:7px 9px;gap:8px;font-size:.79rem;border-radius:9px;min-height:40px}
+  .nav-link .ico{width:16px;height:16px;flex-basis:16px}
+  .sidebar-foot{padding:8px;gap:5px}
+  .sf-user{gap:7px}
+  .sf-meta strong{font-size:.77rem}
+  .sf-meta small{font-size:.66rem}
+  .sidebar .avatar{width:28px;height:28px;font-size:.76rem}
+
+  /* ---------------- 10. FORMULIR, MODAL, TAB & KOMPONEN LAIN ---------------- */
+  .form-grid{gap:8px}
+  .form-grid.g2,.form-grid.g3,.form-grid.g4{grid-template-columns:1fr}
+  .field{margin-bottom:8px}
+  .field label{font-size:.72rem;margin-bottom:3px}
+  .modal{padding:6px}
+  .modal-box{max-height:94vh;border-radius:12px}
+  .modal-head{padding:9px 11px}
+  .modal-body{padding:10px}
+  .modal-foot{padding:9px 11px;gap:6px;display:flex;flex-wrap:wrap}
+  .modal-foot .btn,.modal-foot .btn-sm{flex:1 1 44%}
+  .tabs{padding-bottom:2px}
+  .tab{padding:8px 11px;font-size:.75rem}
+  .empty,.empty-state{padding:16px 12px;font-size:.76rem}
+  .person-cell{gap:7px}
+  .person-cell .avatar{width:28px;height:28px;font-size:.74rem}
+  .photo-grid{grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:8px}
+  .cap{font-size:.7rem;line-height:1.4}
+  .cal{gap:3px}
+  .stat .notice{padding:5px 7px;font-size:.68rem}
+}
+
+/* ---------------- KARTU MEMBER DI HP (ronde 73) --------------------------------
+   Permintaan pemilik: "kartu member agar ukuran dan teks proporsional, seluruh isi
+   terlihat, tidak terpotong, serta tidak menyebabkan seluruh halaman mengecil".
+
+   DUA hal yang diperbaiki di sini:
+   1. JEBAKAN SPESIFISITAS: aturan tipografi HP di atas memakai `.muted`/`.small`
+      (spesifisitas 0,1,0) dan letaknya LEBIH AKHIR daripada aturan `.mcard-note`
+      di berkas ini — akibatnya catatan di sisi belakang kartu naik dari ±10,9px
+      menjadi 12,9px dan ISI KARTU TERPOTONG (terukur: butuh 225px di kartu 208px,
+      dan 238px di kartu 194px pada 360px). Perbaikannya: aturan kartu ditulis ulang
+      dengan selektor LEBIH SPESIFIK (`.mcard .mcard-note` dst).
+   2. Isi kartu memakai satuan `cqw` (lebar kartu sendiri) tetapi BATAS BAWAH
+      `clamp()` sebelumnya terlalu tinggi sehingga isi tidak ikut menyusut di layar
+      sempit. Batas bawah diturunkan + jarak dirapatkan + daftar level dibuat DUA
+      KOLOM + sisi belakang memakai rongga kartu lebih lega, sehingga SELURUH isi
+      kartu selalu masuk pada lebar 320–430px.
+   Kartu TETAP berbentuk kartu (rasio 85,6 × 54 mm) — tidak diubah menjadi lebih
+   pendek, dan halaman TIDAK diskalakan. */
+.mcard .mcard-back{gap:clamp(2px,1.1cqw,6px);padding:4.5% 5%}
+.mcard .mcard-back-title{font-size:clamp(.5rem,1.5cqw + .34rem,.9rem)}
+.mcard .mcard-benefits{gap:.5%}
+.mcard .mcard-benefits li{font-size:clamp(.44rem,1.15cqw + .3rem,.76rem);line-height:1.25}
+.mcard .mcard-note,.mcard .mcard-note.muted,.mcard .mcard-note.small{
+  font-size:clamp(.42rem,1.05cqw + .28rem,.68rem);line-height:1.3;margin:0
+}
+/* ---- SISI DEPAN: rongga & jarak dirapatkan supaya nama panjang + nama cabang
+   panjang tetap MUAT seluruhnya (dulu nama dipotong `max-height:2.4em`, dan
+   pada lebar 320–360px isi kartu masih meluber karena jarak baris rincian 9%). */
+.mcard .mcard-front-body{padding:5% 5% 5% 4.5%;gap:1%}
+.mcard .mcard-head{gap:clamp(3px,2cqw,10px)}
+.mcard .mcard-id{gap:1%}
+.mcard .mcard-rows{gap:4% 10px}
+.mcard .mcard-name{font-size:clamp(.7rem,2.9cqw + .42rem,1.12rem);line-height:1.14;max-height:3.42em}
+.mcard .mcard-level{font-size:clamp(.46rem,1.5cqw + .34rem,.78rem)}
+.mcard .mcard-rows span{font-size:clamp(.4rem,1cqw + .3rem,.62rem)}
+.mcard .mcard-rows strong{font-size:clamp(.5rem,1.2cqw + .38rem,.84rem)}
+.mcard .mcard-co{font-size:clamp(.46rem,1.7cqw + .3rem,.82rem)}
+.mcard .mcard-logo img{max-height:clamp(14px,6cqw,28px)}
+@media screen and (max-width:640px){
+  /* Pratinjau kartu memakai lebar penuh halaman (rongga kartu ditiadakan) supaya
+     kartu tidak makin kecil di layar HP. */
+  #kartuMemberPreview .card-body{padding:8px}
+  .mcard-set{gap:10px}
+  .mcard{border-radius:13px}
+  /* Daftar level DUA KOLOM pada layar sempit → hemat tinggi & semua tetap terbaca. */
+  .mcard .mcard-benefits{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2% 8px}
+  /* RUANG UNTUK NAMA & CABANG YANG MEMBUNGKUS (permintaan pemilik ronde 74:
+     "nama pasien atau cabang panjang hingga 2 baris … tetap di tengah").
+     Dengan nama 2 baris + nilai cabang 2 baris, isi kartu memerlukan lebih banyak
+     tinggi — karena itu ukuran huruf nama & jarak baris rincian dirapatkan di HP
+     supaya SELURUH isi tetap muat (terukur: sebelumnya kurang 7,2px pada 390px). */
+  .mcard .mcard-name{font-size:clamp(.62rem,2.4cqw + .38rem,1rem)}
+  .mcard .mcard-rows{gap:2.5% 8px}
+  .mcard .mcard-body{gap:clamp(3px,1.8cqw,9px)}
+  /* Ruang tambahan diambil dari KEPALA kartu (logo & jaraknya) — bagian dekoratif —
+     supaya huruf nama/level/rincian TIDAK perlu dikecilkan lagi (keterbacaan dijaga). */
+  .mcard .mcard-logo img{max-height:clamp(12px,5cqw,24px)}
+  .mcard .mcard-head{gap:clamp(2px,1.2cqw,7px)}
+  /* Rongga atas/bawah kartu dirapatkan sedikit (5% → 4%) untuk memberi ruang bagi
+     nama/cabang 2 baris — rongganya masih proporsional & seimbang. */
+  .mcard .mcard-front-body{padding:4% 4.5% 4% 4%}
+  .mcard .mcard-rows span{font-size:clamp(.38rem,.9cqw + .28rem,.58rem)}
+  .mcard .mcard-level{font-size:clamp(.44rem,1.3cqw + .32rem,.72rem)}
+  .mcard .mcard-tag{font-size:clamp(.62rem,3.4cqw,1.05rem)}
+  .mcard .mcard-logo img{max-height:clamp(16px,6.4cqw,28px)}
+}
+@media screen and (max-width:380px){
+  /* Layar sangat kecil: dua kolom daftar level tetap dipertahankan (lebih hemat tinggi),
+     tetapi jarak & rongga dirapatkan lagi supaya SELURUH isi tetap MUAT di dalam kartu
+     (kalau tidak, baris grid tumbuh melebihi tinggi kartu sehingga isi terpotong). */
+  .mcard .mcard-back{padding:4% 4.5%;gap:clamp(1px,.9cqw,5px)}
+  .mcard .mcard-benefits{gap:1% 6px}
+  /* Layar 320px: rongga & ukuran logo dirapatkan lagi supaya nama/cabang 2 baris
+     tetap muat (kartu hanya 270px lebar → tinggi isi 170px). */
+  .mcard .mcard-front-body{padding:2.6% 3.6% 2.6% 3.2%}
+  .mcard .mcard-logo img{max-height:clamp(11px,4.2cqw,18px)}
+  .mcard .mcard-body{gap:clamp(2px,1.4cqw,5px)}
+  .mcard .mcard-rows{gap:1.6% 6px}
+  /* Nama pasien dikecilkan sedikit lagi HANYA pada layar ≤380px (kartu 270px):
+     tetap terbaca (≥11px) tetapi blok 2 barisnya muat di kartu. */
+  .mcard .mcard-name{font-size:clamp(.58rem,2.1cqw + .34rem,.95rem)}
+  /* Nama dibatasi ±2,5 baris: permintaan pemilik menyebut nama panjang "hingga 2 baris". */
+  .mcard .mcard-name{max-height:2.9em}
+  .mcard .mcard-rows{gap:2.5% 7px}
+  .mcard .mcard-head{gap:clamp(2px,1.5cqw,7px)}
+}
+
+/* ---------------- HP SANGAT KECIL (≤380px): satu kolom bila benar-benar sempit --- */
+@media screen and (max-width:380px){
+  .content{padding:8px 7px 18px}
+  .card{padding:9px;margin-bottom:9px}
+  .card-head{padding:7px 9px}
+  .card-body{padding:9px}
+  .filter-bar .field{flex:1 1 100%}
+  .filter-bar > select.input{flex:1 1 100%}
+  .page-head h2{font-size:.98rem}
+  .row-actions .btn{padding:5px 7px;font-size:.69rem}
+  .stat .val,.grid:has(> .stat) .stat .val{font-size:.94rem}
+}
+
+/* ---------------- TABLET & "SITUS DESKTOP" DI IPHONE (641–1024px) ---------------
+   Rentang ini juga mencakup tampilan 980px (mode "Situs Desktop" di HP), jadi isinya
+   dirapatkan agar proporsional — bukan sekadar versi desktop yang diperkecil. */
+@media screen and (min-width:641px) and (max-width:1024px){
+  .content{padding:13px 13px 26px}
+  .card{padding:13px;margin-bottom:13px}
+  .card-head{padding:10px 13px}
+  .card-body{padding:13px}
+  .grid{gap:11px}
+  .stat{padding:11px}
+  .stat .val{font-size:1.2rem}
+  .stat .lbl{font-size:.72rem}
+  .filter-bar{padding:11px 13px;gap:9px;--filter-h:36px}
+  table.tbl th,table.tbl td{padding:7px 9px}
+  .row-actions{gap:5px}
+  .row-actions .btn,.row-actions .btn-sm{min-height:32px;padding:5px 9px;font-size:.72rem}
+  .page-actions{gap:6px}
+  .chart-box{height:200px}
+  .chart-box.sm{height:180px}
+  .chart-box.lg{height:215px}
+  .modal-box{border-radius:14px}
+}
+
+/* ==================================================================
+   SATU TINGGI UNTUK SETIAP KELOMPOK AKSI — BLOK FINAL (ronde 73)
+   ------------------------------------------------------------------
+   Permintaan pemilik: "tombol status masih terlihat besar dan tombol yang lain
+   seperti Lihat, Edit, WA, Email dll masih terpisah tidak nyambung dengan tombol
+   status… cek juga tombol lain yang tidak sinkron".
+
+   Blok ini SENGAJA diletakkan PALING AKHIR dan memakai `!important`: sebelum ini
+   ada BANYAK aturan lama di berbagai tempat (`.btn-sm{min-height:40px}` di blok
+   ≤640px, `.row-actions .btn-sm{min-height:36px}` di blok ≤1024px,
+   `select.input-sm{min-height:40px}`, dst.) yang saling menimpa sehingga dalam SATU
+   baris tabel tinggi tombol bisa berbeda-beda (terukur 32px vs 36px vs 40px).
+   Dengan satu nilai per kelompok, seluruh isi kelompok itu (tautan bertombol,
+   `<button>`, pemilih `<select>`, dan form pembungkus) menjadi SAMA TINGGI.
+
+   NILAI: baris tabel & aksi halaman 32–34px · kepala kartu 30–32px ·
+   bilah filter 34px (HP 40px karena berisi kolom isian yang wajib ramah sentuh).
+   HURUF pemilih di HP TETAP 16px supaya iOS tidak memperbesar halaman.
+   KETERBACAAN huruf sel tabel (≥13px) TIDAK disentuh blok ini.
+   ================================================================== */
+.row-actions,.page-actions{--aksi-h:34px}
+.card-head{--aksi-h:30px}
+.lm-actions,.fc-actions{--aksi-h:32px}
+.filter-bar{--filter-h:34px}
+@media screen and (max-width:640px){
+  .row-actions,.page-actions,.card-head,.lm-actions,.fc-actions{--aksi-h:32px}
+  .filter-bar{--filter-h:40px}
+}
+@media screen and (min-width:641px) and (max-width:1024px){
+  .filter-bar{--filter-h:36px}
+}
+/* --- Baris tabel --- */
+.row-actions > .btn,.row-actions > a.btn,.row-actions .btn-sm,
+.row-actions select,.row-actions select.input,.row-actions select.input-sm,
+.row-actions input.input,.row-actions input.input-sm,
+.row-actions form,.row-actions .inline-form{
+  height:var(--aksi-h)!important;min-height:0!important;
+  padding-top:0!important;padding-bottom:0!important;box-sizing:border-box;
+}
+/* --- Aksi halaman (tombol Lihat/Edit/ekspor di bawah judul) --- */
+.page-actions > .btn,.page-actions > a.btn,.page-actions .btn-sm,
+.page-actions select,.page-actions select.input,.page-actions select.input-sm,
+.page-actions input.input,.page-actions form,.page-actions .inline-form{
+  height:var(--aksi-h)!important;min-height:0!important;
+  padding-top:0!important;padding-bottom:0!important;box-sizing:border-box;
+}
+/* --- Kepala kartu (tombol kecil seperti "PNG", "Detail", "Excel") --- */
+.card-head > .btn,.card-head > a.btn,.card-head .btn-sm,
+.card-head .flex > .btn,.card-head .flex > a.btn,
+.card-head select,.card-head select.input,.card-head select.input-sm,
+.card-head form,.card-head .inline-form{
+  height:var(--aksi-h)!important;min-height:0!important;
+  padding-top:0!important;padding-bottom:0!important;box-sizing:border-box;
+}
+/* --- Kaki sidebar (Ubah Password & Keluar) --- */
+.sidebar-foot .btn,.sidebar-foot .btn-sm{height:36px!important;min-height:0!important;
+  padding-top:0!important;padding-bottom:0!important;box-sizing:border-box}
+/* --- Baris biaya operasional (Keuangan) --- */
+.fc-actions .btn,.fc-actions .btn-sm{height:var(--aksi-h)!important;min-height:0!important;
+  padding-top:0!important;padding-bottom:0!important;box-sizing:border-box}
+/* --- Kolom aksi Login Management (Blokir & Keluarkan) --- */
+.lm-actions .btn,.lm-actions .btn-sm{height:var(--aksi-h)!important;min-height:0!important;
+  padding-top:0!important;padding-bottom:0!important;box-sizing:border-box}
+/* --- Bilah FILTER: tombol & kolom isian SAMA TINGGI (textarea dikecualikan) --- */
+.filter-bar .btn,.filter-bar .btn-sm,
+.filter-bar input.input,.filter-bar input.input-sm,
+.filter-bar select.input,.filter-bar select.input-sm,
+.filter-bar .inline-form,.filter-bar form.inline-form{
+  height:var(--filter-h)!important;min-height:0!important;
+  padding-top:0!important;padding-bottom:0!important;box-sizing:border-box;
+}
+.filter-bar .inline-form{align-items:center}
+
+/* ==================================================================
+   TOMBOL AKSI BARIS TABEL — TIDAK LAGI "MENCAR SENDIRI" (ronde 74)
+   ------------------------------------------------------------------
+   Keluhan pemilik dari tangkapan layar: "tombol masih mencari sendiri" —
+   pada Rekam Medis ada JARAK BESAR antara pemilih status dan tombol Hapus.
+   Penyebab terukur: aturan lama `.inline-form{width:100%}` di blok ≤640px
+   membuat FORM pembungkus pemilih status melebar 257px (seharusnya ±100px),
+   sehingga tombol Hapus terlempar ke ujung kanan.
+   Perbaikan: di dalam kelompok aksi, SEMUA FORM & KOLOM ISIAN memakai lebar
+   ISI-nya sendiri (`width:auto`) dan wadahnya hanya selebar isinya
+   (`width:max-content`) sehingga deretan tombol selalu rapat & berurutan.
+   ================================================================== */
+.row-actions{
+  width:max-content;max-width:none;justify-content:flex-start;align-items:center;
+}
+.row-actions form,
+.row-actions .inline-form{
+  width:auto!important;flex:0 0 auto;display:inline-flex;align-items:center;gap:0;
+}
+.row-actions select,.row-actions .input,.row-actions .input-sm{
+  width:auto!important;flex:0 0 auto;
+}
+/* Blok ≤640px lama juga memaksa `.inline-form` selebar 100% — kembalikan untuk
+   form DI LUAR kelompok aksi (mis. di bilah filter) saja. */
+@media screen and (max-width:640px){
+  .row-actions .inline-form,
+  .page-actions .inline-form,
+  .card-head .inline-form,
+  .filter-bar .filter-inline,
+  .lm-actions form,
+  .fc-actions form{width:auto!important}
+}
+
+/* ==================================================================
+   BILAH FILTER: GRID DUA KOLOM YANG SEJAJAR (ronde 74)
+   ------------------------------------------------------------------
+   Keluhan pemilik: "kolom pilihan skincare dan bahan treatment disamakan".
+   Sebelumnya bilah filter memakai FLEX + `align-items:flex-end`, sehingga dua
+   kolom bersebelahan punya titik bawah yang sama padahal tingginya berbeda
+   (satu kolom punya keterangan 3 baris) → pemilih di sebelahnya tampak
+   TURUN/NAIK sendiri dan lebarnya tidak sama.
+   Sekarang memakai CSS GRID dua kolom SAMA LEBAR dengan `align-items:start`:
+   label selalu sebaris di atas, pemilih tepat di bawah label → semua kolom
+   sejajar rapi walau ada kolom yang punya keterangan tambahan.
+   ================================================================== */
+@media screen and (max-width:640px){
+  .filter-bar{
+    display:grid!important;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    align-items:start;
+    gap:9px 8px;
+  }
+  .filter-bar .field,
+  .filter-bar .field.wide{width:auto!important;max-width:none!important;min-width:0}
+  /* Kolom pencarian & keterangan panjang memakai lebar penuh. */
+  .filter-bar .field.searchbox{grid-column:1/-1}
+  /* Tombol (Filter/Reset) & pemilih "per halaman" sejajar di dasar barisnya. */
+  .filter-bar > .btn,.filter-bar > a.btn{width:auto!important;align-self:end}
+  .filter-bar > select.input,
+  .filter-bar > select.input-sm{grid-column:1/-1;width:100%!important;align-self:end}
+  .filter-bar > .muted,
+  .filter-bar > .hint,
+  .filter-bar > .notice,
+  .filter-bar > form:not(.filter-inline){grid-column:1/-1}
+}
+
+/* ==================================================================
+   HALAMAN MASUK · LUPA KATA SANDI · VERIFIKASI 2 LANGKAH · KATA SANDI BARU
+   TAMPILAN HP YANG RINGKAS, MODERN, & TERPUSAT (ronde 75)
+   ------------------------------------------------------------------
+   Permintaan pemilik: pada HP kedua halaman itu harus RINGKAS, proporsional,
+   dan form menjadi FOKUS UTAMA, tanpa mengubah desktop.
+
+   Keadaan TERUKUR sebelum perbaikan (halaman Login, 390px):
+     • tinggi halaman 1.537px — blok informasi di ATAS form memakan 415px
+       (judul "Website Management System", deskripsi panjang, 4 daftar fitur,
+       dan copyright) sehingga kolom email & tombol Masuk jauh di bawah lipatan;
+     • LOGO TAMPIL DUA KALI (panel pink + tepat di atas form);
+     • judul utama ikut mengecil ke 15,6px karena aturan `h2` untuk ≤430px,
+       sedangkan jarak antarunsur 16–24px & padding 26px terasa boros.
+
+   TIGA TINGKATAN yang dipakai (sesuai permintaan: mobile · tablet · desktop):
+     1. ≤767px    → HP: satu kolom rapat; header pink hanya berisi LOGO +
+                    nama sistem; ukuran mengikuti permintaan pemilik
+                    (judul 20–21px · keterangan 13–13,5px · label 13px ·
+                    input & tombol 44–46px · jarak 8–16px).
+     2. 768–900px → TABLET (kartu memang sudah satu kolom): header pink
+                    dirapatkan & logo ganda dihilangkan, ukuran tetap nyaman.
+     3. ≥901px    → DESKTOP (dua kolom): TIDAK diubah sama sekali.
+
+   SENGAJA TIDAK MEMAKAI `zoom` / `transform:scale` untuk mengecilkan halaman —
+   seluruh ukuran dipilih langsung dalam px sehingga hasilnya sama di semua
+   peramban HP (dan setelan "Ukuran Tampilan" tetap tidak berlaku di HP).
+
+   YANG WAJIB DIPERTAHANKAN (dijaga uji):
+     • huruf kolom isian 16px → HP tidak memperbesar halaman saat mengetik;
+     • tinggi tombol ≥40px → ramah sentuh;
+     • palet pink, gradien header, logo, & gambar latar TIDAK berubah;
+     • autentikasi, basis data, dan alur reset kata sandi TIDAK disentuh.
+   ================================================================== */
+
+/* --- 0. KERANGKA: terpusat bila muat, tetap dapat digulir bila tidak ---------
+   `margin:auto` pada isi flex membuatnya TERPUSAT ketika ada ruang lebih, dan
+   TIDAK memotong bagian atas ketika halaman lebih tinggi daripada layar
+   (masalah klasik `align-items:center`). `100dvh` dipakai agar tinggi mengikuti
+   area yang benar-benar terlihat di HP (bilah alamat & papan ketik).
+   `:not(.maint-body)` WAJIB: halaman pemeliharaan memakai kelas `.auth-body`
+   juga, tetapi tata letaknya diatur sendiri oleh `.maint-*` — tanpa pengecualian
+   ini padding & perataan halaman pemeliharaan ikut berubah. */
+.auth-body:not(.maint-body){
+  display:flex;align-items:center;justify-content:center;
+  min-height:100vh;min-height:100dvh;
+  padding:clamp(12px,2.4vw,24px);
+}
+.auth-wrap{width:100%;max-width:1000px;margin:auto}
+
+/* --- 1. TABLET / KARTU SATU KOLOM (≤900px) ---------------------------------- */
+@media screen and (max-width:900px){
+  /* Kartu sudah satu kolom, jadi logo di kolom FORM tidak perlu lagi — logo di
+     panel pink tepat di atasnya sudah menjadi logo utama (dulu tampil dua kali). */
+  .auth-form .brand-img{display:none}
+  .auth-visual .brand{justify-content:center}
+  /* Tanpa berkas logo, nama klinik ditulis di panel pink — warnanya harus putih
+     agar terbaca (nama bawaan berwarna magenta di atas latar pink). */
+  .auth-visual .brand-name,.auth-visual .brand-sub{color:#fff}
+  .auth-visual .brand-sub{color:rgba(255,255,255,.85)}
+  .auth-visual{padding:22px 24px}
+  .auth-form{padding:24px 24px 26px}
+  .auth-visual ul{margin-top:12px}
+  .auth-visual li{margin-bottom:4px}
+  .auth-card{border-radius:20px}
+}
+
+/* --- 2. TABLET & "SITUS DESKTOP" DI HP (641–1024px): ukuran sentuh nyaman -----
+   Di rentang ini layar sudah lebih besar daripada HP, tetapi tetap sering
+   disentuh (iPad / iPhone mode "situs desktop" ±980px) — jadi kolom isian &
+   tombol diberi tinggi ramah sentuh. Blok ini berada SEBELUM blok ≤767px
+   sehingga HP (≤767px) tetap memakai ukuran 44/46px yang diminta pemilik. */
+@media screen and (min-width:641px) and (max-width:1024px){
+  .auth-form .input{min-height:42px}
+  .auth-form .btn{min-height:44px}
+}
+
+/* --- 3. HP (≤767px): RINGKAS, SATU KOLOM, TERPUSAT -------------------------- */
+@media screen and (max-width:767px){
+  /* Kerangka: tepi hanya 10px supaya lebar kartu mendekati lebar layar HP,
+     dan ada ruang aman untuk "home indicator" iPhone. */
+  .auth-body:not(.maint-body){
+    align-items:flex-start;
+    padding:10px 10px calc(14px + env(safe-area-inset-bottom, 0px));
+  }
+  .auth-wrap{max-width:min(100%, 540px)}
+  .auth-card{display:block;border-radius:18px;box-shadow:0 14px 34px rgba(120,20,70,.16)}
+
+  /* ---------------- 3a. HEADER PINK: hanyalah kop merek yang ringkas ----------
+     Dihilangkan dari HP (informasi yang membuatnya terlalu tinggi):
+       • daftar 4 fitur  (`.auth-visual ul`)
+       • deskripsi panjang klinik & daftar cabang  (`.auth-lead`)
+       • copyright       (`.auth-visual > p.small`)
+     Semuanya TETAP tampil penuh di tablet & desktop. */
+  .auth-visual{
+    padding:16px 16px 14px;gap:9px;
+    align-items:center;justify-content:center;text-align:center;
+  }
+  .auth-visual .brand-img{padding:6px 12px;border-radius:12px}
+  .auth-visual .brand-img .logo-img{height:34px;max-width:210px}
+  .auth-visual h2{font-size:20px;line-height:1.25;letter-spacing:.005em;margin:0}
+  .auth-visual ul,
+  .auth-visual .auth-lead,
+  .auth-visual > p.small{display:none}
+  /* Keterangan pendek pada halaman lain (2 langkah, kata sandi baru) & halaman
+     lupa kata sandi tetap tampil — dipadatkan 1–2 baris saja. */
+  .auth-visual > div > p{font-size:13.5px;line-height:1.5;margin:5px 0 0;color:rgba(255,255,255,.92)}
+
+  /* ---------------- 3b. FORM: fokus utama, jarak 8–16px --------------------- */
+  .auth-form{padding:16px}
+  .auth-form h2{font-size:21px;line-height:1.3;margin:0 0 8px}
+  .auth-form p.muted,.auth-form > .muted{font-size:13.5px;line-height:1.5}
+  .auth-form .form-grid{gap:12px}
+  /* Blok ≤640px umumnya memberi setiap `.field` `margin-bottom:8px` + label
+     `margin-bottom:3px`. Di halaman masuk/lupa itu membuat jarak antarkolom
+     menjadi 20px (di luar rentang 8–16px yang diminta) — jadi di sini
+     jaraknya diserahkan sepenuhnya pada `gap` grid (12px). */
+  .auth-form .field{gap:6px;margin-bottom:0}
+  .auth-form .field > label{font-size:13px;font-weight:650;margin-bottom:0}
+  /* Kolom isian 44px & huruf tetap 16px (anti-auto-zoom iOS). */
+  .auth-form .input{
+    min-height:44px;font-size:16px;line-height:1.3;padding:10px 12px;border-radius:12px;
+  }
+  .auth-form .btn{min-height:46px;font-size:15px;border-radius:12px}
+  .auth-form .btn-block{width:100%}
+  .auth-form .check{font-size:13px}
+  .auth-form .small{font-size:12.5px;line-height:1.45}
+  /* "Lupa kata sandi?" dibuat sejelas mungkin — ia salah satu hal yang diminta
+     pemilik agar langsung terlihat di layar pertama. */
+  .auth-form .form-grid .flex > a.small{font-size:13px;font-weight:650}
+  .auth-form .alert{padding:10px 12px;font-size:13px;border-radius:11px;margin-bottom:10px;line-height:1.5}
+  .auth-form .auth-hint{margin-top:12px;padding:10px 12px;font-size:12.5px;line-height:1.5}
+  .auth-form .auth-hint code{font-size:12px}
+  .auth-form form.mt-2{margin-top:10px}
+
+  /* Panel pemeliharaan (bila mode pemeliharaan aktif): ikut dirapatkan. */
+  .auth-form .maint-banner{padding:10px 12px;font-size:12.5px;margin-bottom:10px}
+  .auth-form .maint-banner .mb-sub{font-size:12px}
+}
+
+/* --- 4. HP KECIL (≤430px): hanya padding yang dirapatkan --------------------
+   Ukuran huruf TIDAK diturunkan lagi — ambang keterbacaan (judul 20px,
+   keterangan 13px, isian 16px) justru yang diminta pemilik. */
+@media screen and (max-width:430px){
+  .auth-body:not(.maint-body){padding:8px 8px calc(12px + env(safe-area-inset-bottom, 0px))}
+  .auth-visual{padding:14px 14px 12px;gap:8px}
+  .auth-visual h2{font-size:20px}
+  .auth-form{padding:14px}
+  .auth-form h2{font-size:20px}
+}
+
+/* ==================================================================
+   RONDE 76 — TAMPILAN HP: JUDUL HEADER TIDAK TERPOTONG · FILTER PERIODE
+   RINGKAS · PROFIL PASIEN DUA KOLOM (permintaan pemilik)
+   ------------------------------------------------------------------
+   Empat hal yang diperbaiki (semuanya HANYA di ≤640px, desktop tidak berubah):
+
+   1. HEADER HP TIDAK LAGI MEMOTONG JUDUL HALAMAN.
+      Sebelumnya topbar dipaksa SATU baris: `.topbar-title h1` memakai ellipsis
+      dan pemilih cabang dibatasi 132px — terukur "Rekam Medis Elektronik"
+      (168px) hanya terlihat **0–64px** di layar 320–390px, jadi judul halaman
+      praktis hilang. Sekarang judul BOLEH MEMBUNGKUS (tanpa ellipsis) dan
+      pemilih cabang mendapat BARISNYA SENDIRI selebar layar sehingga teks
+      pilihan cabang tidak pernah terpotong:
+        baris 1 = ☰ · judul halaman (membungkus) · ikon notifikasi/akun/keluar
+        baris 2 = pemilih cabang (lebar penuh)
+      `.topbar-actions{display:contents}` dipakai supaya ikon dapat tetap di
+      baris pertama sementara pemilih cabang turun ke baris kedua TANPA mengubah
+      urutan markup (dan tetap didukung semua peramban modern — aplikasi ini
+      sudah memakai `:has()`, `cqw`, & `dvh`). Bila peramban lama mengabaikannya,
+      aturan cadangan ≤700px yang lama tetap berlaku (pemilih cabang + ikon satu
+      baris di bawah judul).
+
+   2. FILTER PERIODE LEBIH RINGKAS (berlaku SEMUA halaman ber-filter).
+      Terukur pada Detail Pasien 390px: tinggi bilah filter 228px untuk 3 kontrol.
+      Yang dirapatkan: padding 9px → 8px, jarak baris 7px, label 11,56px → 11px,
+      jarak label→kontrol 7px → 3px, dan TINGGI SELURUH kontrol (dropdown,
+      tanggal, tombol Terapkan, "25 / halaman") 40px → 34px — nilainya SAMA untuk
+      semua isi bilah (dijaga uji ronde 73) dan tetap di atas ambang ramah
+      sentuh. HURUF KOLOM ISIAN TETAP 16px (mencegah iOS memperbesar halaman).
+      Keterangan rentang tanggal (`.muted`) dipadatkan ke 11px.
+      Di halaman Detail Pasien, tombol Terapkan + keterangan disusun sebaris di
+      BAWAH dua pemilih (`.pd-filter`) sehingga bilahnya hanya DUA baris.
+
+   3. PROFIL PASIEN: LABEL KIRI — NILAI KANAN (`.kv`).
+      Sebelumnya `.kv` dipaksa SATU kolom di ≤900px sehingga setiap label berdiri
+      di barisnya sendiri: 13 informasi = 832px tinggi. Sekarang kembali DUA
+      kolom (label kiri ±38%, nilai kanan) dengan huruf 12,5px & jarak 8px →
+      ±360px. Nilai panjang (alamat, level member, akumulasi, catatan) tetap
+      MEMBUNGKUS tanpa dipotong (`overflow-wrap` + `min-width:0`).
+      Berlaku juga untuk seluruh halaman yang memakai `.kv` (Detail Transaksi,
+      Order Baru, Kartu Member, halaman bayar) agar standarnya sama.
+
+   4. TOMBOL EDIT DI KEPALA KARTU lebih kecil & sejajar judul: 32px → 30px
+      (masih di atas ambang 30px yang dijaga uji) dan dipusatkan terhadap judul.
+   ================================================================== */
+
+/* ---- 1. TOMBOL NONAKTIF YANG TETAP TERLIHAT (`.btn-off`)
+   Permintaan pemilik: pada baris Reservasi ber-status **Cancel**, tombol "Isi Rekam
+   Medis" & "→ Transaksi" JANGAN dihilangkan — biarkan tetap terlihat seperti tombol
+   lain, tetapi dibuat ABU-ABU dan tidak dapat diklik ("dibikin abu-abu/dimatikan"),
+   lalu otomatis AKTIF kembali begitu statusnya diubah selain Cancel.
+
+   Karena itu tombolnya tetap memakai ukuran & posisi yang sama dengan tombol lain
+   (lebar baris tabel tidak berubah → tetap rapi), hanya warnanya yang diredam:
+     • latar netral + garis tepi biasa, huruf abu (memakai variabel tema sehingga
+       tetap serasi di semua tema warna);
+     • gradien/efek tombol utama (mis. "→ Transaksi" yang aslinya pink) dimatikan;
+     • `pointer-events:none` + `cursor:not-allowed` → tidak menerima klik/sentuhan;
+     • `:hover`/`:active`/`:focus` sengaja tidak mengubah apa pun (tidak ada efek
+       "hidup" saat didekati kursor) dan outline fokus dimatikan karena tombolnya
+       juga dikeluarkan dari urutan Tab (`tabindex="-1"` di markup).
+   Aturan ini diberi `!important` karena harus menang atas `.btn-primary`/`gradien
+   tema` yang ditulis lebih spesifik untuk tombol biasa. */
+.btn-off,
+.btn-off:hover,
+.btn-off:active,
+.btn-off:focus,
+.btn-off:focus-visible{
+  background:var(--brand-chip)!important;
+  background-image:none!important;
+  border-color:var(--line)!important;
+  color:var(--ink-2)!important;
+  box-shadow:none!important;
+  filter:none!important;
+  opacity:.72;
+  cursor:not-allowed!important;
+  pointer-events:none!important;
+  user-select:none;
+  outline:none!important;
+}
+.btn-off .ico{opacity:.75}
+/* Ukuran & padding TIDAK diubah supaya tombol nonaktif tetap sejajar dengan
+   tombol aktif di sebelahnya (tinggi kelompok aksi tetap sama). */
+
+@media screen and (max-width:640px){
+  /* ---- 2. HEADER: judul membungkus, pemilih cabang selebar layar ---------- */
+  .topbar{flex-wrap:wrap;row-gap:6px}
+  /* `flex-basis:0` (bukan `auto`) membuat judul MENYUSUT lebih dulu sehingga
+     ketiga ikon tetap pada baris pertama — tanpa itu ikon terdorong turun dan
+     header menjadi TIGA baris (terukur 143px di layar 320px vs 97px). */
+  .topbar-title{flex:1 1 0;min-width:0}
+  .topbar-title h1{
+    white-space:normal;overflow:visible;text-overflow:clip;max-width:100%;
+    font-size:.95rem;line-height:1.25;overflow-wrap:anywhere;
+  }
+  .crumb{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.2}
+  .topbar-actions{
+    display:contents;
+    /* Nilai cadangan untuk peramban yang mengabaikan `display:contents`:
+       pemilih cabang + ikon tetap turun ke baris kedua seperti blok ≤700px. */
+    width:100%;margin-left:0;gap:6px;justify-content:space-between;flex-wrap:nowrap;
+  }
+  .topbar-actions .icon-btn{order:1;margin-left:0}
+  .branch-switch{
+    order:2;display:flex;flex:1 1 100%;max-width:none;min-width:0;margin-left:0;
+  }
+  .branch-switch select{width:100%;min-width:0;max-width:none}
+
+  /* ---- 3. FILTER PERIODE RINGKAS (semua halaman ber-filter) --------------- */
+  .filter-bar{padding:8px 9px;gap:6px 7px;--filter-h:34px}
+  .filter-bar .field{gap:3px;margin-bottom:0}
+  .filter-bar label{font-size:11px;line-height:1.15;margin-bottom:0;letter-spacing:.01em}
+  /* Tombol Terapkan/Reset dibuat selebar isinya (bukan selebar kolom) supaya
+     tidak tampak besar, tetapi TETAP setinggi kontrol lain di bilah ini. */
+  .filter-bar > .btn,.filter-bar > a.btn{width:auto!important;padding:0 11px}
+  .filter-bar > .muted,.filter-bar > .hint,.filter-bar > .notice{
+    font-size:11px;line-height:1.4;margin-top:0
+  }
+  /* SUSUNAN KONTROL (berlaku SEMUA bilah filter, sesuai permintaan pemilik
+     "terapkan ke semua filter periode yang ada"):
+       baris awal   : kolom isian (periode, cabang, dst.) — dua kolom
+       lalu         : pemilih "per halaman" (bila ada)
+       baris terakhir: TOMBOL (Terapkan/Reset, selebar isinya) + keterangan
+     Semua kolom isian berkumpul lebih dulu dan tombol selalu paling bawah;
+     dulu pemilih "per halaman" berada SETELAH tombol sehingga urutannya
+     bercampur (tombol terjepit di tengah kolom isian). */
+  .filter-bar > .field{order:1}
+  .filter-bar > select.input,.filter-bar > select.input-sm,
+  .filter-bar > .inline-form,.filter-bar > form{order:5}
+  .filter-bar > .btn,.filter-bar > a.btn{order:8;justify-self:start;align-self:center}
+  .filter-bar > .muted,.filter-bar > .hint,.filter-bar > .notice{order:9;align-self:center}
+
+  /* ---- 4. PROFIL PASIEN: label kiri — nilai kanan (dua kolom) ------------- */
+  .kv{
+    grid-template-columns:minmax(0,38%) minmax(0,1fr);
+    gap:8px 10px;font-size:12.5px;line-height:1.35;
+  }
+  .kv dt{min-width:0;overflow-wrap:break-word}
+  .kv dd{min-width:0;overflow-wrap:anywhere}
+
+  /* ---- 5. Tombol di kepala kartu (mis. "Edit" pada Profil Pasien) ---------- */
+  .card-head{--aksi-h:30px}
+}
+
+/* ==================================================================
+   RONDE 77 — KEPADATAN FORMULIR & KALENDER DI HP (permintaan pemilik)
+   ------------------------------------------------------------------
+   Permintaan: "Optimalkan seluruh form input, dropdown, pilihan, textarea, dan
+   modal tambah/edit khusus HP agar lebih compact, rapi, dan tidak terlalu panjang
+   secara vertikal" + "perbaiki tampilan kalender Reservasi di HP agar kolom
+   tanggal lebih lebar & informasi tidak terpotong".
+
+   KEADAAN TERUKUR SEBELUM (390px):
+     • modal "Tambah Pasien": isi modal 1128px (kepala 59 + isi + kaki 59) dan
+       KEPALA/KAKI IKUT TERGULIR karena `.modal-box{overflow:auto}`;
+     • satu `.form-grid.g2` berisi 8 kolom isian dipaksa SATU kolom di HP → 771px;
+     • tinggi kolom isian formulir halaman 40px, label 11px, jarak label→isian 9px,
+       jarak antar-field 16px, keterangan 12,24px/17,7px;
+     • kalender: 7 kolom `1fr` sehingga pada 390px tiap kotak hanya ±46px →
+       isi reservasi terpotong "…" dan sering hanya terlihat 1 kata.
+
+   SESUDAH (nilai sesuai permintaan pemilik):
+     • label → kolom isian 6px · antar-field 12px · antarseksi 16px ·
+       padding wadah 12px;
+     • kolom isian 44px (42–46) & huruf TETAP 16px (anti-zoom iOS), label 12,5px;
+     • keterangan 11,5px / line-height 1,4 / jarak 5px dari kolom; keterangan
+       panjang (>200 huruf) DILIPAT dengan tombol "Selengkapnya" — tidak dihapus;
+     • modal: kepala & kaki TETAP di tempatnya, HANYA isi yang bergulir;
+     • kalender: kolom 68px (65–75), gap 3px, kepala hari SEN–MIN sebaris dalam
+       grid yang sama, hanya wadah kalender yang bergeser ke samping.
+   ================================================================== */
+
+/* ---- 1. KETERANGAN PANJANG DILIPAT (tombol "Selengkapnya") -------------------
+   Dipasang app.js: `.hint` yang isinya lebih dari 200 huruf diberi kelas
+   `hint-collapsed` + tombol `.hint-toggle`. Aturan pelipatannya HANYA berlaku di
+   HP, jadi tampilan desktop tidak berubah sama sekali. Isi keterangan TIDAK
+   dihapus — hanya dipotong tampilannya dan dapat dibuka kembali. */
+.hint-toggle{
+  display:none;
+  align-items:center;gap:4px;margin-top:2px;padding:0;
+  background:none;border:0;cursor:pointer;font:inherit;font-weight:700;
+  color:var(--magenta);text-decoration:underline;text-underline-offset:2px;
+}
+
+/* ---- 2. FORMULIR & MODAL DI HP --------------------------------------------- */
+@media screen and (max-width:640px){
+  /* Padding wadah formulir (permintaan: 12–16px). */
+  .card-body{padding:12px}
+  .modal-body{padding:12px}
+  .card.tight .card-body{padding:12px}
+
+  /* Jarak label → kolom isian 5–6px; antar-field 12px; antarseksi 16px. */
+  .field{gap:5px;margin-bottom:12px}
+  .field > label,.field label{font-size:12.5px;line-height:1.2;margin-bottom:0}
+  .form-grid{gap:12px}
+  /* Di dalam grid, jarak diatur `gap` (bukan margin) supaya tidak menumpuk. */
+  .form-grid > .field{margin-bottom:0}
+  /* Jarak ANTARSEKSI 16px — khusus blok formulir (`.mt-2` pada `.form-grid`),
+     bukan seluruh isi kartu: halaman seperti Keuangan banyak memakai `.mt-2`
+     untuk tabel/grafik sehingga aturan umum justru MEMANJANGKAN halaman. */
+  .card-body > .form-grid.mt-2,.modal-body > .form-grid.mt-2{margin-top:16px}
+  .section-title{margin:16px 0 8px}
+  /* Blok formulir yang bersebelahan (mis. dua `.form-grid`) diberi jarak 16px. */
+  .card-body > .form-grid + .form-grid,
+  .card-body > .form-grid + .field,
+  .card-body > .field + .form-grid,
+  .modal-body > .form-grid + .form-grid,
+  .modal-body > .form-grid + .field,
+  .modal-body > .field + .form-grid{margin-top:16px}
+
+  /* Semua kolom isian: tinggi 44px (42–46), huruf 16px, radius & padding ringkas. */
+  .input,select.input,textarea.input,
+  .input-sm,select.input-sm,
+  input[type=date].input,input[type=time].input,input[type=month].input,
+  input[type=datetime-local].input{
+    font-size:16px;min-height:44px;padding:9px 11px;border-radius:10px;
+    line-height:1.3;box-sizing:border-box;
+  }
+  /* Textarea: cukup 3 baris (dulu 74px) — tetap lega untuk menulis SOAP/catatan. */
+  textarea.input{min-height:64px;line-height:1.45;padding:9px 11px}
+  /* Pemilih berkas: tingginya ikut 44px, tetapi HURUFNYA tetap 16px seperti kolom
+     isian lain (aturan "semua kolom isian ≥16px" dijaga uji `responsive_check.js`). */
+  .input[type=file]{min-height:44px;padding:9px 10px}
+  .input[type=checkbox],.input[type=radio]{min-height:0}
+  /* Tombol pemilih berkas bawaan peramban tidak boleh melebihi lebar kartu. */
+  .input[type=file]{max-width:100%}
+
+  /* Keterangan/teks bantuan: 11,5px · line-height 1,4 · jarak 5px dari kolom. */
+  .field .hint,.hint,.field .hint-inline{
+    font-size:11.5px;line-height:1.4;margin-top:5px;
+  }
+
+  /* Tombol formulir: lebih ringkas secara proporsional, tinggi TETAP ≥40px
+     (nyaman disentuh) — hanya padding & ukuran hurufnya yang dikurangi.
+     Kelompok AKSI (baris tabel/bilah filter/kepala kartu) TIDAK disentuh:
+     tingginya diatur `--aksi-h`/`--filter-h` tersendiri.
+     PENTING (ronde 78): label tombol TIDAK BOLEH membungkus menjadi 2–3 baris —
+     dulu tombol pada baris flex yang sempit menyusut sampai 82px sehingga
+     "Kirim Email Uji"/"Simpan Konfigurasi WhatsApp" menjadi 58px (3 baris)
+     sementara tombol lain 40px, sehingga terlihat tidak seragam. Sekarang label
+     dipatok satu baris (baris flex yang memuatnya akan membungkus sendiri karena
+     memakai `flex-wrap`) dan lebarnya tidak melebihi wadahnya. */
+  .card-body .btn,.card-body .btn-sm,
+  .modal-body .btn,.modal-body .btn-sm,
+  .modal-foot .btn,.modal-foot .btn-sm{
+    min-height:40px;padding:0 12px;font-size:.755rem;border-radius:10px;
+    white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis;
+  }
+  /* Wadah tombol (form/flex) WAJIB boleh menyusut (`min-width:0`): tanpa ini,
+     label tombol yang dipatok satu baris membuat wadahnya lebih lebar daripada
+     kartunya sehingga halaman bisa digeser ke samping pada layar 320px
+     (terbukti pada tombol "Kembalikan Template WhatsApp ke Default"). */
+  .card-body form,.modal-body form,.card-body .inline-form,.modal-body .inline-form,
+  .card-body .flex,.modal-body .flex{min-width:0}
+  /* Tombol di dalam TABEL (mis. "Backup Cabang Ini", "Buka Riwayat Order") memakai
+     ukuran AKSI yang sama dengan tombol baris tabel lain (32px) supaya tinggi baris
+     seragam — dulu tombol ini 40px sehingga barisnya lebih tinggi sendiri. */
+  table.tbl .btn,table.tbl .btn-sm{--aksi-h:32px;height:32px!important;min-height:0!important;
+    padding:0 9px!important;font-size:.71rem;border-radius:8px}
+
+  /* Kartu TANPA `.card-body` (mis. isi langsung): rongga dalam disamakan 12px
+     seperti kartu ber-`card-body` supaya tepi kiri isi seluruh halaman rata. */
+  .card:not(:has(> .card-body)){padding:12px}
+  .card.tight{padding:0}
+  /* Penanda kecil pada pemilih tema: huruf ≥11px (ambang keterbacaan). */
+  .theme-check{font-size:11.5px}
+  .modal-foot{gap:8px;padding:10px 12px}
+  .modal-foot .btn,.modal-foot .btn-sm{flex:1 1 46%}
+
+  /* ---- MODAL: kepala & kaki TETAP, hanya isi yang bergulir ------------------
+     Permintaan pemilik: "gunakan header compact, isi form yang dapat di-scroll,
+     footer tombol Simpan/Batal yang tetap mudah diakses tanpa menutupi input".
+     Dulu `.modal-box{overflow:auto}` sehingga kepala & kaki ikut tergulir (terukur
+     modal 808px dengan ISI 1128px → tombol Simpan harus dicari dengan menggulir). */
+  .modal{align-items:flex-start;padding:8px;overflow:hidden}
+  .modal-box{
+    max-height:calc(100vh - 16px);        /* cadangan peramban lama */
+    max-height:calc(100dvh - 16px);       /* ikut tinggi layar yang benar-benar terlihat */
+    display:flex;flex-direction:column;overflow:hidden;border-radius:12px;
+  }
+  /* Sebagian modal membungkus kepala+isi+kaki dengan <form> → form itu juga
+     harus flex kolom supaya ISI-nya yang bergulir, bukan seluruh kotak. */
+  .modal-box > form{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .modal-head{flex:0 0 auto;padding:10px 12px}
+  .modal-head h3{font-size:.85rem;line-height:1.25}
+  .modal-body{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+  .modal-foot{flex:0 0 auto}
+
+  /* ---- FORMULIR DUA KOLOM UNTUK KOLOM YANG BERPASANGAN ---------------------
+     Permintaan pemilik: "Pertahankan layout satu kolom pada HP untuk form panjang,
+     tetapi kelompokkan field yang berhubungan secara logis agar lebih efisien".
+     Kolom isian yang MEMANG sudah dipasangkan pengembang pada `.form-grid.g2/.g3/.g4`
+     (kode+nama, tanggal+dokter, telepon+email, jumlah+harga) tetap SATU BARIS di HP
+     sejak 360px — inilah penghemat tinggi terbesar (terukur modal Tambah Pasien
+     771px → 384px). Kolom yang butuh lebar penuh tetap penuh:
+       • textarea (SOAP/catatan)      • kolom pencarian ber-datalist (pasien/dokter)
+       • `.field.wide` & `.searchbox` • kolom yang pengembang tandai `grid-column:1/-1`
+     Pada layar ≤359px SEMUA kembali satu kolom supaya tidak sempit. */
+  .field:has(textarea),
+  .field:has(input[list]),
+  .field:has(.hint-inline),
+  .field.wide,
+  .field.searchbox{grid-column:1/-1}
+
+  /* ---- KARTU YANG SUDAH PUNYA `.card-body` TIDAK PERLU PADDING GANDA -------
+     `.card{padding:10px}` + `.card-body{padding:12px}` = 22px rongga dalam
+     (terukur). Pada kartu yang memang memakai `.card-head`/`.card-body`, rongga
+     itu sudah ditangani bagiannya sendiri (sama seperti `.card.tight`), jadi
+     padding kartunya dinolkan → rongga dalam tepat 12px (sesuai permintaan
+     pemilik: 12–16px) dan tinggi halaman berkurang. HANYA di HP; desktop tidak
+     berubah. */
+  .card:has(> .card-body){padding:0}
+
+  /* Blok foto pada formulir (Tambah/Edit Pasien & Petugas): pratinjau 72px &
+     jarak lebih rapat supaya tidak memakan tinggi layar. */
+  .photo-thumb-upload{gap:10px}
+  .photo-thumb-upload .pv{padding:6px}
+  .photo-thumb-upload .pv img{width:72px;height:72px}
+  /* Penjelasan di dalam modal ikut dirapatkan (isinya tidak diubah). */
+  .modal-body .notice{margin-top:12px;padding:8px 10px}
+
+  /* ---- PILIHAN & KOTAK CENTANG DI HP --------------------------------------
+     Permintaan pemilik: "Optimalkan ... pilihan ... agar lebih compact".
+     Kartu pilihan (mis. kartu member pada Order Baru & status penanganan pada
+     Rekam Medis) dirapatkan padding & jaraknya — tingginya tetap ≥44px supaya
+     nyaman disentuh. */
+  .status-opt{padding:9px 11px;gap:2px}
+  .status-picker,.member-picker{gap:8px}
+  .member-box{padding:10px 12px;margin-top:12px}
+  .member-box-head{margin-bottom:8px}
+  .member-box-body{font-size:.76rem}
+  .check{gap:6px;font-size:.78rem}
+  .chips{gap:6px}
+  .flex.gap-sm{gap:6px}
+}
+@media screen and (min-width:360px) and (max-width:640px){
+  .form-grid.g2,.form-grid.g3,.form-grid.g4{grid-template-columns:repeat(2,minmax(0,1fr))}
+  /* KARTU PILIHAN juga dipasangkan dua-dua (mis. pilihan status penanganan pada
+     Rekam Medis & pilihan kartu member pada Order Baru) supaya tidak memanjang
+     ke bawah; keterangannya tetap membungkus di dalam kartunya. */
+  .status-picker,.member-picker{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+
+/* ---- 3. KETERANGAN PANJANG (lipatan hanya di HP) --------------------------- */
+@media screen and (max-width:640px){
+  .hint-collapsed{max-height:calc(1.4em * 3);overflow:hidden}
+  .hint-collapsed.hint-open{max-height:none}
+  .hint-toggle{display:inline-flex;font-size:11.5px;line-height:1.1;margin-top:1px}
+}
+
+/* ==================================================================
+   KALENDER RESERVASI DI HP (ronde 77)
+   ------------------------------------------------------------------
+   Permintaan pemilik: "setiap kolom tanggal sedikit lebih lebar dan informasi
+   reservasi tidak terpotong ... 65–75px per kolom, gap 3–4px, horizontal scroll
+   HANYA pada container kalender, header SEN–MIN dan kotak tanggal dalam satu grid
+   yang sama, kurangi padding kiri/kanan, tinggi kotak tanggal konsisten per baris".
+
+   Sebelumnya: 7 kolom `1fr` → pada 390px tiap kotak ±46px sehingga nama pasien
+   terpotong berat. Sekarang: kolom 68px + gap 3px (total 494px) sehingga pada HP
+   kalender DIGESER KE SAMPING di dalam `.cal-scroll` (halaman utama tidak ikut
+   bergeser). Kepala hari (SEN–MIN) tetap anggota grid yang sama → selalu sejajar.
+   Desktop TIDAK berubah (aturan ini hanya di ≤640px).
+   ================================================================== */
+.cal-scroll{
+  overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;
+  overscroll-behavior-x:contain;max-width:100%;
+}
+/* Petunjuk geser (dipasang app.js hanya bila memang perlu digeser). */
+.cal-hint{display:none;margin:0 0 6px;font-size:11px;color:var(--ink-2)}
+.cal-hint.off{display:none!important}
+@media screen and (max-width:640px){
+  .cal-card .card-body{padding:8px 6px}
+  .cal-scroll{padding-bottom:2px}
+  .cal{
+    grid-template-columns:repeat(7,minmax(68px,1fr));
+    gap:3px;
+    min-width:calc(68px * 7 + 3px * 6);
+    align-items:stretch;
+  }
+  .cal .dow{
+    font-size:.68rem;padding:3px 0;letter-spacing:.02em;
+    position:sticky;top:0;background:var(--brand-tint2);z-index:1;
+  }
+  /* Tinggi kotak tanggal SERAGAM dalam satu baris minggu (grid menyejajarkan
+     seluruh sel pada baris itu) dan menyesuaikan jumlah reservasi. */
+  .cal .day{min-height:76px;padding:5px 5px 6px;border-radius:10px;display:flex;flex-direction:column;gap:2px}
+  .cal .day .dnum{font-size:.72rem;font-weight:700;margin-bottom:0;line-height:1.15}
+  /* Lencana reservasi DUA BARIS: JAM di baris pertama (selalu terbaca utuh) dan
+     NAMA pasien di baris kedua. Cara ini menampilkan informasi jauh lebih banyak
+     daripada satu baris "10:00 Pasien…" yang hanya menyisakan ±3 huruf pada kolom
+     68px (keluhan pemilik: "teks ... yang berlebihan").
+     Informasi LENGKAP tetap tersedia: atribut `title` pada lencana, klik lencana
+     (membuka reservasi itu), dan klik nomor tanggal (membuka daftar tanggal itu). */
+  .cal .ev{
+    display:block;font-size:.63rem;line-height:1.18;
+    padding:1px 4px;margin-bottom:0;border-radius:5px;
+  }
+  .cal .ev .ev-t{display:block;font-weight:800;font-size:.6rem;line-height:1.12;font-variant-numeric:tabular-nums}
+  .cal .ev .ev-n{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* Nomor tanggal dapat diklik (membuka daftar tanggal itu). */
+  .cal .day .dnum{display:block;font-size:.72rem;font-weight:700;line-height:1.15;color:var(--ink-2);text-decoration:none}
+  .cal .day .dnum:hover,.cal .day .dnum:focus{color:var(--magenta);text-decoration:underline}
+  .cal .day.today .dnum{color:var(--magenta-dark)}
+  .cal-hint{display:block}
+}
+
+/* ==================================================================
+   RONDE 78 — PENUTUP: LABEL TOMBOL PANJANG DI LAYAR SANGAT KECIL (≤360px)
+   ------------------------------------------------------------------
+   Aturan "label tombol satu baris" membuat tombol terlihat seragam, TETAPI pada
+   layar ≤360px label panjang (mis. "Kembalikan Template WhatsApp ke Default")
+   lebih lebar daripada kartunya. Supaya TIDAK terjadi dua hal yang keduanya tidak
+   diinginkan — tombol 3 baris (58px, terlihat tidak seragam) maupun halaman
+   bergeser ke samping — label tetap DIPATOK SATU BARIS dan dipotong halus dengan
+   elipsis (`text-overflow`), sedangkan wadahnya sudah diberi `min-width:0` di atas
+   sehingga tidak mungkin melebihi kartu. Tombolnya tetap dapat ditekan dan
+   tingginya tetap 40px di semua layar.
+   Blok ini diletakkan PALING AKHIR supaya menatap aturan ronde sebelumnya.
+   ================================================================== */
+@media screen and (max-width:360px){
+  .card-body .btn,.card-body .btn-sm,
+  .modal-body .btn,.modal-body .btn-sm,
+  .modal-foot .btn,.modal-foot .btn-sm{
+    white-space:nowrap;height:auto;min-width:0;max-width:100%;
+    overflow:hidden;text-overflow:ellipsis;
+  }
+}
+
+/* Alamat web panjang (mis. contoh URL notifikasi/webhook) di dalam `<code>` tidak
+   dapat membungkus sehingga kartunya melebar 11px pada layar 320px (tertangkap uji
+   produksi). Di HP alamat seperti itu dipatahkan agar tetap di dalam kartu —
+   datanya tidak diubah, hanya cara membungkusnya. Desktop tidak berubah. */
+@media screen and (max-width:640px){
+  .content code,.content .hint code,.content .muted code,.content .notice code,
+  .content .small code,table.tbl code{overflow-wrap:anywhere;word-break:break-word}
 }

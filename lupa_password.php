@@ -87,8 +87,8 @@ $status = mail_status_text();
       <?= brand_block() ?>
       <div>
         <h2>Lupa Kata Sandi</h2>
-        <p>Tulis email akun Anda — kami kirim tautan untuk membuat kata sandi baru.
-          Bila emailnya tidak terdaftar, sistem akan memberitahu dan tidak mengirim email.</p>
+        <p>Tulis email akun Anda — kami kirimkan tautan ganti kata sandi ke alamat itu.
+          Bila emailnya tidak terdaftar, kami beri tahu dan tidak mengirim email.</p>
       </div>
     </div>
     <div class="auth-form">

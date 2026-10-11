@@ -995,7 +995,12 @@ $routeRep = db_route_report();
           pembatas cabang dipakai di <strong><?= num((int)$auditDb['branch_helper']) ?> tempat</strong>.</div>
       </div>
       <?php if ($auditDb['perlu_diperiksa']): ?>
-        <div class="table-wrap mt-1" style="max-height:360px;overflow:auto">
+        <?php /* Kelas `scroll-y` WAJIB (bukan `overflow:auto` sebaris): lihat
+                 catatan di app.css — wadah yang dapat digulir KE DUA ARAH tanpa
+                 `scroll-y` memakai `overscroll-behavior-x:contain` dari
+                 `.table-wrap` sehingga guliran tegak TIDAK lanjut ke halaman
+                 (pengguna merasa tabel "terkunci" saat sudah mentok). */ ?>
+        <div class="table-wrap scroll-y mt-1" style="max-height:360px">
           <table class="tbl">
             <thead><tr><th>Berkas</th><th>Baris</th><th>Jenis</th><th>Tabel</th><th>Cuplikan query</th></tr></thead>
             <tbody>

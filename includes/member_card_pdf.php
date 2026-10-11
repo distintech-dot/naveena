@@ -185,10 +185,14 @@ function mcard_front(MiniPdf $pdf, float $ox, float $oy, array $c): void
     $bodyW   = $W - $stripeW;
     /* Padding CSS memakai persen terhadap lebar kotak induk: tanpa background
        induknya kolom isi (75% lebar kartu), dengan background seluruh kartu. */
+    /* Padding MENGIKUTI pratinjau HTML (CSS ronde 73: `padding:5% 5% 5% 4.5%`,
+       `padding-left:5%` bila kartu memakai gambar latar). Setiap kali tata letak
+       pratinjau diubah, ANGKA DI SINI WAJIB ikut diubah — dijaga uji
+       `kartu_layout_check.js` (membandingkan posisi tiap blok pratinjau vs PDF). */
     $containing = $hasBg ? $W : $bodyW;
-    $padTopBot  = 0.06 * $containing + 0.5;
-    $padL       = ($hasBg ? 0.06 : 0.05) * $containing + 0.5;
-    $padR       = 0.055 * $containing + 0.5;
+    $padTopBot  = 0.05 * $containing + 0.5;
+    $padL       = ($hasBg ? 0.05 : 0.045) * $containing + 0.5;
+    $padR       = 0.05 * $containing + 0.5;
     $contentX   = $ox + ($hasBg ? 0 : $stripeW) + $padL;
     $contentW   = ($hasBg ? $W : $bodyW) - $padL - $padR;
     $contentTop = $oy + $H - $padTopBot;
@@ -219,7 +223,7 @@ function mcard_front(MiniPdf $pdf, float $ox, float $oy, array $c): void
     /* ---- Susunan isi: kepala (logo + garis), identitas, rincian ---- */
     $build = function (float $scale) use ($pdf, $c, $contentW, $k): array {
         $logoPath = (string)($c['logo'] ?? '');
-        $logoMaxH = 32 * $k * $scale;               // CSS: max-height 32 px (clamp)
+        $logoMaxH = min(28, 0.06 * MCARD_PREVIEW_PX) * $k * $scale;   // CSS: clamp(14px,6cqw,28px)
         $logoMaxW = 0.62 * $contentW;
         $logoSize = ['w' => 0.0, 'h' => 0.0];
         if ($logoPath !== '') $logoSize = $pdf->imagePngSize($logoPath, $logoMaxW, $logoMaxH);
@@ -227,20 +231,22 @@ function mcard_front(MiniPdf $pdf, float $ox, float $oy, array $c): void
         if ($logoSize['w'] <= 0) {
             $coBlock = mcard_block($pdf, (string)$c['company'], $contentW, 15.56 * $k * $scale, 2, 1.2, 4.0, true);
         }
-        $gapLine = 14 * $k;                          // CSS: gap(clamp) 14 px
+        /* CSS: gap clamp(3px,2cqw,10px) — 2cqw dari lebar KARTU (preview 490px). */
+        $gapLine = min(10.0, 0.02 * MCARD_PREVIEW_PX) * $k;
         $lineH   = max(1.0, 2 * $k);
         $g1 = ($logoSize['w'] > 0 ? $logoSize['h'] : mcard_block_h($coBlock)) + $gapLine + $lineH;
 
-        $name  = mcard_block($pdf, (string)$c['p']['name'], $contentW, 18.88 * $k * $scale, 2, 1.15, 5.0, true);
+        /* CSS: clamp(.7rem, 2.9cqw + .42rem, 1.12rem) → maksimum 1,12rem = 17,92 px. */
+        $name  = mcard_block($pdf, (string)$c['p']['name'], $contentW, 17.92 * $k * $scale, 3, 1.14, 5.0, true);
         $level = mcard_block($pdf, 'Member Card - ' . (string)$c['level']['label'], $contentW,
                              12.48 * $k * $scale, 1, 1.55, 3.6, true);
-        $gapId = 0.6;
+        $gapId = 0.6;    // CSS: .mcard-id{gap:1%}
         $g2 = mcard_block_h($name) + $gapId + mcard_block_h($level);
 
         /* Rincian 2 × 2: label (huruf besar) di atas nilainya. */
         $labelSize = 9.92 * $k * $scale;
         $valueSize = 13.44 * $k * $scale;
-        $colGap = 12 * $k;                           // CSS: column-gap 12 px
+        $colGap = 10 * $k;                           // CSS: gap 4% 10px → column-gap 10 px
         $colW = ($contentW - $colGap) / 2;
         $items = [
             ['No. Member', (string)$c['p']['member_number']],
@@ -250,34 +256,55 @@ function mcard_front(MiniPdf $pdf, float $ox, float $oy, array $c): void
         ];
         $cells = [];
         $rowHs = [0.0, 0.0];
+        /* Tinggi baris (line-height) disamakan dengan pratinjau CSS: label 1,25 dan
+           nilai 1,3 — sebelumnya 1,55 sehingga blok rincian di PDF lebih tinggi
+           daripada pratinjau (terukur 9,2% selisih pada uji tata letak kartu). */
         foreach ($items as $i => $it) {
-            $lab = mcard_block($pdf, strtoupper($it[0]), $colW, $labelSize, 1, 1.55, 3.2, false);
-            $val = mcard_block($pdf, $it[1], $colW, $valueSize, 2, 1.55, 3.6, true);
+            $lab = mcard_block($pdf, strtoupper($it[0]), $colW, $labelSize, 1, 1.25, 3.2, false);
+            $val = mcard_block($pdf, $it[1], $colW, $valueSize, 2, 1.30, 3.6, true);
             $cells[$i] = ['label' => $lab, 'value' => $val];
             $h = mcard_block_h($lab) + mcard_block_h($val);
             /* baris = pasangan (item 0,1) lalu (item 2,3) — BUKAN i % 2. */
             $rowHs[intdiv($i, 2)] = max($rowHs[intdiv($i, 2)], $h);
         }
-        $rowGap = 1.4;
+        /* CSS: row-gap 4% dari tinggi kotak grid → dipakai sebagai porsi dari tinggi
+           baris rincian supaya proporsinya sama dengan pratinjau. */
+        $rowGap = 0.04 * max(0.01, $rowHs[0] + $rowHs[1]);
         $g3 = $rowHs[0] + $rowGap + $rowHs[1];
+        /* Jarak antara kelompok nama/level dan blok rincian.
+           CSS ronde 74: `.mcard .mcard-body{gap:clamp(4px,2.4cqw,12px)}`. */
+        $gapBody = min(12.0, 0.024 * MCARD_PREVIEW_PX) * $k;
 
-        return ['g1' => $g1, 'g2' => $g2, 'g3' => $g3, 'logoSize' => $logoSize, 'co' => $coBlock,
+        return ['g1' => $g1, 'g2' => $g2, 'g3' => $g3, 'gapBody' => $gapBody,
+            'logoSize' => $logoSize, 'co' => $coBlock,
             'name' => $name, 'level' => $level, 'cells' => $cells, 'rowHs' => $rowHs, 'rowGap' => $rowGap,
             'gapLine' => $gapLine, 'lineH' => $lineH, 'gapId' => $gapId, 'colW' => $colW, 'colGap' => $colGap,
             'logoMaxH' => $logoMaxH];
     };
 
+    /* ============================================================================
+     * PEMUSATAN VERTIKAL KELOMPOK INFORMASI (permintaan pemilik, ronde 74)
+     * ----------------------------------------------------------------------------
+     * Pratinjau web memakai `.mcard-body{flex:1;justify-content:center}`: kelompok
+     * (nama, level, rincian) mengambil SELURUH tinggi sisa di bawah garis pink lalu
+     * dipusatkan, sehingga ruang kosong di atas kelompok = di bawahnya. Angka di sini
+     * meniru perhitungan yang sama supaya PDF PERSIS seperti pratinjau — bukan
+     * memasang jarak tetap dari atas.
+     * ========================================================================== */
     $b = $build(1.0);
     $contentH = $contentTop - $contentBot;
-    $total = $b['g1'] + $b['g2'] + $b['g3'];
-    $free = $contentH - $total;
-    if ($free < 6.0) {                               // teks panjang → kecilkan sedikit
-        $scale = max(0.72, ($contentH - 6.0) / max(0.01, $total));
+    /* Tinggi bagian KEPALA (logo + jarak + garis) dan tinggi KELOMPOK isi. */
+    $headH = $b['g1'];
+    $needH = function (array $x): float { return $x['g2'] + $x['gapBody'] + $x['g3']; };
+    $areaH = $contentH - $headH;                      // area di bawah garis pink
+    if ($needH($b) > $areaH - 1.0) {                  // teks panjang → kecilkan proporsional
+        $scale = max(0.62, ($areaH - 1.0) / max(0.01, $needH($b)));
         $b = $build($scale);
-        $total = $b['g1'] + $b['g2'] + $b['g3'];
-        $free = max(6.0, $contentH - $total);
     }
-    $gapGrp = $free / 2;
+    $grupH = $needH($b);
+    /* Ruang kosong dibagi SAMA ke atas & ke bawah kelompok (pusat). */
+    $ruangAtas = max(0.0, ($areaH - $grupH) / 2);
+    $grupTop = $contentTop - $headH - $ruangAtas;      // tepi atas kelompok
 
     /* Kepala */
     $headTop = $contentTop;
@@ -295,14 +322,16 @@ function mcard_front(MiniPdf $pdf, float $ox, float $oy, array $c): void
     $lineTop = $headTop - ($b['logoSize']['w'] > 0 ? $b['logoSize']['h'] : mcard_block_h($b['co'])) - $b['gapLine'];
     $pdf->fillRect($contentX, $lineTop - $b['lineH'], $b['colW'] * 2 + $b['colGap'], $b['lineH'], $brand);
 
-    /* Identitas */
-    $idTop = $headTop - $b['g1'] - $gapGrp;
+    /* Identitas: dimulai dari tepi atas KELOMPOK yang sudah dipusatkan. */
+    $idTop = $grupTop;
     mcard_put($pdf, $contentX, $idTop, $b['name'], true, '#000000');
     mcard_put($pdf, $contentX, $idTop - mcard_block_h($b['name']) - $b['gapId'], $b['level'], true, '#000000');
 
-    /* Rincian */
-    $row2Top = $contentBot + $b['rowHs'][1];
-    $row1Top = $row2Top + $b['rowHs'][0] + $b['rowGap'];
+    /* Rincian: tepat di bawah kelompok identitas (jarak = gapBody yang sama
+       dengan `gap` pada pratinjau), BUKAN ditempel ke dasar kartu. */
+    $rowsTop = $grupTop - $b['g2'] - $b['gapBody'];
+    $row1Top = $rowsTop;
+    $row2Top = $row1Top - $b['rowHs'][0] - $b['rowGap'];
     foreach ([0 => $row1Top, 1 => $row2Top] as $rowIdx => $rTop) {
         foreach ([0, 1] as $col) {
             $i = $rowIdx * 2 + $col;
@@ -339,45 +368,85 @@ function mcard_back(MiniPdf $pdf, float $ox, float $oy, array $c): void
     $top = $oy + $H - $padTopBot;
     $bot = $oy + $padTopBot;
 
-    $title = mcard_block($pdf, 'KEUNTUNGAN LEVEL MEMBER', $cw, 14.4 * $k, 1, 1.55, 4.2, true);
-    $gap = 2.55;
-    $lineH = max(1.0, 2 * $k);
+    /* Susunan pratinjau (ronde 74): judul → garis → daftar level → garis → ketentuan,
+       SELURUHNYA dipusatkan vertikal dengan jarak konsisten. Garis diberi rongganya
+       sendiri (`ROW_GAP`) supaya tulisan tidak rapat dengan garis.
+       Cara: SEMUA blok disusun lebih dulu (tanpa menggambar) untuk menghitung tinggi
+       totalnya, lalu titik awalnya ditentukan agar terpusat — jadi bila keterangan
+       bertambah/membungkus, susunannya tetap rapi dan tidak ada yang terpotong. */
+    $titleSize = 14.4 * $k;
+    $benSize   = 12.16 * $k;
+    $noteSize  = 10.88 * $k;
+    $ROW_GAP   = min(8.0, 0.014 * MCARD_PREVIEW_PX) * $k;    // CSS: gap clamp(2px,1.4cqw,8px)
+    $LINE_GAP  = min(6.0, 0.009 * MCARD_PREVIEW_PX) * $k;    // CSS: margin garis clamp(1px,.9cqw,6px)
+    $lineH     = max(1.0, 2 * $k);
+    $benGap    = 0.39;                                        // jarak antarbaris daftar level
 
-    $y = $top;
-    mcard_put($pdf, $x, $y, $title, true, '#000000');
-    $y -= mcard_block_h($title) + $gap;
-    $pdf->fillRect($x, $y - $lineH, $cw, $lineH, $brand);
-    $y -= $lineH + $gap;
-
-    /* Daftar level: yang berlaku ditandai bintang (seperti pratinjau). */
-    $benSize = 12.16 * $k;
+    /* ---- 1. Susun blok ---- */
+    $title = mcard_block($pdf, 'KEUNTUNGAN LEVEL MEMBER', $cw, $titleSize, 1, 1.55, 4.2, true);
+    $bens = [];
     foreach ((array)$c['levels'] as $l) {
         $on = (string)$l['key'] === (string)$c['level']['key'];
         $txt = ($on ? '* ' : '') . (string)$l['label'] . ' ~ Diskon '
             . num((float)$l['pct'], (float)$l['pct'] == (int)$l['pct'] ? 0 : 1) . '%';
         $blk = mcard_block($pdf, $txt, $cw, $benSize, 1, 1.30, 3.4, $on);
-        if ($y - mcard_block_h($blk) < $bot + 30) break;      // sisakan ruang keterangan
-        mcard_put($pdf, $x, $y, $blk, $on, '#000000');
-        $y -= mcard_block_h($blk) + 0.39;
+        $bens[] = ['blk' => $blk, 'on' => $on];
     }
-    $y += 0.39;
-    $pdf->fillRect($x, $y - $lineH, $cw, $lineH, $brand);
-    $y -= $lineH + $gap;
-
     $noteTxt = 'Benefit member aktif: setiap transaksi minimal ' . money(member_min_transaction())
         . ' mendapat diskon otomatis sesuai level kartu (' . member_scope_text() . ').';
-    $blk = mcard_block($pdf, $noteTxt, $cw, 10.88 * $k, 8, 1.35, 3.4, false);
-    mcard_put($pdf, $x, $y, $blk, false, '#333333');
-    $y -= mcard_block_h($blk) + 2.0;
+    $noteBlk = mcard_block($pdf, $noteTxt, $cw, $noteSize, 8, 1.35, 3.4, false);
+    $klinik = trim((string)($c['note'] ?? ''));
+    $klinikBlk = $klinik !== '' ? mcard_block($pdf, $klinik, $cw, $noteSize, 6, 1.35, 3.4, false) : null;
 
-    $note = trim((string)($c['note'] ?? ''));
-    if ($note !== '' && $y > $bot + 6) {
-        $blk = mcard_block($pdf, $note, $cw, 10.88 * $k, 6, 1.35, 3.4, false);
-        if ($y - mcard_block_h($blk) < $bot) {
-            $blk = mcard_block($pdf, $note, $cw, 10.88 * $k, max(1, (int)floor(($y - $bot) / (10.88 * $k * 1.35))),
-                1.35, 3.4, false);
+    /* ---- 2. Fungsi tinggi total untuk sekumpulan blok ---- */
+    $hitung = function (array $bens, ?array $noteBlk, ?array $klinikBlk, array $title)
+        use ($ROW_GAP, $LINE_GAP, $lineH, $benGap): float {
+        $h = mcard_block_h($title) + $ROW_GAP + $LINE_GAP + $lineH + $LINE_GAP + $ROW_GAP;
+        $n = count($bens);
+        foreach ($bens as $i => $b) {
+            $h += mcard_block_h($b['blk']);
+            if ($i + 1 < $n) $h += $benGap;
         }
-        mcard_put($pdf, $x, $y, $blk, false, '#444444');
+        $h += $ROW_GAP + $LINE_GAP + $lineH + $LINE_GAP + $ROW_GAP;
+        if ($noteBlk) $h += mcard_block_h($noteBlk);
+        if ($klinikBlk) $h += mcard_block_h($klinikBlk) + 2.0;
+        return $h;
+    };
+
+    /* ---- 3. Menyesuaikan bila terlalu tinggi (beri ruang 1 pt) ---- */
+    $avail = ($top - $bot) - 1.0;
+    $total = $hitung($bens, $noteBlk, $klinikBlk, $title);
+    while ($total > $avail && count($bens) > 1) {           // kurangi baris level dari bawah
+        array_pop($bens);
+        $total = $hitung($bens, $noteBlk, $klinikBlk, $title);
+    }
+    if ($total > $avail && $klinikBlk) {                    // batasi baris catatan klinik
+        $klinikBlk = mcard_block($pdf, $klinik, $cw, $noteSize,
+            max(1, (int)floor((mcard_block_h($klinikBlk) - ($total - $avail)) / ($noteSize * 1.35))),
+            1.35, 3.4, false);
+        $total = $hitung($bens, $noteBlk, $klinikBlk, $title);
+    }
+
+    /* ---- 4. Pusatkan lalu gambar ---- */
+    $y = ($top + $bot) / 2 + $total / 2;
+    mcard_put($pdf, $x, $y, $title, true, '#000000');
+    $y -= mcard_block_h($title) + $ROW_GAP + $LINE_GAP;
+    $pdf->fillRect($x, $y - $lineH, $cw, $lineH, $brand);
+    $y -= $lineH + $LINE_GAP + $ROW_GAP;
+    $n = count($bens);
+    foreach ($bens as $i => $b) {
+        mcard_put($pdf, $x, $y, $b['blk'], $b['on'], '#000000');
+        $y -= mcard_block_h($b['blk']);
+        if ($i + 1 < $n) $y -= $benGap;
+    }
+    $y -= $ROW_GAP + $LINE_GAP;
+    $pdf->fillRect($x, $y - $lineH, $cw, $lineH, $brand);
+    $y -= $lineH + $LINE_GAP + $ROW_GAP;
+    mcard_put($pdf, $x, $y, $noteBlk, false, '#333333');
+    $y -= mcard_block_h($noteBlk);
+    if ($klinikBlk) {
+        $y -= 2.0;
+        mcard_put($pdf, $x, $y, $klinikBlk, false, '#444444');
     }
 
     if (!empty($c['border'])) {

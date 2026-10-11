@@ -463,7 +463,7 @@ page_head('Reservasi', 'reservasi');
 </div>
 
 <?php if ($view === 'cal'): ?>
-<div class="card">
+<div class="card cal-card">
   <div class="card-head">
     <h3><?= e(tgl($calStart)) ?> — <?= e(tgl($calEnd)) ?></h3>
     <div class="flex gap-sm">
@@ -495,6 +495,12 @@ page_head('Reservasi', 'reservasi');
   </form>
   <div class="card-body">
     <?php if (!$calRows): ?><p class="muted">Tidak ada reservasi pada bulan ini.</p><?php endif; ?>
+    <?php /* `.cal-scroll` (ronde 77): HANYA wadah ini yang bergeser ke samping di
+             HP — kalender memakai kolom tanggal 68px supaya isi reservasi tidak
+             terpotong, sedangkan halaman utama tidak ikut bergeser. Kepala hari
+             (SEN–MIN) & kotak tanggal tetap anggota GRID yang sama sehingga selalu
+             sejajar saat digeser. */ ?>
+    <div class="cal-scroll">
     <div class="cal">
       <?php foreach (['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'] as $d): ?><div class="dow"><?= $d ?></div><?php endforeach; ?>
       <?php
@@ -505,18 +511,30 @@ page_head('Reservasi', 'reservasi');
       for ($d = 1; $d <= $daysIn; $d++) {
           $dk = date('Y-m-', $first) . str_pad((string)$d, 2, '0', STR_PAD_LEFT);
           $cls = 'day' . ($dk === date('Y-m-d') ? ' today' : '');
-          echo '<div class="' . $cls . '"><span class="dnum">' . $d . '</span>';
+          /* Nomor tanggal dapat DIKLIK: membuka daftar reservasi yang disaring ke
+             tanggal itu — inilah cara melihat informasi LENGKAP setiap reservasi
+             pada kalender HP yang kolomnya sempit (permintaan pemilik ronde 77). */
+          echo '<div class="' . $cls . '"><a class="dnum" href="reservasi.php?view=list&amp;from=' . $dk . '&amp;to=' . $dk
+            . '" title="Lihat semua reservasi pada ' . e(tgl($dk)) . '">' . $d . '</a>';
           foreach ($calByDay[$dk] ?? [] as $ev) {
               /* Warna kartu di kalender MENGIKUTI status reservasinya (sama dengan
                  badge status pada daftar) supaya mudah dibaca sekali lihat. */
               $stKey = ['Menunggu' => 'st-menunggu', 'Confirmed' => 'st-confirmed', 'Hadir' => 'st-hadir',
                         'Selesai' => 'st-selesai', 'Cancel' => 'st-cancel', 'No Show' => 'st-noshow'][$ev['status']] ?? 'st-menunggu';
               $cls2 = 'ev ' . $stKey;
-              echo '<a class="' . $cls2 . '" title="' . e($ev['appointment_number'] . ' · ' . $ev['patient_name'] . ' · ' . $ev['status']) . '" href="reservasi.php?view=list&q=' . urlencode($ev['appointment_number']) . '">' . e(substr($ev['time'], 0, 5) . ' ' . $ev['patient_name']) . '</a>';
+              /* Lencana dipisah: JAM (tebal, selalu terbaca) + NAMA pasien
+                 (dipotong halus bila kolomnya sempit). Informasi lengkap tetap
+                 ada pada `title` dan saat lencana diklik (membuka reservasi itu
+                 di daftar). Pemisahan ini yang membuat di HP informasi penting
+                 terlihat tanpa deretan "…" (permintaan pemilik ronde 77). */
+              echo '<a class="' . $cls2 . '" title="' . e($ev['appointment_number'] . ' · ' . $ev['patient_name'] . ' · ' . $ev['status']) . '" href="reservasi.php?view=list&q=' . urlencode($ev['appointment_number']) . '">'
+                . '<span class="ev-t">' . e(substr($ev['time'], 0, 5)) . '</span>'
+                . '<span class="ev-n">' . e($ev['patient_name']) . '</span></a>';
           }
           echo '</div>';
       }
       ?>
+    </div>
     </div>
   </div>
 </div>
@@ -586,6 +604,18 @@ page_head('Reservasi', 'reservasi');
           <td><?= appointment_status_badge($r['status']) ?></td>
           <td>
             <div class="row-actions">
+              <?php
+              /* STATUS CANCEL (permintaan pemilik): tombol "Isi Rekam Medis" dan
+                 "→ Transaksi" TETAP DITAMPILKAN pada baris ini seperti tombol lain,
+                 tetapi dibuat ABU-ABU & tidak dapat diklik (kelas `.btn-off`).
+                 Begitu status reservasi diubah selain Cancel, tombolnya otomatis
+                 aktif kembali karena keadaan ini dihitung ulang di server setiap
+                 halaman dibuka. */
+              $offCancel = in_array($r['status'], ['Cancel'], true);
+              $offAttr   = 'aria-disabled="true" tabindex="-1" '
+                . 'title="Reservasi berstatus Cancel — tombol ini tidak dapat dipakai. '
+                . 'Ubah statusnya ke selain Cancel untuk mengaktifkan kembali."';
+              ?>
               <?php if (has_perm('reservation.manage')): ?>
                 <form method="post" class="inline-form">
                   <?= csrf_field() ?><input type="hidden" name="action" value="status"><input type="hidden" name="id" value="<?= (int)$r['id'] ?>">
@@ -596,9 +626,10 @@ page_head('Reservasi', 'reservasi');
                 <a class="btn btn-sm" href="reservasi.php?action=view&amp;id=<?= (int)$r['id'] ?>"
                    title="Lihat data reservasi (baca-saja, tidak mengubah apa pun)"><?= icon('search') ?> Lihat</a>
                 <a class="btn btn-sm" href="reservasi.php?action=edit&amp;id=<?= (int)$r['id'] ?>">Edit</a>
-                <?php if (has_perm('medical.manage') && !in_array($r['status'], ['Cancel'], true)): ?>
-                  <a class="btn btn-sm" href="rekam_medis_form.php?patient_id=<?= (int)$r['patient_id'] ?>&amp;reservation_id=<?= (int)$r['id'] ?>"
-                     title="Buat rekam medis dengan pasien, tanggal, dan dokter/terapis terisi dari reservasi ini (masih bisa diubah)"><?= icon('file-medical') ?> Isi Rekam Medis</a>
+                <?php if (has_perm('medical.manage')): ?>
+                  <a class="btn btn-sm<?= $offCancel ? ' btn-off' : '' ?>"
+                     href="rekam_medis_form.php?patient_id=<?= (int)$r['patient_id'] ?>&amp;reservation_id=<?= (int)$r['id'] ?>"
+                     <?= $offCancel ? $offAttr : 'title="Buat rekam medis dengan pasien, tanggal, dan dokter/terapis terisi dari reservasi ini (masih bisa diubah)"' ?>><?= icon('file-medical') ?> Isi Rekam Medis</a>
                 <?php endif; ?>
                 <?php if ($r['patient_phone']): ?>
                   <?php if (wa_api_configured()): ?>
@@ -634,10 +665,14 @@ page_head('Reservasi', 'reservasi');
                           onclick="openResEmail(<?= (int)$r['id'] ?>, 'doctor')"
                           title="Kirim email konfirmasi/pengingat ke dokter"><?= icon('bell') ?> Email Dokter</button>
                 <?php endif; ?>
-                <?php if (has_perm('order.manage') && !in_array($r['status'], ['Cancel'], true)): ?>
+                <?php if (has_perm('order.manage')): ?>
                   <?php /* branch_id ikut dikirim supaya Order Baru memakai cabang data
-                           reservasi/pasien ini (bukan cabang pertama). */ ?>
-                  <a class="btn btn-sm btn-primary" href="order_baru.php?branch_id=<?= (int)$r['branch_id'] ?>&patient_id=<?= (int)$r['patient_id'] ?>&appointment_id=<?= (int)$r['id'] ?>">→ Transaksi</a>
+                           reservasi/pasien ini (bukan cabang pertama).
+                           Reservasi Cancel: tombol tetap tampil tetapi ABU-ABU dan
+                           tidak dapat diklik (`.btn-off`) — lihat catatan di atas. */ ?>
+                  <a class="btn btn-sm btn-primary<?= $offCancel ? ' btn-off' : '' ?>"
+                     href="order_baru.php?branch_id=<?= (int)$r['branch_id'] ?>&patient_id=<?= (int)$r['patient_id'] ?>&appointment_id=<?= (int)$r['id'] ?>"
+                     <?= $offCancel ? $offAttr : '' ?>>→ Transaksi</a>
                 <?php endif; ?>
               <?php endif; ?>
             </div>
