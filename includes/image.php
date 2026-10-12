@@ -9,7 +9,7 @@
  *
  * Ukuran maksimum diatur dari Pengaturan Sistem supaya bisa disesuaikan:
  *   photo_max_patient  : foto pasien (default 480 px)
- *   photo_max_staff    : foto dokter/terapis (default 480 px)
+ *   photo_max_staff    : foto dokter/beautician (default 480 px)
  *   photo_max_medical  : foto rekam medis (default 1400 px, detail klinis penting)
  *   photo_max_logo     : logo (default 800 px)
  *   photo_quality      : mutu JPEG (default 80)
@@ -29,7 +29,7 @@ function img_gd(): bool
 function img_limits(string $kind): array
 {
     /* `biteMax` = batas UKURAN BERKAS SUMBER yang boleh diunggah (permintaan pemilik):
-       foto orang (pasien/dokter/terapis) maksimal **300 KB**, lampiran foto rekam medis
+       foto orang (pasien/dokter/beautician) maksimal **300 KB**, lampiran foto rekam medis
        maksimal **500 KB**. Berkas yang lebih besar DITOLAK dengan pesan yang jelas —
        tujuannya agar setiap foto benar-benar terkompresi maksimal dan penyimpanan hemat
        (tidak ada berkas besar yang masuk dan baru dikompres belakangan).
@@ -343,7 +343,7 @@ function img_result_text(array $r): string
 }
 
 /* ------------------------------------------------------------------ *
- * Avatar / foto orang (pasien, dokter, terapis)
+ * Avatar / foto orang (pasien, dokter, beautician)
  * ------------------------------------------------------------------ */
 /** Subfolder penyimpanan foto per jenis. */
 function photo_dir(string $kind): string
@@ -361,11 +361,11 @@ function photo_subject(string $kind): ?array
     return [
         'patient'   => ['table' => 'patients',   'label' => 'Pasien',   'perm' => 'patient.view',   'store' => 'patient'],
         'doctor'    => ['table' => 'doctors',    'label' => 'Dokter',   'perm' => 'staff.manage',   'store' => 'doctor'],
-        'therapist' => ['table' => 'therapists', 'label' => 'Terapis',  'perm' => 'staff.manage',   'store' => 'therapist'],
+        'therapist' => ['table' => 'therapists', 'label' => 'Beautician',  'perm' => 'staff.manage',   'store' => 'therapist'],
     ][$kind] ?? null;
 }
 
-/** Simpan foto seseorang (dipakai pasien, dokter, terapis). */
+/** Simpan foto seseorang (dipakai pasien, dokter, beautician). */
 function photo_save_person(string $kind, int $id, array $file): array
 {
     $sub = photo_subject($kind);

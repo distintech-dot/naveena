@@ -36,8 +36,14 @@ if ($aksi === 'setelan' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     set_setting('email_member_upgrade_subject', $subj);
     set_setting('email_member_upgrade_body', (string)($_POST['email_member_upgrade_body'] ?? ''));
     set_setting('wa_member_upgrade_template', (string)($_POST['wa_member_upgrade_template'] ?? ''));
+    /* Masa berlaku tautan unduh kartu member (dikirim lewat WhatsApp) — 1..30 hari. */
+    $linkDays = (int)($_POST['member_card_link_days'] ?? 3);
+    if ($linkDays < 1) $linkDays = 1;
+    if ($linkDays > 30) $linkDays = 30;
+    set_setting('member_card_link_days', (string)$linkDays);
     audit('Ubah Pesan Membership Upgrade', 'Membership', null, null,
-        ['otomatis' => $auto], 'Template ucapan selamat & sakelar kirim otomatis disimpan');
+        ['otomatis' => $auto, 'tautan_hari' => $linkDays],
+        'Template ucapan selamat, sakelar kirim otomatis, & masa berlaku tautan kartu disimpan');
     flash('Pesan Membership Upgrade disimpan. Kirim otomatis: ' . ($auto === '1' ? 'AKTIF' : 'NONAKTIF') . '.', 'success');
     header('Location: member_upgrade.php');
     exit;
@@ -98,7 +104,10 @@ if ($aksi === 'wa' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         /* Tautan WA disiapkan di sisi server; dibuka petugas lewat tombol (bukan
            window.open setelah await — popup blocker memblokirnya). */
         $_SESSION['wa_upgrade'] = ['id' => $id, 'pesan' => member_upgrade_wa_message($id),
-            'telepon' => wa_number((string)$r['phone'])];
+            'telepon' => wa_number((string)$r['phone']),
+            /* Tautan unduh kartu PDF (berlaku member_card_link_days()) ditampilkan
+               terpisah pada panel supaya petugas dapat menyalinnya bila perlu. */
+            'link' => member_upgrade_card_link($id)];
     }
     header('Location: member_upgrade.php?' . qs(['page' => page_no(), 'wa' => $id]));
     exit;
@@ -117,6 +126,14 @@ $perPage = per_page();
 $page = page_no();
 $idx = member_upgrade_list($f, $perPage, $page);
 $ringkas = member_upgrade_summary();
+
+/* Contoh tautan kartu (diambil dari riwayat terbaru) supaya Super Admin/petugas
+   dapat melihat bentuk tautan yang akan dikirim ke pasien lewat WhatsApp. */
+$contohLink = '';
+try {
+    $contohRow = one('SELECT id FROM member_upgrades ORDER BY id DESC LIMIT 1');
+    if ($contohRow) $contohLink = member_upgrade_card_link((int)$contohRow['id']);
+} catch (Throwable $e) { $contohLink = ''; }
 
 /* Pesan WhatsApp yang siap dikirim (setelah aksi `wa`). */
 $waSiap = null;
@@ -170,8 +187,17 @@ page_head('Membership Upgrade', 'member_upgrade');
         <?= icon('whatsapp') ?> Buka WhatsApp</a>
       <a class="btn btn-sm" href="member_upgrade.php">Tutup pesan ini</a>
     </div>
-    <div class="small muted mt-2">Sudah tercatat sebagai <strong>"Disiapkan, belum terkirim"</strong> — WhatsApp hanya bisa
-      menyampaikan teks, jadi kartu PDF tetap dikirim lewat email.</div>
+    <?php /* Kartu member PDF 2 halaman dikirim lewat WHATSAPP sebagai TAUTAN UNDUH
+             (WhatsApp tidak dapat melampirkan berkas). Tautan sudah menyatu di dalam
+             teks pesan di atas; ditampilkan lagi di sini supaya petugas dapat
+             menyalinnya sendiri bila perlu. */ ?>
+    <div class="mt-2">
+      <div class="small muted">Tautan unduh kartu member (PDF 2 halaman, berlaku
+        <strong><?= num(member_card_link_days()) ?> hari</strong>):</div>
+      <input class="input mt-1" readonly value="<?= e((string)($waSiap['link'] ?? '')) ?>" onclick="this.select()">
+    </div>
+    <div class="small muted mt-2">Sudah tercatat sebagai <strong>"Disiapkan, belum terkirim"</strong> — pesan berisi
+      tautan kartu member, jadi pasien dapat mengunduh kartunya sendiri dari WhatsApp.</div>
   </div>
 </div>
 <?php endif; ?>
@@ -260,6 +286,14 @@ page_head('Membership Upgrade', 'member_upgrade');
               <?php else: ?>
                 <span class="muted small">tanpa nomor</span>
               <?php endif; ?>
+              <?php /* Tautan unduh kartu PDF 2 halaman (berlaku member_card_link_days()).
+                       Disiapkan untuk SEMUA baris (walau pasien belum punya nomor WA)
+                       supaya tautannya tetap dapat dikirim lewat jalur lain. */ ?>
+              <?php $lnk = member_upgrade_card_link((int)$r['id']); ?>
+              <?php if ($lnk !== ''): ?>
+                <button type="button" class="btn btn-sm mt-1" title="Salin tautan unduh kartu member (berlaku <?= num(member_card_link_days()) ?> hari)"
+                        data-copy="<?= e($lnk) ?>" onclick="nvCopyLink(this)"><?= icon('download') ?> Salin tautan kartu</button>
+              <?php endif; ?>
             </td>
             <td>
               <?php if ($email !== ''): ?>
@@ -331,9 +365,27 @@ page_head('Membership Upgrade', 'member_upgrade');
         <div class="field" style="grid-column:1/-1">
           <label>Pesan WhatsApp</label>
           <textarea class="input" name="wa_member_upgrade_template" rows="8"><?= e(setting('wa_member_upgrade_template')) ?></textarea>
-          <span class="hint">WhatsApp <strong>tidak dikirim otomatis</strong> (kartu PDF tidak bisa dilampirkan lewat WA):
+          <span class="hint">WhatsApp <strong>tidak dikirim otomatis</strong> (petugas yang menekan kirim):
             tombol WhatsApp pada tabel menyiapkan pesan ini untuk dibuka petugas, dan statusnya tercatat
-            "Disiapkan, belum terkirim".</span>
+            "Disiapkan, belum terkirim".<br>
+            Variabel: {nama} {member} {level} {level_lama} {diskon} {benefit} {akumulasi} {periode}
+            {klinik} {cabang} {tanggal} <strong>{link}</strong> (tautan unduh kartu PDF 2 halaman)
+            {berlaku}.</span>
+        </div>
+        <div class="field">
+          <label>Masa Berlaku Tautan Kartu (hari)</label>
+          <input class="input" type="number" min="1" max="30" name="member_card_link_days"
+                 value="<?= num(member_card_link_days()) ?>">
+          <span class="hint">Tautan unduh kartu member pada pesan WhatsApp berlaku sekian hari
+            (bawaan <strong>3 hari</strong>), lalu kedaluwarsa sendiri. Berkas PDF yang sudah diunduh
+            pasien tetap dapat dibuka selamanya.</span>
+        </div>
+        <div class="field">
+          <label>Contoh Tautan Kartu</label>
+          <input class="input" readonly value="<?= e($contohLink !== '' ? $contohLink : '(belum ada riwayat kenaikan level)') ?>"
+                 onclick="this.select()">
+          <span class="hint">Tautan bertanda tangan (tidak dapat ditebak) dan hanya berlaku untuk satu kartu
+            pasien — halaman unduhnya tidak memerlukan login.</span>
         </div>
       </div>
     </div>

@@ -131,7 +131,7 @@ function purge_specs(): array
             /* Nominal biaya operasional pada menu Keuangan ikut dikosongkan. */
             'reset_finance' => true,
             'warn' => 'Menghapus SELURUH data operasional klinik: pasien, rekam medis (beserta foto), reservasi, '
-                . 'transaksi & pembayaran, master treatment/skincare/bahan, supplier, dokter & terapis, '
+                . 'transaksi & pembayaran, master treatment/skincare/bahan, supplier, dokter & beautician, '
                 . 'seluruh riwayat stok & movement, audit log, dan riwayat import. '
                 . 'Data yang TIDAK dihapus: manajemen user beserta hak akses, Pengaturan Sistem, kamus ICD, '
                 . 'serta maksimal 2 cabang pertama (sebagai contoh). Gunakan tombol "Isi Data Demo" setelah ini '
@@ -165,7 +165,7 @@ function purge_specs(): array
                 ['label' => 'Bahan treatment', 'sql' => 'DELETE FROM treatment_materials'],
                 ['label' => 'Supplier', 'sql' => 'DELETE FROM suppliers'],
                 ['label' => 'Dokter', 'sql' => 'DELETE FROM doctors'],
-                ['label' => 'Terapis', 'sql' => 'DELETE FROM therapists'],
+                ['label' => 'Beautician', 'sql' => 'DELETE FROM therapists'],
                 ['label' => 'Antrean pembayaran gateway', 'sql' => 'DELETE FROM pay_pending'],
                 ['label' => 'Rincian galat import', 'sql' => 'DELETE FROM import_errors'],
                 ['label' => 'Riwayat import', 'sql' => 'DELETE FROM import_batches'],
@@ -252,7 +252,7 @@ $scopeKey = $scopeId === null ? 'Semua Cabang' : (string)scalar('SELECT name FRO
  *
  * Ditemukan dari kegagalan nyata: `DELETE FROM branches` selalu ditolak
  * ("FOREIGN KEY constraint failed") karena central masih memuat data contoh
- * dokter/terapis (tabel operasional) yang ber-FK ke `branches`. Fungsi ini
+ * dokter/beautician (tabel operasional) yang ber-FK ke `branches`. Fungsi ini
  * menyisir sendiri tabel mana pun di central yang punya kolom `branch_id`
  * ber-FK ke `branches`, jadi tidak bergantung daftar nama tabel.
  *
@@ -506,7 +506,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($keep) {
                         $keepList = implode(',', array_map('intval', $keep));
                         /* Sisa baris data operasional di CENTRAL (mis. data contoh
-                           dokter/terapis pada basis data lama) dibersihkan lebih dulu:
+                           dokter/beautician pada basis data lama) dibersihkan lebih dulu:
                            baris seperti itu masih ber-FK ke `branches` sehingga
                            penghapusan cabang selalu gagal. */
                         purge_central_leftovers($keep);

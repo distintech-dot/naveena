@@ -32,9 +32,11 @@ function ai_app_known_files(): array
     return [
         'index.php'  => 'Titik masuk aplikasi — mengarahkan pengguna ke dashboard atau halaman masuk.',
         'login.php'  => 'Halaman masuk (email + kata sandi), termasuk "ingat saya" dan tautan lupa kata sandi.',
+        'struk_link.php' => 'Tautan struk PUBLIK bertoken (tanpa login) — dapat mengunduh PDF struk.',
+        'kartu_link.php' => 'Tautan kartu member PUBLIK bertoken (tanpa login) — dapat mengunduh kartu PDF 2 halaman.',
         'logout.php' => 'Keluar dari sesi dan menghapus token "ingat saya".',
         'api.php'    => 'Titik JSON untuk saran otomatis & data pendukung (pasien, treatment, ICD, paket, bahan).',
-        'photo.php'  => 'Menyajikan foto orang (pasien/dokter/terapis) — wajib login & dibatasi cabang.',
+        'photo.php'  => 'Menyajikan foto orang (pasien/dokter/beautician) — wajib login & dibatasi cabang.',
         'media.php'  => 'Menyajikan lampiran rekam medis — wajib login & dibatasi cabang.',
         'logo.php'   => 'Menyajikan logo klinik (dipakai juga di halaman masuk).',
         'qris.php'   => 'Menyajikan GAMBAR QRIS klinik untuk langkah pembayaran (tanpa login).',

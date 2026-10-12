@@ -873,7 +873,7 @@ switch ($type) {
             $wc .= ' AND (pat.name LIKE ? OR m.record_number LIKE ? OR m.diagnosis LIKE ?)';
             $t = '%' . gp('q') . '%'; array_push($p, $t, $t, $t);
         }
-        $headers = ['No. Rekam Medis', 'Tanggal', 'Pasien', 'No. Pasien', 'Dokter/Terapis', 'Cabang',
+        $headers = ['No. Rekam Medis', 'Tanggal', 'Pasien', 'No. Pasien', 'Dokter/Beautician', 'Cabang',
                     'Subjektif (S)', 'Objektif (O)', 'Assessment / Diagnosa (A)', 'ICD-10', 'Tindakan', 'ICD-9-CM', 'Planning (P)', 'Status'];
         foreach (all("SELECT m.*, pat.name patient, pat.patient_number, b.name branch
                       FROM medical_records m JOIN patients pat ON pat.id=m.patient_id JOIN branches b ON b.id=m.branch_id

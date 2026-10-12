@@ -9,7 +9,7 @@
  *
  * Isi data demo:
  *   - 2 cabang (dibuat bila belum ada),
- *   - dokter & terapis tiap cabang,
+ *   - dokter & beautician tiap cabang,
  *   - supplier, master treatment, master skincare, bahan treatment + stok awal,
  *   - 30 pasien (dibagi ke 2 cabang), sebagian memakai Kartu Member,
  *   - rekam medis (dengan kode ICD dari kamus resmi),
@@ -500,7 +500,7 @@ function demo_seed(?int $userId = null): array
             $bid = (int)$b['id'];
             $master[$bid] = ['tr' => [], 'sk' => [], 'bh' => [], 'doc' => [], 'th' => []];
 
-            /* dokter & terapis (dipakai ulang bila cabang sudah punya) */
+            /* dokter & beautician (dipakai ulang bila cabang sudah punya) */
             $master[$bid]['doc'] = all('SELECT * FROM doctors WHERE branch_id = ? AND status = "active" ORDER BY id', [$bid]);
             if (!$master[$bid]['doc']) {
                 foreach ([array_slice($doctorNames, 0, 2), [$doctorNames[2], $doctorNames[3]]][$bi % 2] as $dn) {
@@ -518,7 +518,7 @@ function demo_seed(?int $userId = null): array
                     q('INSERT INTO therapists (name, phone, specialization, schedule, branch_id, status, created_at)
                        VALUES (?,?,?,?,?,"active",datetime("now","localtime"))',
                         [$tn, '0813' . str_pad((string)random_int(1000000, 9999999), 7, '0'),
-                         'Terapis Perawatan Kulit', 'Senin-Sabtu 09.00-20.00', $bid]);
+                         'Beautician Perawatan Kulit', 'Senin-Sabtu 09.00-20.00', $bid]);
                     $out['terapis']++;
                 }
                 $master[$bid]['th'] = all('SELECT * FROM therapists WHERE branch_id = ? ORDER BY id', [$bid]);

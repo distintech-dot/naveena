@@ -406,7 +406,8 @@ function session_revoke_with_remember(int $sessionId, int $oleh, string $alasan)
  * terakhirnya masih dalam batas `login_stale_minutes` (bawaan 15 menit) — sesi
  * yang perambannya sudah ditutup tanpa menekan Keluar tidak lagi disebut aktif.
  */
-function session_list(array $f = [], int $limit = 100): array
+/** Susun klausa WHERE + parameter penyaring daftar sesi (dipakai daftar & hitungan). */
+function session_list_filter(array $f = [], array &$p = []): string
 {
     $w = ['1=1'];
     $p = [];
@@ -420,8 +421,23 @@ function session_list(array $f = [], int $limit = 100): array
         array_push($p, $like, $like, $like, $like);
     }
     if (!empty($f['user'])) { $w[] = 's.user_id = ?'; $p[] = (int)$f['user']; }
+    return implode(' AND ', $w);
+}
+
+/**
+ * Daftar sesi untuk Login Management.
+ *
+ * @param int $limit  jumlah baris yang diambil (maks 500)
+ * @param int $offset mulai dari baris ke-berapa (untuk PAGINASI 10/25/50)
+ *                   — permintaan pemilik: daftar dibungkus container 450px,
+ *                   jadi halaman ini kini benar-benar berhalaman.
+ */
+function session_list(array $f = [], int $limit = 100, int $offset = 0): array
+{
+    $p = [];
+    $where = session_list_filter($f, $p);
     $limit = max(1, min(500, $limit));
-    $where = implode(' AND ', $w);
+    $offset = max(0, $offset);
     return all("SELECT s.*, u.name, u.email, u.status AS user_status, r.name AS role_name, r.code AS role_code,
                        b.name AS branch_name
                 FROM user_sessions s
@@ -431,7 +447,17 @@ function session_list(array $f = [], int $limit = 100): array
                 WHERE {$where}
                 ORDER BY (CASE WHEN s.logout_at IS NULL AND s.revoked = 0 THEN 0 ELSE 1 END),
                          s.last_activity DESC, s.id DESC
-                LIMIT {$limit}", $p);
+                LIMIT {$limit} OFFSET {$offset}", $p);
+}
+
+/** Jumlah TOTAL sesi pada penyaring yang sedang berlaku (untuk paginasi). */
+function session_list_count(array $f = []): int
+{
+    $p = [];
+    $where = session_list_filter($f, $p);
+    return (int)scalar("SELECT COUNT(*) FROM user_sessions s
+                        JOIN users u ON u.id = s.user_id
+                        WHERE {$where}", $p);
 }
 
 /** Ringkasan angka untuk kartu Login Management. */

@@ -2,7 +2,7 @@
 /**
  * PEMBERSIH DATA DOKTER & TERAPIS YANG DUPLIKAT
  * ============================================
- * Permintaan pemilik: di menu "Dokter & Terapis" banyak baris kembar — hapus yang
+ * Permintaan pemilik: di menu "Dokter & Beautician" banyak baris kembar — hapus yang
  * tidak perlu.
  *
  * CARA KERJA (aman, tidak menyentuh riwayat):
@@ -194,11 +194,11 @@ function staff_dup_apply(?int $userId = null): array
     }
 
     if ($userId !== null && $hasil['rows'] > 0) {
-        audit('Gabungkan Dokter/Terapis Kembar', 'Pengaturan', null,
+        audit('Gabungkan Dokter/Beautician Kembar', 'Pengaturan', null,
             ['baris_kembar' => $hasil['rows']],
             ['digabung' => $hasil['groups'], 'dihapus' => $hasil['rows'], 'rujukan_dipindah' => $hasil['refs'],
              'foto_dipakai' => $hasil['files']],
-            'Menghapus baris dokter/terapis kembar pada cabang yang sama; seluruh rujukan riwayat dipindahkan '
+            'Menghapus baris dokter/beautician kembar pada cabang yang sama; seluruh rujukan riwayat dipindahkan '
             . 'ke baris yang dipertahankan');
     }
     return $hasil;

@@ -46,7 +46,7 @@ function import_types(): array
                 'nik' => ['label' => 'NIK', 'aliases' => ['nik', 'no_ktp', 'nomor_ktp', 'ktp']],
                 'telepon' => ['label' => 'Telepon', 'aliases' => ['telepon', 'no_telepon', 'no_hp', 'hp', 'whatsapp', 'wa', 'phone']],
                 'dokter' => ['label' => 'Dokter', 'aliases' => ['dokter', 'doctor', 'dpjp', 'nama_dokter']],
-                'terapis' => ['label' => 'Terapis', 'aliases' => ['terapis', 'therapist', 'nama_terapis']],
+                'terapis' => ['label' => 'Beautician', 'aliases' => ['beautician', 'terapis', 'therapist', 'nama_terapis', 'nama_beautician']],
                 'subjektif' => ['label' => 'Subjektif', 'aliases' => ['subjektif', 'subjective', 'keluhan', 'anamnesis']],
                 'objektif' => ['label' => 'Objektif', 'aliases' => ['objektif', 'objective', 'pemeriksaan']],
                 'diagnosis' => ['label' => 'Assessment / Diagnosa', 'aliases' => ['diagnosis', 'diagnosa', 'assessment', 'dx']],
@@ -331,13 +331,13 @@ function imp_rekam_medis(array $row, array $map, int $branch, array $user): arra
     $r9 = $icd9 !== '' ? icd_lookup('icd9cm', $icd9) : null;
     if ($icd9 !== '' && !$r9) throw new RuntimeException('Kode ICD-9-CM "' . $icd9 . '" tidak ada di kamus resmi.');
 
-    // dokter / terapis dicocokkan berdasarkan nama pada cabang ini
+    // dokter / beautician dicocokkan berdasarkan nama pada cabang ini
     $docName = cell($row, $map, 'dokter');
     $thName  = cell($row, $map, 'terapis');
     $doc = $docName !== '' ? one('SELECT * FROM doctors WHERE name = ? AND branch_id = ? LIMIT 1', [$docName, $branch]) : null;
     if ($docName !== '' && !$doc) $warn[] = 'Dokter "' . $docName . '" tidak ada di data dokter cabang ini — disimpan sebagai teks saja.';
     $th = $thName !== '' ? one('SELECT * FROM therapists WHERE name = ? AND branch_id = ? LIMIT 1', [$thName, $branch]) : null;
-    if ($thName !== '' && !$th) $warn[] = 'Terapis "' . $thName . '" tidak ada di data terapis cabang ini — disimpan sebagai teks saja.';
+    if ($thName !== '' && !$th) $warn[] = 'Beautician "' . $thName . '" tidak ada di data beautician cabang ini — disimpan sebagai teks saja.';
     $staff = $doc['name'] ?? ($th['name'] ?? ($docName ?: $thName));
 
     $num = next_medical_number($branch);

@@ -124,14 +124,14 @@ if ($statusFilter === 'amendment') {
     $where[] = 'm.status = ?';
     $params[] = $statusFilter;
 }
-/* Daftar pilihan dokter/terapis untuk filter (mengikuti cabang yang berlaku,
+/* Daftar pilihan dokter/beautician untuk filter (mengikuti cabang yang berlaku,
    sama seperti daftar di form rekam medis). */
 $filterDoctors = all('SELECT id, name FROM doctors WHERE status="active"'
     . ($scope !== null ? ' AND branch_id = ' . (int)$scope : '') . ' ORDER BY name');
 $filterTherapists = all('SELECT id, name FROM therapists WHERE status="active"'
     . ($scope !== null ? ' AND branch_id = ' . (int)$scope : '') . ' ORDER BY name');
 $w = implode(' AND ', $where);
-/* Dokter & terapis di-join terpisah supaya KEDUANYA bisa ditampilkan
+/* Dokter & beautician di-join terpisah supaya KEDUANYA bisa ditampilkan
    (dulu hanya salah satu karena memakai staff_name yang berisi satu nama). */
 $base = "FROM medical_records m JOIN patients p ON p.id=m.patient_id JOIN branches b ON b.id=m.branch_id
          LEFT JOIN doctors d ON d.id=m.doctor_id LEFT JOIN therapists th ON th.id=m.therapist_id
@@ -185,9 +185,9 @@ page_head('Rekam Medis Elektronik', 'rekam_medis');
           <option value="<?= (int)$d['id'] ?>"<?= $docFilter === (int)$d['id'] ? ' selected' : '' ?>><?= e($d['name']) ?></option>
         <?php endforeach; ?>
       </select></div>
-    <div class="field"><label>Terapis</label>
+    <div class="field"><label>Beautician</label>
       <select class="input input-sm" name="therapist">
-        <option value="">Semua Terapis</option>
+        <option value="">Semua Beautician</option>
         <?php foreach ($filterTherapists as $t): ?>
           <option value="<?= (int)$t['id'] ?>"<?= $therFilter === (int)$t['id'] ? ' selected' : '' ?>><?= e($t['name']) ?></option>
         <?php endforeach; ?>
@@ -221,10 +221,10 @@ page_head('Rekam Medis Elektronik', 'rekam_medis');
   <div class="table-wrap">
     <?php if (!$rows): ?><?= empty_state(
         (gp('from') !== '' || gp('to') !== '' || $docFilter > 0 || $therFilter > 0 || $q !== '' || $statusFilter !== '')
-          ? 'Tidak ada rekam medis yang cocok dengan filter (0 data). Ubah rentang tanggal/dokter/terapis atau klik Reset.'
+          ? 'Tidak ada rekam medis yang cocok dengan filter (0 data). Ubah rentang tanggal/dokter/beautician atau klik Reset.'
           : 'Belum ada rekam medis.') ?><?php else: ?>
     <table class="tbl">
-      <thead><tr><th>Nomor</th><th>Tanggal</th><th>Pasien</th><th>Dokter/Terapis</th><th>Assessment / Diagnosa</th><th>ICD-10</th><th>Foto</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>Nomor</th><th>Tanggal</th><th>Pasien</th><th>Dokter/Beautician</th><th>Assessment / Diagnosa</th><th>ICD-10</th><th>Foto</th><th>Status</th><th></th></tr></thead>
       <tbody>
       <?php foreach ($rows as $m): ?>
         <tr>

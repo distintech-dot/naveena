@@ -109,8 +109,8 @@ $meds = [];
 $medsAll = 0;
 $medsTotalPeriod = 0;
 if (has_perm('medical.view')) {
-    /* Nama dokter & terapis di-join TERPISAH supaya keduanya bisa tampil — kolom
-       `staff_name` tidak pernah ada pada query ini sehingga kolom "Dokter/Terapis"
+    /* Nama dokter & beautician di-join TERPISAH supaya keduanya bisa tampil — kolom
+       `staff_name` tidak pernah ada pada query ini sehingga kolom "Dokter/Beautician"
        selalu tampil "-" (bug kecil yang ikut diperbaiki). */
     $medsTotalPeriod = (int)scalar('SELECT COUNT(*) FROM medical_records WHERE patient_id = ? AND date BETWEEN ? AND ?', [$id, $ps, $pe]);
     $meds = all('SELECT m.*, b.name AS branch_name, d.name AS doctor_name, th.name AS therapist_name
@@ -370,7 +370,7 @@ function pd_period_bar(int $patientId, string $period, string $ps, string $pe): 
         ? 'Tidak ada rekam medis pada periode ini. Pasien ini punya ' . num($medsAll) . ' riwayat — pilih periode "Seluruh riwayat" untuk melihat semuanya.'
         : 'Belum ada rekam medis.') ?><?php else: ?>
     <table class="tbl">
-      <thead><tr><th>Nomor</th><th>Tanggal</th><th>Dokter/Terapis</th><th>Assessment / Diagnosa</th><th>ICD-10</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>Nomor</th><th>Tanggal</th><th>Dokter/Beautician</th><th>Assessment / Diagnosa</th><th>ICD-10</th><th>Status</th><th></th></tr></thead>
       <tbody>
       <?php foreach ($meds as $m): ?>
         <tr>

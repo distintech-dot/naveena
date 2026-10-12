@@ -75,11 +75,11 @@ function template_code_default(string $key): string
             if (function_exists('reservation_email_default_body')) return reservation_email_default_body();
             return "Halo {nama},\n\nBerikut detail reservasi Anda di {klinik} {cabang}:\n"
                 . "No. Reservasi: {no_reservasi}\nTanggal: {tanggal}\nJam: {jam}\n"
-                . "Treatment: {treatment}\nDokter/Terapis: {staff}\nCatatan: {catatan}\n\n"
+                . "Treatment: {treatment}\nDokter/Beautician: {staff}\nCatatan: {catatan}\n\n"
                 . "Mohon konfirmasi kehadiran Anda. Terima kasih.\n\nSalam sehat,\n{klinik}";
         case 'wa_template':
             return "Halo Kak {nama}\n\nKami dari {klinik} {cabang}.\nMengingatkan reservasi Kakak:\n"
-                . "Tanggal: {tanggal}\nJam: {jam}\nTreatment: {treatment}\nDokter/Terapis: {dokter}\n\n"
+                . "Tanggal: {tanggal}\nJam: {jam}\nTreatment: {treatment}\nDokter/Beautician: {dokter}\n\n"
                 . "Mohon konfirmasi kehadirannya ya\nTerima kasih ❤️";
         case 'wa_template_doctor':
             return "Selamat pagi/siang Dokter {dokter},\n\nPengingat jadwal praktik di {klinik} {cabang}:\n"
@@ -99,12 +99,18 @@ function template_code_default(string $key): string
                 . "Benefit diskon Anda sekarang: {diskon}\n{benefit}\n\n"
                 . "Bersama email ini kami lampirkan kartu member lengkap Anda (PDF) yang memuat\n"
                 . "pratinjau kartu beserta status dan aturan diskon yang berlaku.\n\n"
+                . "Bila lampirannya tidak dapat dibuka, kartu yang sama juga dapat diunduh di:\n"
+                . "{link} (berlaku {berlaku})\n\n"
                 . "Terima kasih telah mempercayakan perawatan kulit Anda kepada {klinik}.\n\n"
                 . "Salam sehat,\n{klinik} {cabang}";
         case 'wa_member_upgrade_template':
+            /* {link} = tautan unduh kartu member PDF 2 halaman (berlaku {berlaku}).
+               Kartu dikirim lewat WHATSAPP sebagai tautan karena WhatsApp tidak
+               dapat melampirkan berkas (permintaan pemilik, ronde 79). */
             return "Halo Kak {nama} 🙏\n\nSelamat! Level kartu member Kakak di {klinik} {cabang} naik menjadi *{level}*.\n\n"
                 . "Benefit diskon sekarang: {diskon}\nAkumulasi transaksi {periode}: {akumulasi}\n\n"
-                . "Kartu member lengkap akan kami kirim ke email Kakak.\n\nSalam sehat,\n{klinik} {cabang}";
+                . "Kartu member lengkap (PDF 2 halaman) bisa diunduh di tautan berikut — berlaku {berlaku}:\n"
+                . "{link}\n\nSalam sehat,\n{klinik} {cabang}";
     }
     return '';
 }

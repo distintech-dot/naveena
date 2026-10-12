@@ -1,6 +1,6 @@
 <?php
 /**
- * Menyajikan foto pasien / dokter / terapis.
+ * Menyajikan foto pasien / dokter / beautician.
  *
  * Foto adalah data privat, jadi WAJIB login dan dibatasi cabang (pasien dan
  * tenaga medis terikat cabang). Berkas disimpan di luar folder publik sehingga

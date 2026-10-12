@@ -789,7 +789,7 @@ function reservation_email_default_body(): string
 {
     return "Halo {nama},\n\nBerikut detail reservasi Anda di {klinik} {cabang}:\n"
          . "No. Reservasi: {no_reservasi}\nTanggal: {tanggal}\nJam: {jam}\n"
-         . "Treatment: {treatment}\nDokter/Terapis: {staff}\n"
+         . "Treatment: {treatment}\nDokter/Beautician: {staff}\n"
          . "Catatan: {catatan}\n\n"
          . "Mohon konfirmasi kehadiran Anda. Terima kasih.\n\nSalam sehat,\n{klinik}";
 }
@@ -804,7 +804,7 @@ function reservation_email_replace(string $tpl, array $a): string
         : trim((string)($a['doctor_name'] ?? '') . ' ' . (string)($a['therapist_name'] ?? ''));
     return str_replace(
         ['{nama}', '{pasien}', '{no_reservasi}', '{tanggal}', '{jam}', '{treatment}',
-         '{dokter}', '{terapis}', '{staff}', '{catatan}', '{telepon}', '{klinik}', '{cabang}', '{alamat}'],
+         '{dokter}', '{beautician}', '{staff}', '{catatan}', '{telepon}', '{klinik}', '{cabang}', '{alamat}'],
         [
             (string)($a['patient_name'] ?? ''),
             (string)($a['patient_name'] ?? ''),

@@ -24,7 +24,7 @@ function demo_plan(): array
     return [
         'Cabang (dibuat bila belum ada)' => '2 cabang',
         'Dokter' => '2 per cabang',
-        'Terapis' => '3 per cabang',
+        'Beautician' => '3 per cabang',
         'Supplier' => '3 nama supplier',
         'Master treatment' => '12 treatment per cabang — <strong>termasuk kolom HPP</strong> (perkiraan 35% harga normal)',
         'Master skincare' => '10 produk per cabang + stok awal (kolom <strong>HPP / harga beli</strong> ikut diisi)',

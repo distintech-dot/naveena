@@ -117,7 +117,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $doc = one('SELECT * FROM doctors WHERE id = ?', [(int)$a['doctor_id']]);
             if (!$doc) throw new RuntimeException('Data dokter tidak ditemukan.');
             $phone = trim((string)($doc['phone'] ?? ''));
-            if ($phone === '') throw new RuntimeException('Nomor WhatsApp dokter ' . $doc['name'] . ' belum diisi. Lengkapi di menu Dokter & Terapis.');
+            if ($phone === '') throw new RuntimeException('Nomor WhatsApp dokter ' . $doc['name'] . ' belum diisi. Lengkapi di menu Dokter & Beautician.');
             $msg = wa_doctor_message($a + ['doctor_name' => $doc['name']]);
             $err = '';
             $ok = wa_api_configured() ? wa_api_send($phone, $msg, $err) : false;
@@ -166,7 +166,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                supaya tidak pernah dilaporkan "terkirim" padahal pasti gagal. */
             if ($to === '' || filter_var($to, FILTER_VALIDATE_EMAIL) === false) {
                 throw new RuntimeException('Alamat email tujuan tidak valid: ' . ($to === '' ? '(kosong)' : $to)
-                    . '. Lengkapi email ' . ($target === 'doctor' ? 'dokter pada menu Dokter & Terapis' : 'pasien pada Data Pasien') . '.');
+                    . '. Lengkapi email ' . ($target === 'doctor' ? 'dokter pada menu Dokter & Beautician' : 'pasien pada Data Pasien') . '.');
             }
             /* Pengaman kirim ulang (ronde 39): konfirmasi lebih dulu bila email
                konfirmasi reservasi ini sudah pernah dikirim ke alamat yang sama. */
@@ -305,7 +305,7 @@ $toDate   = gp('to');
 if ($fromDate === '' && $toDate === '' && gp('date') !== '') { $fromDate = $toDate = gp('date'); }
 if ($fromDate !== '') { $where[] = 'a.date >= ?'; $params[] = $fromDate; }
 if ($toDate !== '')   { $where[] = 'a.date <= ?'; $params[] = $toDate; }
-/* Dokter & Terapis: kolom yang sudah ada (doctor_id / therapist_id); parameternya
+/* Dokter & Beautician: kolom yang sudah ada (doctor_id / therapist_id); parameternya
    dibedakan karena id tabel doctors & therapists bisa sama. */
 $docFilter = (int)gp('doctor');
 if ($docFilter > 0) { $where[] = 'a.doctor_id = ?'; $params[] = $docFilter; }
@@ -379,7 +379,7 @@ foreach ($calRows as $r) $calByDay[$r['date']][] = $r;
  * DAFTAR ACUAN FORMULIR RESERVASI MENGIKUTI **CABANG YANG DIPILIH**
  * (permintaan pemilik, ronde 36).
  *
- * Sebelumnya daftar dokter/terapis/treatment mengikuti CAKUPAN FILTER halaman
+ * Sebelumnya daftar dokter/beautician/treatment mengikuti CAKUPAN FILTER halaman
  * (mis. "Semua Cabang"), sehingga saat pemilik memilih cabang Kaliwungu di kolom
  * Cabang, pilihan treatment masih memuat milik cabang lain — dan untuk menandai
  * asalnya dulu ditambahkan teks "— Kaliwungu" pada tiap pilihan. Cara itu
@@ -412,7 +412,7 @@ $branchCond = function (string $col) use ($formBranchId, $scope): array {
     return ['', []];
 };
 /* Daftar FILTER (bar di atas daftar reservasi) memakai cakupan HALAMAN — supaya
-   pemilik tetap dapat menyaring memakai dokter/terapis cabang mana pun. */
+   pemilik tetap dapat menyaring memakai dokter/beautician cabang mana pun. */
 $scopeCond = function (string $col) use ($scope): string {
     return $scope !== null ? ' AND ' . $col . ' = ' . (int)$scope : '';
 };
@@ -558,9 +558,9 @@ page_head('Reservasi', 'reservasi');
           <option value="<?= (int)$d['id'] ?>"<?= $docFilter === (int)$d['id'] ? ' selected' : '' ?>><?= e($d['name']) ?></option>
         <?php endforeach; ?>
       </select></div>
-    <div class="field"><label>Terapis</label>
+    <div class="field"><label>Beautician</label>
       <select class="input input-sm" name="therapist">
-        <option value="">Semua Terapis</option>
+        <option value="">Semua Beautician</option>
         <?php foreach ($therapistList as $t): ?>
           <option value="<?= (int)$t['id'] ?>"<?= $therFilter === (int)$t['id'] ? ' selected' : '' ?>><?= e($t['name']) ?></option>
         <?php endforeach; ?>
@@ -573,7 +573,7 @@ page_head('Reservasi', 'reservasi');
   <div class="table-wrap">
     <?php if (!$rows): ?><?= empty_state('Belum ada reservasi.') ?><?php else: ?>
     <table class="tbl">
-      <thead><tr><th>No. Reservasi</th><th>Jadwal</th><th>Pasien</th><th>Treatment</th><th>Dokter/Terapis</th><th>Cabang</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>No. Reservasi</th><th>Jadwal</th><th>Pasien</th><th>Treatment</th><th>Dokter/Beautician</th><th>Cabang</th><th>Status</th><th></th></tr></thead>
       <tbody>
       <?php foreach ($rows as $r): ?>
         <tr>
@@ -629,7 +629,7 @@ page_head('Reservasi', 'reservasi');
                 <?php if (has_perm('medical.manage')): ?>
                   <a class="btn btn-sm<?= $offCancel ? ' btn-off' : '' ?>"
                      href="rekam_medis_form.php?patient_id=<?= (int)$r['patient_id'] ?>&amp;reservation_id=<?= (int)$r['id'] ?>"
-                     <?= $offCancel ? $offAttr : 'title="Buat rekam medis dengan pasien, tanggal, dan dokter/terapis terisi dari reservasi ini (masih bisa diubah)"' ?>><?= icon('file-medical') ?> Isi Rekam Medis</a>
+                     <?= $offCancel ? $offAttr : 'title="Buat rekam medis dengan pasien, tanggal, dan dokter/beautician terisi dari reservasi ini (masih bisa diubah)"' ?>><?= icon('file-medical') ?> Isi Rekam Medis</a>
                 <?php endif; ?>
                 <?php if ($r['patient_phone']): ?>
                   <?php if (wa_api_configured()): ?>
@@ -652,7 +652,7 @@ page_head('Reservasi', 'reservasi');
                     <a class="btn btn-sm" target="_blank" rel="noopener" title="Pengingat jadwal untuk dokter (dibuka di WhatsApp)"
                        href="<?= e(wa_link($docPhone, wa_doctor_message($r + ['doctor_name' => $r['doctor_name']]))) ?>"><?= icon('whatsapp') ?> WA Dokter</a>
                   <?php else: ?>
-                    <span class="badge badge-yellow" title="Nomor WhatsApp dokter belum diisi di menu Dokter &amp; Terapis">WA Dokter: no. kosong</span>
+                    <span class="badge badge-yellow" title="Nomor WhatsApp dokter belum diisi di menu Dokter &amp; Beautician">WA Dokter: no. kosong</span>
                   <?php endif; ?>
                 <?php endif; ?>
                 <?php /* DUA TOMBOL EMAIL (permintaan pemilik): Email Pasien & Email Dokter.
@@ -728,7 +728,7 @@ page_head('Reservasi', 'reservasi');
               <option value="">- tidak ada -</option>
               <?php foreach ($formDoctorList as $d): ?><option value="<?= (int)$d['id'] ?>"<?= (int)($edit['doctor_id'] ?? 0) === (int)$d['id'] ? ' selected' : '' ?>><?= e($d['name']) ?></option><?php endforeach; ?>
             </select></div>
-          <div class="field"><label>Terapis</label>
+          <div class="field"><label>Beautician</label>
             <select class="input" name="therapist_id" id="r_therapist"<?= $readonly ? ' disabled' : '' ?>>
               <option value="">- tidak ada -</option>
               <?php foreach ($formTherapistList as $d): ?><option value="<?= (int)$d['id'] ?>"<?= (int)($edit['therapist_id'] ?? 0) === (int)$d['id'] ? ' selected' : '' ?>><?= e($d['name']) ?></option><?php endforeach; ?>
@@ -772,13 +772,13 @@ page_head('Reservasi', 'reservasi');
             <button class="btn btn-sm" type="button" id="r_treat_add"><?= icon('plus-circle') ?> Tambah treatment</button>
             <?php endif; ?>
             <span class="hint">Treatment pertama juga menjadi treatment utama (dipakai pada pesan WhatsApp &amp; tombol Lanjut Transaksi).
-              <span id="r_treat_branch_hint">Daftar treatment, dokter, dan terapis mengikuti
+              <span id="r_treat_branch_hint">Daftar treatment, dokter, dan beautician mengikuti
                 <strong>cabang <?= e($formBranchName) ?></strong><?= is_owner_level() ? ' — ubah kolom Cabang di bawah untuk memilih cabang lain' : '' ?>.</span></span>
           </div>
           <?php if (is_owner_level()): ?>
           <div class="field"><label>Cabang <span class="req">*</span></label>
             <select class="input" name="branch_id" id="r_branch" data-res-branch><?= opt_branches($formBranchId) ?></select>
-            <span class="hint">Pilihan <strong>dokter, terapis, dan treatment</strong> di atas langsung mengikuti
+            <span class="hint">Pilihan <strong>dokter, beautician, dan treatment</strong> di atas langsung mengikuti
               cabang yang dipilih di sini (hanya memuat data cabang tersebut).</span></div>
           <?php endif; ?>
         </div>
@@ -921,7 +921,7 @@ function resetResForm() {
  * KOLOM CABANG MENENTUKAN ISI PILIHAN — (permintaan pemilik, ronde 36)
  *
  * Saat pemilik memindahkan kolom "Cabang" pada modal Reservasi, daftar
- * dokter/terapis/treatment dimuat ulang dari `api.php?a=res_form` supaya hanya
+ * dokter/beautician/treatment dimuat ulang dari `api.php?a=res_form` supaya hanya
  * memuat data cabang tersebut — jadi tidak perlu lagi memberi teks "— Kaliwungu"
  * pada tiap pilihan treatment. Pilihan yang sudah dibuat dibuang karena pasti
  * bukan milik cabang yang baru (diberitahukan lewat keterangan kecil).
@@ -963,7 +963,7 @@ function resLoadBranchLists(bid) {
       isi(ter, d.therapists || [], '- tidak ada -');
       if (rows) { rows.innerHTML = ''; resAddTreatRow(0); }    // pilihan lama tidak berlaku lagi
       if (hint) {
-        hint.innerHTML = 'Daftar treatment, dokter, dan terapis mengikuti <strong>cabang '
+        hint.innerHTML = 'Daftar treatment, dokter, dan beautician mengikuti <strong>cabang '
           + (d.branch_name || bid) + '</strong>' + (d.owner_level ? ' — ubah kolom Cabang di bawah untuk memilih cabang lain' : '') + '.';
       }
     })

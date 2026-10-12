@@ -590,7 +590,7 @@ $wipeCounts = [
     'Bahan treatment' => (int)scalar('SELECT COUNT(*) FROM treatment_materials'),
     'Supplier' => (int)scalar('SELECT COUNT(*) FROM suppliers'),
     'Pergerakan stok' => (int)scalar('SELECT COUNT(*) FROM inventory_movements'),
-    'Dokter & terapis' => (int)scalar('SELECT COUNT(*) FROM doctors') + (int)scalar('SELECT COUNT(*) FROM therapists'),
+    'Dokter & beautician' => (int)scalar('SELECT COUNT(*) FROM doctors') + (int)scalar('SELECT COUNT(*) FROM therapists'),
     'Audit log' => (int)scalar('SELECT COUNT(*) FROM audit_logs'),
 ];
 $wipeTotal = array_sum($wipeCounts);
@@ -620,7 +620,16 @@ $lmFilter = [
     'q' => trim((string)gp('lmq', '')),
     'user' => (int)gp('lmu', 0),
 ];
-$lmRows = session_list($lmFilter, 60);
+/* PAGINASI tabel sesi (permintaan pemilik: 10/25/50 data). Nilai per halaman
+   disimpan pada parameter `lmp` supaya tidak bertabrakan dengan pemilih
+   "per halaman" daftar lain di halaman ini. */
+$lmPer = (int)gp('lmp', 25);
+if (!in_array($lmPer, [10, 25, 50], true)) $lmPer = 25;
+$lmPage = max(1, (int)gp('page_lm', 1));
+$lmTotal = session_list_count($lmFilter);
+$lmMaxPage = max(1, (int)ceil($lmTotal / $lmPer));
+if ($lmPage > $lmMaxPage) $lmPage = $lmMaxPage;
+$lmRows = session_list($lmFilter, $lmPer, ($lmPage - 1) * $lmPer);
 $lmSum = session_summary();
 $lmBlocks = device_block_list();
 $lmUsers = login_manage_users();
@@ -693,6 +702,12 @@ page_head('Developer Settings', 'developer');
         <option value="">Semua sesi</option>
         <option value="aktif"<?= $lmFilter['aktif'] ? ' selected' : '' ?>>Hanya yang masih aktif</option>
       </select></div>
+    <div class="field"><label>Per halaman</label>
+      <select class="input input-sm" name="lmp" onchange="this.form.submit()" title="Jumlah sesi per halaman">
+        <?php foreach ([10, 25, 50] as $n): ?>
+          <option value="<?= $n ?>"<?= $lmPer === $n ? ' selected' : '' ?>><?= $n ?> / halaman</option>
+        <?php endforeach; ?>
+      </select></div>
     <div class="field" style="align-self:flex-end"><button class="btn btn-primary" type="submit"><?= icon('search') ?> Filter</button></div>
     <div class="field" style="align-self:flex-end"><a class="btn btn-sm" href="developer.php">Reset</a></div>
   </form>
@@ -702,7 +717,12 @@ page_head('Developer Settings', 'developer');
       <p class="muted">Belum ada sesi yang tercatat<?= $lmFilter['aktif'] || $lmFilter['q'] || $lmFilter['user'] ? ' pada filter ini' : '' ?>.
         Pencatatan dimulai sejak fitur ini dipasang — sesi lama (sebelum itu) tidak terdata.</p>
     <?php else: ?>
-    <div class="table-wrap">
+    <?php /* KONTAINER TABEL SESI (permintaan pemilik): tinggi dibatasi 450px dan
+             dapat digeser ke DUA ARAH (tegak & mendatar), dengan KEPALA TABEL
+             melekat di atas (`sticky`) supaya nama kolom tetap terbaca saat
+             menggulir. Kelas `scroll-y` dipakai supaya gulirannya lanjut ke
+             halaman begitu mentok (ronde 78). */ ?>
+    <div class="table-wrap scroll-y lm-table-wrap" id="lmTableWrap">
       <table class="tbl">
         <thead>
           <tr>
@@ -781,8 +801,10 @@ page_head('Developer Settings', 'developer');
         </tbody>
       </table>
     </div>
-    <p class="small muted mt-2">Menampilkan maksimal 60 sesi terbaru. Sesi yang sudah keluar/dikeluarkan tetap
-      tersimpan sebagai riwayat.</p>
+    <?= pagination($lmTotal, $lmPer, $lmPage, 'page_lm') ?>
+    <p class="small muted mt-2">Daftar dibatasi tinggi 450px — geser ke atas/bawah untuk sesi lainnya, dan ke
+      samping untuk kolom lainnya (nama kolom tetap terbaca saat digulir). Sesi yang sudah keluar/dikeluarkan
+      tetap tersimpan sebagai riwayat.</p>
     <?php endif; ?>
   </div>
 
@@ -1396,7 +1418,7 @@ page_head('Developer Settings', 'developer');
         <div class="field"><label>Foto Pasien — maksimal (px)</label>
           <input class="input" type="number" min="120" max="1200" name="photo_max_patient" value="<?= e(setting('photo_max_patient', '480')) ?>">
           <span class="hint">480 px ≈ 20–40 KB per foto. Untuk 5.000 pasien ≈ 100–200 MB bila semua berfoto.</span></div>
-        <div class="field"><label>Foto Dokter/Terapis — maksimal (px)</label>
+        <div class="field"><label>Foto Dokter/Beautician — maksimal (px)</label>
           <input class="input" type="number" min="120" max="1200" name="photo_max_staff" value="<?= e(setting('photo_max_staff', '480')) ?>"></div>
         <div class="field"><label>Foto Rekam Medis — maksimal (px)</label>
           <input class="input" type="number" min="400" max="2400" name="photo_max_medical" value="<?= e(setting('photo_max_medical', '1400')) ?>">
@@ -1458,7 +1480,7 @@ $ugc = is_super() ? upload_gc_scan(true) : null;   // dengan daftar contoh berka
       Yang dibersihkan hanya berkas di <strong>akar folder unggahan</strong> dengan nama berawalan
       <code><?= e(implode('</code>, <code>', $ugc['prefixes'])) ?></code> yang namanya <strong>tidak
       tercatat di Pengaturan</strong> (logo &amp; latar kartu member yang sedang dipakai selalu dipertahankan).
-      Foto pasien, dokter, terapis, dan lampiran rekam medis berada di folder terpisah dan
+      Foto pasien, dokter, beautician, dan lampiran rekam medis berada di folder terpisah dan
       <strong>tidak pernah ikut terhapus</strong>. Berkas yang baru diubah kurang dari 1 jam juga
       dilewati, supaya unggahan yang sedang berjalan tidak terhapus sebelum setelannya tersimpan.
     </div>
@@ -1835,7 +1857,7 @@ $ugc = is_super() ? upload_gc_scan(true) : null;   // dengan daftar contoh berka
   </div>
   <div class="card-body">
     <p class="muted">Membersihkan <strong>berkas foto rekam medis elektronik</strong> — berguna agar penyimpanan
-      tidak menumpuk oleh foto lama atau berkas yang ketinggalan. Foto pasien, dokter/terapis, logo, dan QRIS
+      tidak menumpuk oleh foto lama atau berkas yang ketinggalan. Foto pasien, dokter/beautician, logo, dan QRIS
       <strong>tidak pernah</strong> disentuh.</p>
     <div class="grid g2">
       <div class="field"><label>Keadaan folder sekarang</label>
@@ -1899,7 +1921,7 @@ $ugc = is_super() ? upload_gc_scan(true) : null;   // dengan daftar contoh berka
   </div>
   <form method="post" id="medphotoForm" data-heavy-kind="hapus"
         data-heavy-confirm="HAPUS FOTO REKAM MEDIS"
-        data-heavy-warning="Berkas foto rekam medis pada pilihan di atas akan DIHAPUS dari penyimpanan. Tindakan ini tidak dapat dibatalkan dari dalam aplikasi. Foto pasien/dokter/terapis, logo, dan QRIS tidak ikut terhapus."
+        data-heavy-warning="Berkas foto rekam medis pada pilihan di atas akan DIHAPUS dari penyimpanan. Tindakan ini tidak dapat dibatalkan dari dalam aplikasi. Foto pasien/dokter/beautician, logo, dan QRIS tidak ikut terhapus."
         data-heavy-confirm2="PERINGATAN KEDUA (terakhir): hapus berkas foto rekam medis sekarang?">
     <?= csrf_field() ?><input type="hidden" name="action" value="medphoto_gc">
     <input type="hidden" name="_anchor" value="fotorekammedis">

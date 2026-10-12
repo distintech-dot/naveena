@@ -229,6 +229,11 @@ function member_upgrade_ctx(int $id): array
         'klinik' => clinic_name(),
         'cabang' => (string)($r['branch_name'] ?? ''),
         'tanggal' => function_exists('tglIndo') ? tglIndo(substr((string)$r['upgraded_at'], 0, 10)) : (string)$r['upgraded_at'],
+        /* Tautan unduh kartu member PDF 2 halaman (berlaku member_card_link_days()).
+           Dipakai variabel {link} pada template WhatsApp — inilah cara mengirim
+           kartu lewat WhatsApp, karena WA tidak bisa melampirkan berkas. */
+        'link' => member_upgrade_card_link((int)$r['id']),
+        'berlaku' => num(member_card_link_days()) . ' hari',
     ];
 }
 
@@ -348,14 +353,98 @@ function member_upgrade_mark_wa(int $id): void
     q('UPDATE member_upgrades SET wa_status = "prepared", wa_sent_at = datetime("now","localtime") WHERE id = ?', [$id]);
 }
 
+/* ------------------------------------------------------------------ *
+ * TAUTAN KARTU MEMBER (PDF 2 halaman) UNTUK WHATSAPP
+ * ------------------------------------------------------------------ *
+ * Permintaan pemilik: WhatsApp juga harus bisa mengirim kartu member PDF
+ * 2 halaman — dalam bentuk TAUTAN UNDUH yang berlaku 3 hari.
+ *
+ * WhatsApp hanya menyampaikan TEKS, jadi berkasnya tidak mungkin dilampirkan
+ * langsung. Solusinya sama seperti tautan struk publik (struk_link.php): berkas
+ * disajikan lewat halaman bertoken `kartu_link.php` yang TIDAK perlu login,
+ * dengan tanda tangan HMAC + masa berlaku — sehingga tautan tidak dapat ditebak
+ * dan tidak pernah bisa dipakai membuka data pasien lain.
+ * ------------------------------------------------------------------ */
+
+/** Kunci tanda tangan tautan kartu member; dibuat sekali otomatis bila belum ada. */
+function member_card_link_secret(): string
+{
+    $s = (string)setting('member_card_link_secret', '');
+    if ($s === '') {
+        $s = bin2hex(random_bytes(16));
+        set_setting('member_card_link_secret', $s);
+    }
+    return $s;
+}
+
+/** Masa berlaku tautan kartu member (hari) — bawaan 3 hari (permintaan pemilik). */
+function member_card_link_days(): int
+{
+    return max(1, min(30, (int)setting('member_card_link_days', '3')));
+}
+
+/** Token untuk satu riwayat kenaikan level: id + kedaluwarsa + tanda tangan. */
+function member_card_link_token(int $id, ?int $expires = null): string
+{
+    $exp = $expires ?? (time() + member_card_link_days() * 86400);
+    $payload = $id . '|' . $exp;
+    $sig = hash_hmac('sha256', $payload, member_card_link_secret());
+    return rtrim(strtr(base64_encode($payload . '|' . $sig), '+/', '-_'), '=');
+}
+
+/** Periksa token → id riwayat kenaikan level, atau 0 bila tidak sah/kedaluwarsa. */
+function member_card_link_verify(string $token): int
+{
+    if ($token === '') return 0;
+    $raw = base64_decode(strtr($token, '-_', '+/'), true);
+    if ($raw === false) return 0;
+    $parts = explode('|', $raw);
+    if (count($parts) !== 3) return 0;
+    [$id, $exp, $sig] = $parts;
+    /* ctype_digit() TIDAK tersedia di build PHP server ini (seperti mb_*) —
+       pakai preg_match supaya halaman tautan tidak error 500. */
+    if (!preg_match('/^\d+$/', $id) || !preg_match('/^\d+$/', $exp)) return 0;
+    if ((int)$exp < time()) return 0;
+    $expect = hash_hmac('sha256', $id . '|' . $exp, member_card_link_secret());
+    if (!hash_equals($expect, $sig)) return 0;
+    return (int)$id;
+}
+
+/**
+ * Tautan unduh kartu member (absolut) untuk pesan WhatsApp.
+ *
+ * PENTING: alamat dasar diambil dari `app_public_base()` (config.php) — fungsi
+ * itu memakai REQUEST_URI untuk mengetahui awalan slug, jadi tautan yang
+ * dikirim ke WhatsApp benar-benar dapat dibuka penerimanya.
+ */
+function member_upgrade_card_link(int $id): string
+{
+    if ($id <= 0) return '';
+    $base = function_exists('app_public_base') ? app_public_base() : '';
+    return ($base !== '' ? $base . '/' : '') . 'kartu_link.php?t=' . urlencode(member_card_link_token($id));
+}
+
+/** Keterangan masa berlaku tautan dalam bahasa manusia ("13 Okt 2026 14:30 WIB"). */
+function member_card_link_expiry_text(string $token): string
+{
+    $raw = base64_decode(strtr($token, '-_', '+/'), true);
+    if ($raw === false) return '-';
+    $parts = explode('|', $raw);
+    if (count($parts) !== 3 || !preg_match('/^\d+$/', $parts[1])) return '-';
+    $ts = (int)$parts[1];
+    return function_exists('tgl') ? tgl(date('Y-m-d H:i:s', $ts), true) : date('d/m/Y H:i', $ts);
+}
+
 /** Isi pesan WhatsApp untuk satu baris riwayat. */
 function member_upgrade_wa_message(int $id): string
 {
     $ctx = member_upgrade_ctx($id);
     $tpl = (string)setting('wa_member_upgrade_template', '');
     if (trim($tpl) === '') {
-        $tpl = "Halo Kak {nama}, selamat! Level kartu member Kakak naik menjadi *{level}*.\n\n"
-            . "Benefit diskon: {diskon}\n{klinik}";
+        $tpl = "Halo Kak {nama} 🙏\n\nSelamat! Level kartu member Kakak naik menjadi *{level}*.\n\n"
+            . "Benefit diskon sekarang: {diskon}\nAkumulasi transaksi {periode}: {akumulasi}\n\n"
+            . "Kartu member lengkap (PDF) dapat diunduh di sini (berlaku {berlaku}):\n{link}\n\n"
+            . "Salam sehat,\n{klinik}";
     }
     return member_upgrade_render($tpl, $ctx);
 }

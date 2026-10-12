@@ -30,7 +30,7 @@ function db_schema_branch_id(): int
 /**
  * Apakah seed data contoh boleh dijalankan pada skema yang sedang dibangun?
  *
- * Berkas CABANG juga perlu ditanami data contoh (dokter, terapis, supplier, master
+ * Berkas CABANG juga perlu ditanami data contoh (dokter, beautician, supplier, master
  * treatment/skincare/bahan) karena data itu MILIK CABANG. Baris milik cabang lain
  * yang ikut tertanam saat berkas dibuat dibuang oleh db_branch_purge_foreign_rows()
  * dan tidak pernah terlihat karena view menyaring per cabang.
@@ -209,20 +209,20 @@ function ensure_schema(PDO $pdo): void
 }
 
 /**
- * Pastikan ada contoh data dokter & terapis. Versi awal aplikasi tidak
- * menyertakannya, sehingga reservasi tidak bisa memilih dokter/terapis dan
+ * Pastikan ada contoh data dokter & beautician. Versi awal aplikasi tidak
+ * menyertakannya, sehingga reservasi tidak bisa memilih dokter/beautician dan
  * tombol "WA Dokter" tidak pernah muncul. Hanya diisi bila tabelnya KOSONG
  * supaya data yang sudah diisi pengguna tidak pernah ditimpa.
  */
 function ensure_staff_seed(PDO $pdo): void
 {
-    /* Dokter & terapis adalah data OPERASIONAL milik cabang. Di basis data CENTRAL
+    /* Dokter & beautician adalah data OPERASIONAL milik cabang. Di basis data CENTRAL
        tabelnya harus KOSONG — kalau tidak, baris sisa di central akan menghalangi
        penghapusan cabang (FK `branches`) dan membuat central memuat data operasional
        (dulu terjadi: central berisi 2 dokter per cabang, sehingga "Hapus Semua Data"
        gagal dengan "FOREIGN KEY constraint failed"). */
     if (db_schema_scope() === 'central') return;
-    /* Berkas CABANG tidak memiliki tabel `branches`; data contoh dokter/terapis di
+    /* Berkas CABANG tidak memiliki tabel `branches`; data contoh dokter/beautician di
        sana sudah ditanam seed_core() untuk cabang PEMILIK berkas ini. */
     if (db_schema_scope() === 'branch') return;
     $branches = $pdo->query('SELECT id FROM branches')->fetchAll(PDO::FETCH_COLUMN);
@@ -896,6 +896,22 @@ function run_migrations(PDO $pdo): void
         migrate_finance_cost_amounts($pdo);
         migrate_finance_cost_modes($pdo);
         migrate_ai_audit_status($pdo);
+        /* RONDE 79: sisipkan tautan unduh kartu member ({link}) ke template
+           WhatsApp/email Membership Upgrade yang SUDAH diubah pemilik — teks
+           pemilik TIDAK dihapus, hanya ditambah satu baris tautan. */
+        migrate_member_card_link_template($pdo);
+        /* RONDE 79: penyeragaman nama tenaga medis (dulu kata lama, kini
+           "Beautician") juga pada TEKS TERSIMPAN (template WhatsApp/email
+           pemilik). Fungsinya ada di berkas terpisah
+           `includes/migrate_beautician.php` — dipisah supaya tidak ada kata lama
+           yang tertinggal di kode lain (dijaga uji ronde 79). */
+        require_once __DIR__ . '/migrate_beautician.php';
+        migrate_beautician_label_central($pdo);
+    }
+    /* Penyeragaman nama tenaga medis pada JUDUL/keahlian (berkas CABANG). */
+    if ($branch) {
+        require_once __DIR__ . '/migrate_beautician.php';
+        migrate_beautician_label_branch($pdo);
     }
     /* PELACAKAN DATA DEMO (ronde 54) — seluruh record yang dibuat tombol "Isi Data Demo"
        diberi `demo_batch_id` sehingga dapat dilacak, dilaporkan, dan dihapus per batch
@@ -1037,6 +1053,76 @@ function migrate_ai_audit_status(PDO $pdo): void
         $upd->execute(['Audit belum lengkap (AUDIT_INCOMPLETE) — diperbaiki otomatis (ronde 52)',
             json_encode(array_values(array_unique($alasan)), JSON_UNESCAPED_UNICODE), (int)$r['id']]);
     }
+}
+
+/**
+ * RONDE 79 — TAUTAN UNDUH KARTU MEMBER PADA TEMPLATE UCAPAN (WhatsApp & email).
+ *
+ * WhatsApp tidak dapat melampirkan berkas, sehingga kartu member PDF 2 halaman
+ * dikirim sebagai TAUTAN UNDUH bertoken (berlaku 3 hari). Supaya fitur ini
+ * benar-benar terpakai pada pemasangan yang template-nya SUDAH disunting pemilik,
+ * migrasi ini MENYISIPKAN satu blok tautan ke template yang belum memuat `{link}`
+ * — teks pemilik TIDAK dihapus/diubah, hanya ditambah satu blok.
+ *
+ * Blok disisipkan TEPAT SEBELUM baris tanda tangan terakhir (baris yang memuat
+ * `{klinik}`); bila tidak ada, ditambahkan di akhir.
+ *
+ * Dijalankan sekali (penanda setelan `member_card_link_tpl`) dan snapshot
+ * "Kembali ke Default" kedua kunci itu diselaraskan dengan bawaan kode yang baru
+ * supaya tombolnya menghasilkan teks yang sama (berisi {link}).
+ */
+function migrate_member_card_link_template(PDO $pdo): void
+{
+    try {
+        $flag = $pdo->prepare("SELECT value FROM settings WHERE key = 'member_card_link_tpl'");
+        $flag->execute();
+        if ((string)$flag->fetchColumn() === '1') return;        // sudah pernah dijalankan
+    } catch (Throwable $e) {
+        return;                                                   // tabel settings belum ada
+    }
+    $blokWa = "Kartu member lengkap (PDF 2 halaman) bisa diunduh di tautan berikut — berlaku {berlaku}:\n{link}";
+    $blokEm = "Bila lampirannya tidak dapat dibuka, kartu yang sama juga dapat diunduh di:\n{link} (berlaku {berlaku})";
+    foreach ([['wa_member_upgrade_template', $blokWa],
+              ['email_member_upgrade_body', $blokEm]] as [$key, $blok]) {
+        try {
+            $st = $pdo->prepare('SELECT value FROM settings WHERE key = ?');
+            $st->execute([$key]);
+            $tpl = (string)$st->fetchColumn();
+            if ($tpl === '' || strpos($tpl, '{link}') !== false) continue;
+            /* Template dipecah menjadi PARAGRAF (dipisah baris kosong), lalu blok
+               tautan disisipkan TEPAT DI ATAS paragraf tanda tangan (paragraf
+               terakhir yang memuat {klinik}) — sehingga hasilnya terbaca rapi:
+                   … isi pesan …
+                   Kartu member … : {link}
+                   Salam …, {klinik} {cabang}
+               Bila tanda tangan tidak ditemukan (atau hanya ada satu paragraf),
+               blok ditambahkan di AKHIR supaya tidak pernah muncul di atas pesan. */
+            $paras = preg_split('/\R{2,}/', trim($tpl));
+            if (!is_array($paras) || count($paras) === 0) continue;
+            $idx = -1;
+            for ($i = count($paras) - 1; $i >= 0; $i--) {
+                if (strpos($paras[$i], '{klinik}') !== false) { $idx = $i; break; }
+            }
+            if ($idx > 0) array_splice($paras, $idx, 0, [$blok]);
+            else $paras[] = $blok;
+            $up = $pdo->prepare('UPDATE settings SET value = ? WHERE key = ?');
+            $up->execute([implode("\n\n", $paras), $key]);
+        } catch (Throwable $e) { /* jangan gagalkan migrasi skema */ }
+    }
+    /* Snapshot "Kembali ke Default" diselaraskan dengan bawaan kode yang baru. */
+    try {
+        if (!function_exists('template_code_default')) require_once __DIR__ . '/template_default.php';
+        foreach (['wa_member_upgrade_template', 'email_member_upgrade_body'] as $key) {
+            $v = template_code_default($key);
+            if ($v === '') continue;
+            $up = $pdo->prepare('UPDATE settings SET value = ? WHERE key = ?');
+            $up->execute([$v, 'tpl_default_' . $key]);
+        }
+    } catch (Throwable $e) { /* biarkan snapshot lama */ }
+    try {
+        $pdo->prepare("INSERT INTO settings (key, value) VALUES ('member_card_link_tpl', '1')
+                       ON CONFLICT(key) DO UPDATE SET value = '1'")->execute();
+    } catch (Throwable $e) { /* tabel tidak ada / nilai sudah ada */ }
 }
 
 /**
@@ -1683,7 +1769,7 @@ function seed_core(PDO $pdo): void
 
     /* BERKAS CABANG: bagian GLOBAL (peran, izin, pengaturan, daftar cabang, akun
        pengguna) DILEWATI — semuanya milik basis data central dan dibaca dari sana.
-       Data CONTOH OPERASIONAL (dokter, terapis, supplier, master treatment/skincare/
+       Data CONTOH OPERASIONAL (dokter, beautician, supplier, master treatment/skincare/
        bahan, stok) TETAP ditanam karena memang milik cabang. */
     if (db_schema_scope() !== 'branch') {
 
@@ -1729,7 +1815,7 @@ function seed_core(PDO $pdo): void
         ['user.manage', 'Manajemen User', 'Pengaturan'],
         ['branch.manage', 'Manajemen Cabang (tambah/ubah/hapus)', 'Pengaturan'],
         ['branch.view', 'Lihat Data Cabang (baca-saja)', 'Pengaturan'],
-        ['staff.manage', 'Manajemen Dokter/Terapis/Kasir', 'Pengaturan'],
+        ['staff.manage', 'Manajemen Dokter/Beautician/Kasir', 'Pengaturan'],
         ['audit.view', 'Lihat Audit Log', 'Pengaturan'],
         ['settings.manage', 'Pengaturan Sistem', 'Pengaturan'],
         ['backup.manage', 'Backup & Restore Database', 'Pengaturan'],
@@ -1801,7 +1887,7 @@ function seed_core(PDO $pdo): void
         'wa_api_url'          => '',
         'wa_api_token'        => '',
         'wa_api_sender'       => '',
-        'wa_template'         => "Halo Kak {nama}\n\nKami dari {klinik} {cabang}.\nMengingatkan reservasi Kakak:\nTanggal: {tanggal}\nJam: {jam}\nTreatment: {treatment}\nDokter/Terapis: {dokter}\n\nMohon konfirmasi kehadirannya ya\nTerima kasih ❤️",
+        'wa_template'         => "Halo Kak {nama}\n\nKami dari {klinik} {cabang}.\nMengingatkan reservasi Kakak:\nTanggal: {tanggal}\nJam: {jam}\nTreatment: {treatment}\nDokter/Beautician: {dokter}\n\nMohon konfirmasi kehadirannya ya\nTerima kasih ❤️",
         'backup_active'       => '0',
         'backup_schedule'     => 'harian',
         /* Backup otomatis tanpa cron: penanda periode terakhir yang SUDAH dibuat
@@ -1876,6 +1962,12 @@ function seed_core(PDO $pdo): void
         'member_card_price'     => '0',
         'member_card_note'      => 'Kartu member ini dapat digunakan di semua cabang Naveena Skincare dan tidak dapat dipindahtangankan.',
         'member_card_bg_file'   => '',
+        /* TAUTAN KARTU MEMBER untuk WhatsApp (ronde 79): WhatsApp tidak bisa
+           melampirkan berkas, jadi kartu PDF 2 halaman dikirim sebagai tautan
+           unduh bertoken. Masa berlakunya 3 HARI (permintaan pemilik); kuncinya
+           diisi otomatis saat tautan pertama dibuat. */
+        'member_card_link_days'   => '3',
+        'member_card_link_secret' => '',
         /* KEUANGAN: mode laporan (dasar = omzet − HPP; lengkap = + biaya
            operasional) dan daftar biaya operasionalnya ada di tabel
            `finance_costs` (dapat ditambah/diganti nama/diisi nominal & periode). */
@@ -1988,7 +2080,7 @@ function seed_core(PDO $pdo): void
         'email_member_upgrade_auto'    => '1',
         'email_member_upgrade_subject' => 'Selamat! Level Kartu Member Anda naik menjadi {level}',
         'email_member_upgrade_body'    => "Halo {nama} 🙏\n\nKabar baik! Level kartu member Anda di {klinik} {cabang} baru saja NAIK.\n\nLevel sebelumnya: {level_lama}\nLevel sekarang   : {level}\nAkumulasi transaksi {periode}: {akumulasi}\n\nBenefit diskon Anda sekarang: {diskon}\n{benefit}\n\nBersama email ini kami lampirkan kartu member lengkap Anda (PDF) yang memuat\npratinjau kartu beserta status dan aturan diskon yang berlaku.\n\nTerima kasih telah mempercayakan perawatan kulit Anda kepada {klinik}.\n\nSalam sehat,\n{klinik} {cabang}",
-        'wa_member_upgrade_template'   => "Halo Kak {nama} 🙏\n\nSelamat! Level kartu member Kakak di {klinik} {cabang} naik menjadi *{level}*.\n\nBenefit diskon sekarang: {diskon}\nAkumulasi transaksi {periode}: {akumulasi}\n\nKartu member lengkap akan kami kirim ke email Kakak.\n\nSalam sehat,\n{klinik} {cabang}",
+        'wa_member_upgrade_template'   => "Halo Kak {nama} 🙏\n\nSelamat! Level kartu member Kakak di {klinik} {cabang} naik menjadi *{level}*.\n\nBenefit diskon sekarang: {diskon}\nAkumulasi transaksi {periode}: {akumulasi}\n\nKartu member lengkap (PDF 2 halaman) bisa diunduh di tautan berikut — berlaku {berlaku}:\n{link}\n\nSalam sehat,\n{klinik} {cabang}",
     ];
     $st = $pdo->prepare('INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO NOTHING');
     foreach ($defaults as $k => $v) $st->execute([$k, (string)$v]);
@@ -2032,7 +2124,7 @@ function seed_core(PDO $pdo): void
        baris operasional sehingga jumlahnya tidak lagi sama dengan sumber migrasi. */
     if (db_schema_scope() === 'central') {
         /* Central HANYA memuat data global/sistem — data contoh operasional
-           (dokter, terapis, supplier, master treatment/skincare/bahan, stok) ditanam
+           (dokter, beautician, supplier, master treatment/skincare/bahan, stok) ditanam
            saat berkas masing-masing CABANG dibuat. */
         return;
     }
@@ -2044,18 +2136,18 @@ function seed_core(PDO $pdo): void
         $bid = ['cabang' => max(1, db_schema_branch_id())];
     }
 
-    /* IDEMPOTEN (FINAL AUDIT): data contoh dokter/terapis/supplier HANYA diisi bila
+    /* IDEMPOTEN (FINAL AUDIT): data contoh dokter/beautician/supplier HANYA diisi bila
        tabelnya masih KOSONG. Sebelumnya pernyataannya tanpa penjaga, sehingga setiap
        kali skema berkas cabang diterapkan ulang (mis. karena naik versi skema) data
-       contoh TAMBAH LAGI dan menumpuk di dokter/terapis/supplier produksi — kejadian
-       nyata: satu kali migrasi menambah 2 dokter, 2 terapis, dan 3 supplier per cabang.
+       contoh TAMBAH LAGI dan menumpuk di dokter/beautician/supplier produksi — kejadian
+       nyata: satu kali migrasi menambah 2 dokter, 2 beautician, dan 3 supplier per cabang.
        Master treatment/skincare/bahan di bawah sudah aman (ON CONFLICT). */
     $kosongDokter = (int)$pdo->query('SELECT COUNT(*) FROM doctors')->fetchColumn() === 0;
-    $kosongTerapis = (int)$pdo->query('SELECT COUNT(*) FROM therapists')->fetchColumn() === 0;
+    $kosongBeautician = (int)$pdo->query('SELECT COUNT(*) FROM therapists')->fetchColumn() === 0;
     $kosongSupplier = (int)$pdo->query('SELECT COUNT(*) FROM suppliers')->fetchColumn() === 0;
 
-    // ---- Dokter & Terapis (contoh awal, boleh diedit/dinonaktifkan) -----
-    if ($kosongDokter || $kosongTerapis) {
+    // ---- Dokter & Beautician (contoh awal, boleh diedit/dinonaktifkan) -----
+    if ($kosongDokter || $kosongBeautician) {
         $doctors = [
             ['dr. Ratna Kusuma', '0812-3000-0011', 'Kulit & Estetika', 'Senin–Jumat 10.00–17.00'],
             ['dr. Bagas Prakoso', '0812-3000-0012', 'Dermatologi', 'Selasa–Sabtu 13.00–19.00'],
@@ -2068,7 +2160,7 @@ function seed_core(PDO $pdo): void
         $stThe = $pdo->prepare('INSERT INTO therapists (name, phone, specialization, schedule, branch_id, status, created_at) VALUES (?,?,?,?,?,?,datetime("now","localtime"))');
         foreach ($bid as $b_id) {
             if ($kosongDokter) foreach ($doctors as $d) $stDoc->execute([$d[0], $d[1], $d[2], $d[3], $b_id, 'active']);
-            if ($kosongTerapis) foreach ($therapists as $t) $stThe->execute([$t[0], $t[1], $t[2], $t[3], $b_id, 'active']);
+            if ($kosongBeautician) foreach ($therapists as $t) $stThe->execute([$t[0], $t[1], $t[2], $t[3], $b_id, 'active']);
         }
     }
 

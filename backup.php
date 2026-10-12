@@ -451,7 +451,7 @@ page_head('Backup Database', 'backup');
         <div class="field"><label>Ukuran Maksimal Foto dalam Paket Backup (MB)</label>
           <input class="input" type="text" inputmode="numeric" name="backup_media_max_mb"
                  value="<?= e(setting('backup_media_max_mb', '40')) ?>">
-          <span class="hint">0–500 MB. Foto pasien/dokter/terapis dan lampiran rekam medis disimpan sebagai
+          <span class="hint">0–500 MB. Foto pasien/dokter/beautician dan lampiran rekam medis disimpan sebagai
             <strong>berkas</strong> di luar basis data, jadi supaya paket backup dapat memulihkan gambarnya
             berkas itu ikut ke dalam paket (folder <code>backup/media/</code>). Isi 0 bila hanya ingin
             <strong>metadata/path</strong>-nya saja yang dicatat (<code>media.json</code>) — daftar lengkap
@@ -623,12 +623,12 @@ page_head('Backup Database', 'backup');
       dan <code>metadata.json</code> (versi skema, arsitektur, waktu, jumlah cabang).
       Paket diverifikasi ulang setelah dibuat — bila tidak terbaca, berkasnya dibuang.
       <div class="mt-1">
-        <strong>Foto ikut terbawa:</strong> berkas foto pasien/dokter/terapis dan lampiran rekam medis
+        <strong>Foto ikut terbawa:</strong> berkas foto pasien/dokter/beautician dan lampiran rekam medis
         disimpan <em>di luar</em> basis data, jadi paket ini juga memuatnya di folder
         <code>backup/media/…</code> (batas ukuran diatur pada kartu
         <a href="#pengaturan-backup">Jadwal Backup Database</a>). Selain itu <code>media.json</code>
         selalu berisi <strong>daftar lengkap</strong> setiap berkas media beserta rujukan datanya
-        (pasien/dokter/terapis/rekam medis) dan SHA-256-nya — jadi meski ada berkas yang tidak
+        (pasien/dokter/beautician/rekam medis) dan SHA-256-nya — jadi meski ada berkas yang tidak
         terbawa karena batas ukuran, daftarnya tetap dapat ditelusuri. Saat paket dipulihkan,
         berkas fotonya ikut dikembalikan.
         <div class="mt-1">Kondisi sekarang:

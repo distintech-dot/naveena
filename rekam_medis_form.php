@@ -262,12 +262,12 @@ $locked = $rec && $rec['locked_at'];
 $readonly = ($mode === 'view' || $locked || !has_perm('medical.manage'));
 $photos = $rec ? all('SELECT * FROM medical_record_photos WHERE medical_record_id = ? ORDER BY id', [$id]) : [];
 $scope = scope_branch();
-/* Daftar dokter/terapis dihitung SETELAH cabang pasien diketahui — lihat blok
+/* Daftar dokter/beautician dihitung SETELAH cabang pasien diketahui — lihat blok
    "CABANG FORMULIR" di bawah (ronde 37: pilihan mengikuti cabang yang dipilih). */
 $amendOf = $rec && $rec['amended_from'] ? one('SELECT record_number FROM medical_records WHERE id=?', [$rec['amended_from']]) : null;
 
 /* ---- Pra-isi dari RESERVASI ("Isi Rekam Medis" pada daftar reservasi) ----
-   Nilai awal saja: tanggal, dokter, dan terapis diambil dari reservasi supaya
+   Nilai awal saja: tanggal, dokter, dan beautician diambil dari reservasi supaya
    petugas tidak mengetik ulang. Semuanya TETAP BISA DIUBAH pada form ini
    (bukan data terkunci), dan hanya dipakai saat membuat rekam medis BARU agar
    data rekam medis yang sudah tersimpan tidak pernah tertimpa. */
@@ -312,7 +312,7 @@ if ($prefPatientTxt === '' && $prefPatientId > 0) {
  *      dari reservasi),
  *   3. cakupan filter halaman,
  *   4. cabang pertama (cadangan).
- * Pilihan dokter & terapis MENGIKUTI cabang itu, sehingga tidak mungkin lagi
+ * Pilihan dokter & beautician MENGIKUTI cabang itu, sehingga tidak mungkin lagi
  * memilih dokter cabang lain saat mengisi rekam medis pasien Kaliwungu.
  * ========================================================================== */
 $formBranchId = 0;
@@ -425,7 +425,7 @@ page_head($isNew ? 'Rekam Medis Baru' : 'Rekam Medis ' . ($rec['record_number'] 
             <option value="">- tidak ada -</option>
             <?php foreach ($doctorList as $d): ?><option value="<?= (int)$d['id'] ?>"<?= $prefDoc === (int)$d['id'] ? ' selected' : '' ?>><?= e($d['name']) ?></option><?php endforeach; ?>
           </select></div>
-        <div class="field"><label>Terapis</label>
+        <div class="field"><label>Beautician</label>
           <select class="input" name="therapist_id" <?= $readonly ? 'disabled' : '' ?>>
             <option value="">- tidak ada -</option>
             <?php foreach ($therapistList as $d): ?><option value="<?= (int)$d['id'] ?>"<?= $prefTher === (int)$d['id'] ? ' selected' : '' ?>><?= e($d['name']) ?></option><?php endforeach; ?>
@@ -433,7 +433,7 @@ page_head($isNew ? 'Rekam Medis Baru' : 'Rekam Medis ' . ($rec['record_number'] 
         <?php if (is_owner_level()): ?>
         <div class="field"><label>Cabang</label>
           <select class="input" name="branch_id" id="mr_branch" data-mr-branch <?= $readonly ? 'disabled' : '' ?>><?= opt_branches($formBranchId) ?></select>
-          <span class="hint">Pilihan <strong>pasien, dokter, dan terapis</strong> mengikuti cabang ini.
+          <span class="hint">Pilihan <strong>pasien, dokter, dan beautician</strong> mengikuti cabang ini.
             Rekam medis selalu tersimpan pada cabang pasien.</span></div>
         <?php endif; ?>
         <div class="field" style="grid-column:1/-1">
@@ -623,7 +623,7 @@ $canPhotoManage = ($mode !== 'view') && !$locked && has_perm('medical.manage');
 <script>
 var MR_FORM_BRANCH = <?= (int)$formBranchId ?>;
 var MR_PARAMS = { branch: MR_FORM_BRANCH };
-/* Muat ulang dokter & terapis sesuai cabang (memakai api.php?a=res_form yang
+/* Muat ulang dokter & beautician sesuai cabang (memakai api.php?a=res_form yang
    mengembalikan ketiganya — treatment tidak dipakai di halaman ini). */
 function mrLoadBranchLists(bid) {
   if (!bid) return;
@@ -653,9 +653,9 @@ document.addEventListener('DOMContentLoaded', function () {
      • pencarian pasien dibatasi ke cabang yang dipilih (objek MR_PARAMS dipakai
        langsung oleh Naveena.suggest, jadi cukup diubah nilainya),
      • memilih pasien dari cabang lain → kolom Cabang ikut berpindah ke cabang
-       pasien & daftar dokter/terapis dimuat ulang (rekam medis memang milik
+       pasien & daftar dokter/beautician dimuat ulang (rekam medis memang milik
        cabang pasien),
-     • memindahkan kolom Cabang → daftar dokter/terapis dimuat ulang juga. */
+     • memindahkan kolom Cabang → daftar dokter/beautician dimuat ulang juga. */
   Naveena.suggest({ input: '#mr_patient_search', box: '#mr_patient_suggest', action: 'patient',
     params: MR_PARAMS,
     onPick: function (it) {

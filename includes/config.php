@@ -96,7 +96,7 @@ function nv_isolated_mode(): bool
 }
 
 define('BACKUP_DIR', dirname(APP_DIR) . '/naveena_backups');
-define('SCHEMA_VERSION', '1.41.0');
+define('SCHEMA_VERSION', '1.44.0');
 /** Naikkan angka ini setiap kali isi data/icd10.tsv atau data/icd9cm.tsv berubah,
  *  agar kamus pada database yang sudah terpasang ikut dimuat ulang otomatis. */
 define('ICD_DATASET_VERSION', '2');
@@ -111,7 +111,7 @@ require_once __DIR__ . '/member.php';
 require_once __DIR__ . '/appointment.php';
 require_once __DIR__ . '/clinic.php';
 require_once __DIR__ . '/patient.php';
-/* Pembersih baris dokter/terapis kembar (ronde 68). */
+/* Pembersih baris dokter/beautician kembar (ronde 68). */
 require_once __DIR__ . '/staff_dedup.php';
 require_once __DIR__ . '/retention.php';
 /* AI Developer (ronde 41): bantu revisi/perbaikan/tambah fitur — hanya Super Admin. */
@@ -868,11 +868,11 @@ function audit(string $action, string $module, $record_id = null, $old = null, $
 const MOVEMENT_TYPES = ['Stok Awal', 'Pembelian', 'Penjualan', 'Penambahan', 'Pengurangan', 'Adjustment', 'Return', 'Barang Rusak', 'Koreksi', 'Pemakaian Internal'];
 
 /**
- * Teks "Dokter / Terapis" untuk sebuah baris data.
+ * Teks "Dokter / Beautician" untuk sebuah baris data.
  *
  * Satu pemeriksaan/reservasi bisa melibatkan DOKTER dan TERAPIS sekaligus,
  * jadi keduanya ditampilkan (dulu hanya salah satu karena memakai
- * COALESCE(d.name, th.name) — terapis tidak pernah terlihat bila ada dokter).
+ * COALESCE(d.name, th.name) — beautician tidak pernah terlihat bila ada dokter).
  */
 function staff_both_text(?string $doctor, ?string $therapist, string $sep = ' · '): string
 {
@@ -1589,7 +1589,7 @@ function wa_link(string $phone, string $text): string
     return 'https://wa.me/' . wa_number($phone) . '?text=' . rawurlencode($text);
 }
 /**
- * Pesan pengingat jadwal untuk DOKTER (bukan terapis — sesuai permintaan klinik).
+ * Pesan pengingat jadwal untuk DOKTER (bukan beautician — sesuai permintaan klinik).
  * Template bisa diatur di Pengaturan Sistem > WhatsApp.
  */
 function wa_doctor_message(array $a): string
@@ -1623,7 +1623,7 @@ function wa_doctor_message(array $a): string
 function wa_reservation_message(array $a): string
 {
     $cn = clinic_name();
-    $tpl = setting('wa_template', "Halo Kak {nama}\n\nKami dari {$cn} {cabang}.\nMengingatkan reservasi Kakak:\nTanggal: {tanggal}\nJam: {jam}\nTreatment: {treatment}\nDokter/Terapis: {dokter}\n\nMohon konfirmasi kehadirannya ya\nTerima kasih ❤️");
+    $tpl = setting('wa_template', "Halo Kak {nama}\n\nKami dari {$cn} {cabang}.\nMengingatkan reservasi Kakak:\nTanggal: {tanggal}\nJam: {jam}\nTreatment: {treatment}\nDokter/Beautician: {dokter}\n\nMohon konfirmasi kehadirannya ya\nTerima kasih ❤️");
     return str_replace(
         ['{nama}', '{klinik}', '{cabang}', '{tanggal}', '{jam}', '{treatment}', '{dokter}'],
         [$a['patient_name'] ?? '', $cn, $a['branch_name'] ?? '', tgl($a['date'] ?? ''), ($a['time'] ?? ''),

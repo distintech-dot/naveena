@@ -120,7 +120,7 @@ function nav_items(): array
     /* Cabang: `branch.manage` (Super Admin) dapat menambah/mengubah/menghapus,
        sedangkan `branch.view` (mis. Direktur/Owner) hanya melihat daftarnya. */
     if (has_perm('branch.manage') || has_perm('branch.view')) $set[] = ['branches.php', 'Data Cabang', 'building', 'branches'];
-    if (has_perm('staff.manage')) $set[] = ['staff.php', 'Dokter & Terapis', 'stethoscope', 'staff'];
+    if (has_perm('staff.manage')) $set[] = ['staff.php', 'Dokter & Beautician', 'stethoscope', 'staff'];
     if (has_perm('audit.view')) $set[] = ['audit_log.php', 'Audit Log', 'shield', 'audit'];
     if (has_perm('settings.manage')) $set[] = ['settings.php', 'Pengaturan Sistem', 'settings', 'settings'];
     /* Menu DEVELOPER SETTINGS — khusus Super Admin: nama klinik, penyimpanan data

@@ -118,6 +118,11 @@ function maintenance_allowed_scripts(): array
         'qris.php',         // menampilkan gambar QRIS klinik (baca-saja, tanpa login)
         'pay_webhook.php',  // notifikasi pembayaran dari gateway (bukan aksi pengguna)
         'switch_branch.php',// hanya memilih cabang yang sedang dilihat (bukan perubahan data)
+        /* Tautan PUBLIK bertoken (pasien tidak login) — baca-saja & hanya berlaku
+           untuk satu transaksi/kartu, jadi tetap boleh dibuka saat pemeliharaan
+           supaya pasien tidak kehilangan struk/kartunya. */
+        'struk_link.php',
+        'kartu_link.php',
     ];
 }
 

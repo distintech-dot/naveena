@@ -378,6 +378,25 @@ body.table-dragging{user-select:none;-webkit-user-select:none}
    isi) `overscroll-behavior-x:contain` tetap dipakai — pada kasus itu guliran tegak
    tidak pernah tertahan (juga sudah dibuktikan dengan uji peramban). */
 .table-wrap.scroll-y{overflow-y:auto;overscroll-behavior:auto;scrollbar-width:thin}
+/* ==================================================================
+   TABEL LOGIN MANAGEMENT (Developer Settings) — ronde 79
+   ------------------------------------------------------------------
+   Permintaan pemilik: "Bungkus tabel dalam container maksimal 450px dengan scroll
+   vertikal dan horizontal, header tabel sticky, serta pagination 10/25/50 data".
+   Tinggi dibatasi 450px supaya kartu "Login Management" tidak memanjang ke bawah,
+   dan KEPALA TABEL melekat di atas wadah sehingga nama kolom selalu terbaca saat
+   isinya digulir. `position:sticky` bekerja karena wadahnya yang bergulir (bukan
+   halaman) dan tabel memakai `border-collapse:separate`.
+   ================================================================== */
+.lm-table-wrap{max-height:450px}
+.lm-table-wrap thead th{
+  position:sticky;top:0;z-index:2;
+  /* Latar WAJIB opak: tanpa itu isi tabel terlihat menembus kepala tabel. */
+  background:var(--brand-tint2);
+  box-shadow:inset 0 -1px 0 var(--line);
+}
+/* Sudut kiri-atas tetap menutupi sel yang tergulir ke belakangnya. */
+.lm-table-wrap thead th:first-child{z-index:3}
 /* PENGAMAN (ronde 78): wadah tabel yang tingginya dibatasi lewat atribut `style`
    sebaris (mis. `style="max-height:360px"`) juga WAJIB memakai perilaku `auto`,
    supaya tidak ada satu pun tabel yang "terkunci" saat gulirannya mentok.
@@ -864,6 +883,9 @@ table.tbl tbody tr.o-over .qty-hint,table.tbl tbody tr.o-over .o-stock-warn{colo
    Menyaring baris keluarga yang tampil supaya pemilik tidak perlu menggulir jauh
    mencari warna tertentu. Tombolnya `type="button"` sehingga tidak mengirim form. */
 .theme-fam-picker{display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 6px}
+/* Petunjuk geser chip kategori: hanya tampil di HP (di desktop chip memang
+   membungkus rapi sehingga tidak perlu digeser). */
+.theme-fam-hint{display:none}
 .fam-btn{display:inline-flex;align-items:center;gap:6px;padding:7px 11px;border:1px solid var(--line);
   border-radius:99px;background:#fff;color:var(--ink);font-size:.8rem;font-weight:650;cursor:pointer;
   transition:.15s;min-height:34px}
@@ -905,16 +927,58 @@ table.tbl tbody tr.o-over .qty-hint,table.tbl tbody tr.o-over .o-stock-warn{colo
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .theme-check{position:absolute;top:6px;right:8px;font-size:.64rem;font-weight:700;color:var(--magenta);
   background:#fff;padding:1px 6px;border-radius:20px;border:1px solid var(--line)}
-@media (max-width:900px){ .theme-picker{max-height:none;overflow:visible} }
-@media (max-width:640px){
-  /* Tombol keluarga: ikut aturan ramah sentuh (≥40px) & boleh menyusut */
-  .fam-btn{min-height:40px;padding:9px 12px}
-  .theme-fam-picker{gap:6px}
+/* ==================================================================
+   PEMILIH TEMA DI HP (ronde 79) — permintaan pemilik:
+   "daftar yang panjang dibungkus dalam container terbatas, lebih compact,
+    rapi, dan tidak menyebabkan halaman memanjang berlebihan" +
+   "pilihan kategori warna menjadi tab/chip HORIZONTAL yang bisa digeser ke
+    samping, bukan turun menjadi banyak baris".
+   ------------------------------------------------------------------
+   SEBELUMNYA: `@media (max-width:900px){.theme-picker{max-height:none;
+   overflow:visible}}` justru MENGHAPUS batas tinggi di HP, sehingga 80 tema
+   membuat halaman Pengaturan sangat panjang; dan `.theme-fam-picker` memakai
+   `flex-wrap:wrap` sehingga 21 tombol keluarga menumpuk menjadi banyak baris.
+   SEKARANG (hanya di HP — desktop tidak berubah):
+     • daftar 80 tema dibungkus container `max-height:400px` + `overflow-y:auto`;
+     • tombol keluarga menjadi SATU baris yang dapat digeser ke samping;
+     • grid 2 kolom, kartu lebih compact (padding 9px, jarak 8px), swatch lebih
+       pendek, dan jarak antarbagian dirapatkan.
+   ================================================================== */
+@media screen and (max-width:900px){
+  .theme-picker{
+    max-height:400px;overflow-y:auto;overflow-x:hidden;
+    -webkit-overflow-scrolling:touch;overscroll-behavior:auto;
+    padding:2px 6px 6px 2px;border:1px solid var(--line);border-radius:12px;
+    background:var(--brand-tint2);
+  }
+  /* Chips kategori: satu baris, dapat digeser ke samping (bukan banyak baris). */
+  .theme-fam-picker{
+    flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
+    -webkit-overflow-scrolling:touch;overscroll-behavior-x:auto;
+    scrollbar-width:none;padding-bottom:2px;gap:6px;
+  }
+  .theme-fam-picker::-webkit-scrollbar{display:none}
+  .theme-fam-hint{display:block;font-size:11.5px}
+  .fam-btn{flex:0 0 auto;min-height:38px;padding:7px 10px;font-size:.75rem;gap:5px}
+  .fam-btn .fam-n{font-size:.66rem;padding:1px 5px}
 }
 @media (max-width:640px){
-  .theme-swatch{height:26px}
-  .theme-desc{display:none}       /* keterangan disembunyikan agar kartu tetap ringkas di HP */
+  /* Kartu tema lebih compact: grid 2 kolom, padding 9px, jarak 8px. */
+  .theme-picker{padding:6px;max-height:400px}
+  .theme-family{padding:8px 0;gap:6px}
+  .theme-grid{gap:8px}
+  .theme-card{padding:9px;gap:4px;border-radius:11px;border-width:1.5px}
+  .theme-swatch{height:24px;border-radius:7px}
   .theme-name{font-size:.76rem}
+  .theme-check{font-size:.6rem;padding:1px 5px;top:5px;right:5px}
+  .theme-family-head{gap:6px;margin-bottom:2px}
+}
+@media (max-width:640px){
+  /* Keterangan warna disembunyikan agar kartu ringkas di HP (nama tema tetap ada).
+     Tinggi swatch & ukuran nama TIDAK diatur ulang di sini — nilainya sudah
+     ditetapkan blok "PEMILIH TEMA DI HP" di atas (swatch 24px) supaya tidak ada
+     dua aturan yang saling menimpa. */
+  .theme-desc{display:none}
 }
 
 /* ---------- Pemilih status penanganan (rekam medis) ---------- */
@@ -2461,6 +2525,21 @@ textarea.auto-grow{min-height:118px;max-height:56vh;overflow-y:auto;resize:verti
      • kalender: kolom 68px (65–75), gap 3px, kepala hari SEN–MIN sebaris dalam
        grid yang sama, hanya wadah kalender yang bergeser ke samping.
    ================================================================== */
+
+/* ---- 0. PRATINJAU CONTOH GAMBAR LATAR WEB ----------------------------------
+   Permintaan pemilik: 6 contoh gambar dibuat SATU BARIS pada PC/laptop/tablet.
+   Grid 6 kolom sama lebar + `aspect-ratio` 16:9 → keenam gambar sejajar rapi
+   pada satu baris (flex-wrap sebelumnya mendorong gambar ke-6 ke baris kedua).
+   Di layar HP jumlah kolomnya dikurangi supaya gambarnya tidak terlalu kecil. */
+.wp-preview-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-top:2px}
+.wp-preview-grid img{
+  width:100%;height:auto;aspect-ratio:16/9;object-fit:cover;display:block;
+  border-radius:10px;border:1px solid var(--line);background:var(--brand-bg3);
+}
+/* PC/laptop/TABLET tetap SATU BARIS (permintaan pemilik) — jumlah kolom baru
+   dikurangi di layar HP agar tiap gambar tidak terlalu kecil. */
+@media screen and (max-width:640px){ .wp-preview-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px} }
+@media screen and (max-width:400px){ .wp-preview-grid{grid-template-columns:repeat(2,minmax(0,1fr))} }
 
 /* ---- 1. KETERANGAN PANJANG DILIPAT (tombol "Selengkapnya") -------------------
    Dipasang app.js: `.hint` yang isinya lebih dari 200 huruf diberi kelas

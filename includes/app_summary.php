@@ -55,8 +55,8 @@ function app_summary_modules(): array
         'dashboard.php' => ['Dashboard', 'Ringkasan KPI, grafik pendapatan pasien, stok menipis, dan pemberitahuan tugas otomatis (backup/retensi/email).'],
         'pasien.php' => ['Data Pasien', 'Master pasien per cabang: identitas, kontak/email, foto, status (Baru/Lama otomatis), kartu member, impor & ekspor.'],
         'pasien_detail.php' => ['Detail Pasien', 'Riwayat lengkap satu pasien: transaksi, rekam medis, reservasi, pemakaian bahan, kartu member (dengan filter periode).'],
-        'reservasi.php' => ['Reservasi', 'Jadwal perawatan (multi-treatment), dokter/terapis, status, pengingat WhatsApp, lanjut ke transaksi & rekam medis.'],
-        'rekam_medis.php' => ['Rekam Medis Elektronik', 'Daftar catatan klinis (SOAP), status penanganan, filter dokter/terapis/periode, amendment, hapus per periode.'],
+        'reservasi.php' => ['Reservasi', 'Jadwal perawatan (multi-treatment), dokter/beautician, status, pengingat WhatsApp, lanjut ke transaksi & rekam medis.'],
+        'rekam_medis.php' => ['Rekam Medis Elektronik', 'Daftar catatan klinis (SOAP), status penanganan, filter dokter/beautician/periode, amendment, hapus per periode.'],
         'rekam_medis_form.php' => ['Form Rekam Medis', 'Isi/ubah catatan klinis: SOAP, ICD-10 & ICD-9-CM (saran otomatis), foto & lampiran klinis, mode Lihat (baca-saja).'],
         'order_baru.php' => ['Order Baru', 'Kasir membuat transaksi: item treatment/skincare/paket, bahan treatment terpakai, diskon member, langkah pembayaran (wajib bayar dulu).'],
         'order.php' => ['Riwayat Order', 'Daftar transaksi dengan filter lengkap, status bayar, struk, email/WhatsApp, void/refund, ekspor.'],
@@ -73,7 +73,7 @@ function app_summary_modules(): array
         'inventory_movement.php' => ['Stok & Movement', 'Riwayat pergerakan stok (penjualan, pembelian, pemakaian bahan, koreksi) untuk penelusuran.'],
         'users.php' => ['Manajemen User', 'Akun staf, peran, cabang, dan hak akses tambahan (matriks peran × izin).'],
         'branches.php' => ['Cabang', 'Data cabang: kode (dipakai pada nomor dokumen), alamat, kontak, jam buka, status.'],
-        'staff.php' => ['Dokter & Terapis', 'Data tenaga medis per cabang beserta jadwal praktik, nomor WhatsApp, dan foto.'],
+        'staff.php' => ['Dokter & Beautician', 'Data tenaga medis per cabang beserta jadwal praktik, nomor WhatsApp, dan foto.'],
         'icd.php' => ['Kamus ICD-10 / 9-CM', 'Penelusuran kamus kode diagnosis & tindakan resmi (12.084 + 3.882 kode) yang dipakai form rekam medis.'],
         'import.php' => ['Import Data', 'Impor Excel/CSV: pilih berkas → petakan kolom → pratinjau → jalankan, plus riwayat dan unduhan galat per baris.'],
         'export.php' => ['Ekspor', 'Mesin ekspor terpusat: CSV, Excel (.xlsx dengan foto/grafik), dan dokumen cetak/PDF untuk setiap modul.'],
@@ -91,7 +91,7 @@ function app_summary_modules(): array
         'bayar.php' => ['Halaman Bayar', 'Halaman pembayaran pasien untuk tagihan gateway (QRIS/transfer) dan tombol cek status.'],
         'api.php' => ['API internal (JSON)', 'Pencarian/saran otomatis dan data pendukung antarmuka (pasien, treatment, skincare, paket, bahan, form reservasi).'],
         'media.php' => ['Media Rekam Medis', 'Penyaji foto/lampiran klinis dengan pemeriksaan login & cabang (URL penyimpanan tidak pernah dibuka ke peramban).'],
-        'photo.php' => ['Foto Orang', 'Penyaji foto pasien/dokter/terapis dengan pemeriksaan login & cabang.'],
+        'photo.php' => ['Foto Orang', 'Penyaji foto pasien/dokter/beautician dengan pemeriksaan login & cabang.'],
     ];
 }
 

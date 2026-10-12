@@ -4,14 +4,17 @@ require_once __DIR__ . '/includes/layout.php';
 require_perm('staff.manage');
 $user = current_user();
 $scope = scope_branch();
-$kind = gp('kind', 'dokter') === 'terapis' ? 'terapis' : 'dokter';
+/* Nilai `kind` pada URL: 'dokter' atau 'beautician'. Nilai LAMA 'terapis'
+   TETAP diterima supaya tautan/bookmark yang sudah tersimpan tidak rusak —
+   labelnya sekarang "Beautician" (perubahan nama ronde 79). */
+$kind = in_array((string)gp('kind', 'dokter'), ['beautician', 'terapis'], true) ? 'beautician' : 'dokter';
 $table = $kind === 'dokter' ? 'doctors' : 'therapists';
-$label = $kind === 'dokter' ? 'Dokter' : 'Terapis';
+$label = $kind === 'dokter' ? 'Dokter' : 'Beautician';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verify_csrf();
     $act = (string)($_POST['action'] ?? '');
-    $tbl = ($_POST['kind'] ?? 'dokter') === 'terapis' ? 'therapists' : 'doctors';
+    $tbl = in_array((string)($_POST['kind'] ?? 'dokter'), ['beautician', 'terapis'], true) ? 'therapists' : 'doctors';
     try {
         if ($act === 'save') {
             $id = (int)($_POST['id'] ?? 0);
@@ -39,7 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             AND id <> ? LIMIT 1", [$branch, $name, $id]);
             if ($dupNama) {
                 throw new RuntimeException('Nama "' . $name . '" sudah terdaftar di cabang ini '
-                    . '(' . strtolower($tbl === 'doctors' ? 'Dokter' : 'Terapis') . ' #' . (int)$dupNama['id']
+                    . '(' . strtolower($tbl === 'doctors' ? 'Dokter' : 'Beautician') . ' #' . (int)$dupNama['id']
                     . ', status ' . (string)$dupNama['status'] . '). Buka baris itu untuk mengubah datanya — '
                     . 'jika memang dua orang berbeda, bedakan namanya (mis. tambahkan gelar atau singkatan).');
             }
@@ -51,13 +54,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 assert_branch_unchanged($tbl, $id, (int)$branch);
                 q("UPDATE {$tbl} SET name=?, phone=?, email=?, specialization=?, schedule=?, branch_id=?, status=?, updated_at=datetime('now','localtime') WHERE id=?",
                     [$name, $phone, $email, $spec, $sched, $branch, $status, $id]);
-                audit('Edit ' . ($tbl === 'doctors' ? 'Dokter' : 'Terapis'), 'Pengaturan', $id, $old, ['name' => $name, 'email' => $email, 'status' => $status], 'Perubahan data tenaga medis');
-                flash('Data ' . strtolower($tbl === 'doctors' ? 'Dokter' : 'Terapis') . ' diperbarui.');
+                audit('Edit ' . ($tbl === 'doctors' ? 'Dokter' : 'Beautician'), 'Pengaturan', $id, $old, ['name' => $name, 'email' => $email, 'status' => $status], 'Perubahan data tenaga medis');
+                flash('Data ' . strtolower($tbl === 'doctors' ? 'Dokter' : 'Beautician') . ' diperbarui.');
             } else {
                 q("INSERT INTO {$tbl} (name, phone, email, specialization, schedule, branch_id, status, created_at) VALUES (?,?,?,?,?,?,?,datetime('now','localtime'))",
                     [$name, $phone, $email, $spec, $sched, $branch, $status]);
                 $savedId = (int)db()->lastInsertId();
-                audit('Tambah ' . ($tbl === 'doctors' ? 'Dokter' : 'Terapis'), 'Pengaturan', $savedId, null, ['name' => $name, 'branch_id' => $branch], 'Tenaga medis baru');
+                audit('Tambah ' . ($tbl === 'doctors' ? 'Dokter' : 'Beautician'), 'Pengaturan', $savedId, null, ['name' => $name, 'branch_id' => $branch], 'Tenaga medis baru');
                 flash('Data berhasil ditambahkan.');
             }
             /* FOTO dari formulir Tambah/Edit (permintaan pemilik). Opsional —
@@ -65,7 +68,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!empty($_FILES['photo']['name'])) {
                 try {
                     $res = photo_save_person($tbl === 'doctors' ? 'doctor' : 'therapist', $savedId, $_FILES['photo']);
-                    flash('Foto ' . strtolower($tbl === 'doctors' ? 'Dokter' : 'Terapis') . ' tersimpan — ' . img_result_text($res) . '.');
+                    flash('Foto ' . strtolower($tbl === 'doctors' ? 'Dokter' : 'Beautician') . ' tersimpan — ' . img_result_text($res) . '.');
                 } catch (Throwable $ex) {
                     flash('Data tersimpan, tetapi foto gagal diunggah: ' . $ex->getMessage(), 'warning');
                 }
@@ -74,10 +77,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($act === 'photo') {
             require_perm('staff.manage');
             $id = (int)$_POST['id'];
-            $kind = ($_POST['kind'] ?? 'dokter') === 'terapis' ? 'therapist' : 'doctor';
+            $kind = in_array((string)($_POST['kind'] ?? 'dokter'), ['beautician', 'terapis'], true) ? 'therapist' : 'doctor';
             $res = photo_save_person($kind, $id, $_FILES['photo'] ?? []);
             flash('Foto ' . strtolower($label) . ' tersimpan — ' . img_result_text($res) . '.');
-            header('Location: staff.php?kind=' . ($kind === 'therapist' ? 'terapis' : 'dokter'));
+            header('Location: staff.php?kind=' . ($kind === 'therapist' ? 'beautician' : 'dokter'));
             exit;
         }
         if ($act === 'toggle') {
@@ -101,7 +104,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ? 'Data kembar dirapikan: ' . num($r['groups']) . ' kelompok (nama+cabang sama), '
                     . num($r['rows']) . ' baris dihapus, ' . num($r['refs']) . ' rujukan riwayat dipindahkan, '
                     . num($r['files']) . ' foto dipakai ulang.'
-                : 'Tidak ada data dokter/terapis kembar yang perlu dihapus.');
+                : 'Tidak ada data dokter/beautician kembar yang perlu dihapus.');
         }
         if ($act === 'delete') {
             $id = (int)$_POST['id'];
@@ -109,7 +112,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$r) throw new RuntimeException('Data tidak ditemukan.');
             assert_branch((int)$r['branch_id']);
             $col = $tbl === 'doctors' ? 'doctor_id' : 'therapist_id';
-            /* PEMBATASAN CABANG (audit isolasi ronde 56): dokter/terapis milik satu cabang →
+            /* PEMBATASAN CABANG (audit isolasi ronde 56): dokter/beautician milik satu cabang →
                pemakaian yang dihitung hanya pada cabang itu. */
             $staffBranch = (int)$r['branch_id'];
             $refs = (int)scalar("SELECT COUNT(*) FROM appointments WHERE {$col} = ? AND branch_id = ?", [$id, $staffBranch])
@@ -122,7 +125,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } catch (Throwable $ex) {
         flash($ex->getMessage(), 'error');
     }
-    header('Location: staff.php?kind=' . ($tbl === 'doctors' ? 'dokter' : 'terapis'));
+    header('Location: staff.php?kind=' . ($tbl === 'doctors' ? 'dokter' : 'beautician'));
     exit;
 }
 
@@ -141,17 +144,17 @@ $rows = all("SELECT d.*, b.name AS branch_name,
 $edit = gp('action') === 'edit' ? one("SELECT * FROM {$table} WHERE id = ?", [(int)gp('id')]) : null;
 if ($edit) assert_branch((int)$edit['branch_id']);
 
-/* PRATINJAU DATA KEMBAR (permintaan pemilik: "di dokter & terapis banyak duplikat").
+/* PRATINJAU DATA KEMBAR (permintaan pemilik: "di dokter & beautician banyak duplikat").
    Dihitung untuk SELURUH cabang (alat perapian data) dan ditampilkan sebagai
    pemberitahuan + tombol gabungkan — bukan dihapus diam-diam. Hanya Super Admin. */
 $dupInfo = is_super()
     ? staff_dup_scan()
     : ['rows' => 0, 'doctors' => [], 'therapists' => [], 'files' => 0];
 
-page_head('Dokter & Terapis', 'staff');
+page_head('Dokter & Beautician', 'staff');
 ?>
 <div class="page-head">
-  <div><h2>Dokter &amp; Terapis</h2><p class="muted">Daftar tenaga medis per cabang yang dapat dipilih pada reservasi dan rekam medis.</p></div>
+  <div><h2>Dokter &amp; Beautician</h2><p class="muted">Daftar tenaga medis per cabang yang dapat dipilih pada reservasi dan rekam medis.</p></div>
   <div class="page-actions">
     <button class="btn btn-primary" data-modal-open="stModal" onclick="resetStForm()"><?= icon('plus-circle') ?> Tambah <?= e($label) ?></button>
   </div>
@@ -160,7 +163,7 @@ page_head('Dokter & Terapis', 'staff');
 <?php if ($dupInfo['rows'] > 0): ?>
 <div class="alert alert-warning" id="stDup">
   <strong>Ditemukan <?= num($dupInfo['rows']) ?> baris KEMBAR</strong> (nama sama pada cabang yang sama) —
-  <?= num(count($dupInfo['doctors'])) ?> kelompok dokter &amp; <?= num(count($dupInfo['therapists'])) ?> kelompok terapis.
+  <?= num(count($dupInfo['doctors'])) ?> kelompok dokter &amp; <?= num(count($dupInfo['therapists'])) ?> kelompok beautician.
   Baris kembar tidak menambah pilihan di Reservasi/Rekam Medis, tetapi membuat daftar panjang dan
   membingungkan. Tombol di bawah akan <strong>menggabungkannya</strong>: satu baris dipertahankan
   (yang paling banyak dipakai riwayat), <strong>seluruh riwayat dipindahkan</strong> ke baris itu,
@@ -168,7 +171,7 @@ page_head('Dokter & Terapis', 'staff');
   <div class="mt-2">
     <form method="post" class="inline-form"
           data-heavy-confirm="GABUNGKAN DATA KEMBAR"
-          data-heavy-warning="Baris dokter/terapis dengan nama sama pada cabang yang sama akan digabung: satu baris dipertahankan dan sisanya DIHAPUS. Reservasi &amp; rekam medis yang menunjuk baris yang dihapus dipindahkan ke baris yang dipertahankan, jadi riwayat tetap utuh. Tindakan ini dibuat snapshot otomatis lebih dulu."
+          data-heavy-warning="Baris dokter/beautician dengan nama sama pada cabang yang sama akan digabung: satu baris dipertahankan dan sisanya DIHAPUS. Reservasi &amp; rekam medis yang menunjuk baris yang dihapus dipindahkan ke baris yang dipertahankan, jadi riwayat tetap utuh. Tindakan ini dibuat snapshot otomatis lebih dulu."
           data-heavy-confirm2="PERINGATAN KEDUA (terakhir): gabungkan dan hapus data kembar sekarang?">
       <?= csrf_field() ?><input type="hidden" name="action" value="dedup">
       <input type="hidden" name="kind" value="<?= e($kind) ?>">
@@ -181,7 +184,7 @@ page_head('Dokter & Terapis', 'staff');
 
 <div class="tabs">
   <a class="tab<?= $kind === 'dokter' ? ' active' : '' ?>" href="staff.php?kind=dokter">Dokter</a>
-  <a class="tab<?= $kind === 'terapis' ? ' active' : '' ?>" href="staff.php?kind=terapis">Terapis</a>
+  <a class="tab<?= $kind === 'beautician' ? ' active' : '' ?>" href="staff.php?kind=beautician">Beautician</a>
 </div>
 
 <div class="card tight">

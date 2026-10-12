@@ -425,6 +425,56 @@ function png_cache_build(array $png): string
     return pack('J', $png['width']) . pack('J', $png['height']) . PNG_CACHE_MAGIC . $png['rgb'];
 }
 
+/**
+ * Apakah berkas berada di folder sementara sistem (tmpfile(), unggahan PHP, dll.)?
+ *
+ * Berkas seperti itu bernama acak dan langsung dihapus setelah dipakai, jadi
+ * cache berkas di sebelahnya tidak akan pernah dipakai lagi dan tertinggal
+ * selamanya di /tmp server. Pernah terjadi: grafik pratinjau PDF di halaman
+ * Pengaturan ditulis lewat tmpfile(), sehingga setiap kali halaman itu dibuka
+ * tertinggal ±16 MB berkas `.raw` (±1,2 GB per hari, diperbaiki 2026-10-11).
+ * Untuk berkas sementara, hasil pengecilan hanya diingat di memori selama satu
+ * permintaan (png_temp_memo) dan tidak pernah ditulis ke disk. Jangan dihapus.
+ */
+function png_is_temp_path(string $path): bool
+{
+    static $tmpDir = null;
+    if ($tmpDir === null) {
+        $t = realpath(sys_get_temp_dir());
+        $tmpDir = ($t === false || $t === '/') ? '' : rtrim($t, '/') . '/';
+    }
+    if ($tmpDir === '') return false;
+    $real = realpath($path);
+    return $real !== false && strncmp($real, $tmpDir, strlen($tmpDir)) === 0;
+}
+
+/**
+ * Cache MEMORI (hanya selama satu permintaan) untuk gambar dari berkas sementara.
+ * Kuncinya isi berkas + tinggi tujuan, bukan nama berkas: PDF digambar dua kali
+ * (ukur lalu cetak) dengan tmpfile() baru setiap kali, dan setiap grafik dibaca
+ * dua kali (ukuran lalu gambar). Dibatasi ±24 MB agar aman bagi memory_limit.
+ */
+function png_temp_memo(string $key, ?array $png = null): ?array
+{
+    static $memo = [];
+    static $bytes = 0;
+    if ($png === null) return $memo[$key] ?? null;
+    $size = strlen($png['rgb'] ?? '');
+    $limit = 24 << 20;
+    if ($size > $limit) return $png;
+    if (isset($memo[$key])) {
+        $bytes -= strlen($memo[$key]['rgb'] ?? '');
+        unset($memo[$key]);
+    }
+    while ($memo && $bytes + $size > $limit) {
+        $old = array_shift($memo);
+        $bytes -= strlen($old['rgb'] ?? '');
+    }
+    $memo[$key] = $png;
+    $bytes += $size;
+    return $png;
+}
+
 function png_cache_exists(string $path, int $targetH): bool
 {
     $key = png_cache_path($path, $targetH);
@@ -436,6 +486,8 @@ function png_cache_exists(string $path, int $targetH): bool
 function png_cache_path(string $path, int $targetH): ?string
 {
     if (!is_readable($path)) return null;
+    // berkas sementara: jangan tinggalkan cache di /tmp (lihat png_is_temp_path)
+    if (png_is_temp_path($path)) return null;
     $st = @stat($path);
     return $path . '.c' . $targetH . '-' . ($st['mtime'] ?? 0) . '-' . ($st['size'] ?? 0) . '.raw';
 }
@@ -514,11 +566,23 @@ function png_scaled_cached(string $path, int $targetH): ?array
             return $cache + ['alpha' => false, 'cached' => true];
         }
     }
+    /* Berkas sementara: tanpa cache berkas (lihat png_is_temp_path), cukup
+       diingat di memori selama permintaan ini. */
+    $memKey = null;
+    if ($key === null && png_is_temp_path($path)) {
+        $sum = @md5_file($path);
+        if (is_string($sum)) {
+            $memKey = $sum . ':' . $targetH;
+            $hit = png_temp_memo($memKey);
+            if ($hit !== null) return $hit;
+        }
+    }
     /* Jalur cepat: GD (tersedia di runtime aplikasi) — sub-detik untuk gambar
        besar, dan sudah memotong bagian kosong. */
     $viaGd = png_scaled_gd($path, $targetH);
     if ($viaGd !== null) {
         if ($key !== null) @file_put_contents($key, png_cache_build($viaGd));
+        if ($memKey !== null) png_temp_memo($memKey, $viaGd);
         return $viaGd;
     }
 
@@ -550,6 +614,7 @@ function png_scaled_cached(string $path, int $targetH): ?array
     $png = $work;
     if ($png === null) return null;
     if ($key !== null) @file_put_contents($key, png_cache_build($png));
+    if ($memKey !== null) png_temp_memo($memKey, $png);
     return $png;
 }
 

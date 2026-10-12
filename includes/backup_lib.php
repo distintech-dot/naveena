@@ -767,7 +767,7 @@ function backup_db_inventory(): array
  * terintegrasi, seperti bagian backup — dalam bentuk metadata/path juga harus
  * terbackup seperti file foto rekam medis."
  *
- * Foto pasien/dokter/terapis dan lampiran klinis rekam medis disimpan sebagai
+ * Foto pasien/dokter/beautician dan lampiran klinis rekam medis disimpan sebagai
  * BERKAS di folder unggahan (di luar folder aplikasi), sedangkan basis datanya
  * hanya menyimpan nama/path. Karena itu backup yang hanya memuat basis data akan
  * kehilangan gambarnya saat dipulihkan di tempat lain.
@@ -831,7 +831,7 @@ function backup_media_inventory(): array
         $rujukan[$rel] = $oleh;
     };
     foreach ([['patients', 'patient', 'Pasien'], ['doctors', 'doctor', 'Dokter'],
-              ['therapists', 'therapist', 'Terapis']] as [$tbl, $kind, $label]) {
+              ['therapists', 'therapist', 'Beautician']] as [$tbl, $kind, $label]) {
         $sub = ['patient' => 'pasien', 'doctor' => 'dokter', 'therapist' => 'terapis'][$kind];
         try {
             foreach (all("SELECT id, name, photo_file FROM {$tbl} WHERE photo_file IS NOT NULL AND photo_file <> ''") as $r) {
@@ -1350,7 +1350,7 @@ function backup_restore_package(string $file, ?int $userId = null): array
     $mediaKembali = 0;
     foreach (($read['entries'] ?? []) as $nama => $isi) {
         /* ---------------- BERKAS MEDIA (foto) ----------------
-           Ditulis kembali ke folder unggahan supaya foto pasien/dokter/terapis dan
+           Ditulis kembali ke folder unggahan supaya foto pasien/dokter/beautician dan
            lampiran rekam medis TIDAK hilang saat data dipulihkan di tempat lain. */
         if (strpos((string)$nama, 'backup/media/') === 0) {
             $rel = substr((string)$nama, strlen('backup/media/'));

@@ -884,6 +884,9 @@ foreach ([2, 7, 12, 24] as $cgN) {
           </button>
         <?php endforeach; ?>
       </div>
+      <?php /* Petunjuk geser hanya tampil di HP (chip kategori jadi satu baris yang
+               dapat digeser ke samping) — lihat `.theme-fam-hint` di app.css. */ ?>
+      <div class="small muted theme-fam-hint mb-1">Geser baris kategori ke samping untuk melihat warna lainnya.</div>
       <div class="small muted mb-2" id="themeFamNote">Pilih keluarga warna untuk mempersempit daftar, atau
         <strong>Semua</strong> untuk menampilkan seluruh tema.</div>
 
@@ -1133,10 +1136,15 @@ $wpContoh = array_slice($wpPool, 0, 6);
       <?php if ($wpContoh): ?>
       <div class="section-title">Contoh gambar yang dipakai sekarang
         (<?= num(count($wpPool)) ?> gambar · <?= $wpCustom ? 'dari tautan Anda' : 'bawaan tema ' . e(wallpaper_categories()[$wpKat]) ?>)</div>
-      <div class="flex flex-wrap gap-sm">
+      <?php /* ENAM contoh gambar ditampilkan dalam SATU BARIS di PC/laptop/tablet
+               (permintaan pemilik). Dipakai grid dengan 6 kolom sama lebar +
+               `aspect-ratio` kartu sehingga gambarnya sejajar rapi; hanya pada
+               layar HP jumlah kolomnya berkurang (3 → 2) supaya tetap terbaca.
+               JANGAN memakai `flex-wrap` seperti sebelumnya — dengan flex,
+               gambar ke-6 terdorong ke baris kedua pada lebar sedang. */ ?>
+      <div class="wp-preview-grid">
         <?php foreach ($wpContoh as $u): ?>
-          <img src="<?= e($u) ?>" alt="Contoh gambar latar" loading="lazy"
-               style="width:150px;height:84px;object-fit:cover;border-radius:10px;border:1px solid var(--line)">
+          <img src="<?= e($u) ?>" alt="Contoh gambar latar" loading="lazy">
         <?php endforeach; ?>
       </div>
       <p class="muted small mt-1">Pratinjau memuat <?= num(count($wpContoh)) ?> dari <?= num(count($wpPool)) ?> gambar
@@ -1623,9 +1631,9 @@ $payInfo = pay_clinic_info();
             <option value="1"<?= setting('wa_doctor_active', '1') === '1' ? ' selected' : '' ?>>Aktif (tombol WA Dokter muncul)</option>
             <option value="0"<?= setting('wa_doctor_active') === '0' ? ' selected' : '' ?>>Nonaktif</option>
           </select>
-          <span class="hint">Berlaku untuk <strong>dokter saja</strong> — terapis tidak dikirimi pengingat (sesuai ketentuan klinik).</span></div>
+          <span class="hint">Berlaku untuk <strong>dokter saja</strong> — beautician tidak dikirimi pengingat (sesuai ketentuan klinik).</span></div>
         <div class="field" style="grid-column:1/-1"><label>&nbsp;</label>
-          <div class="notice">Nomor WhatsApp dokter diambil dari menu <a href="staff.php">Dokter &amp; Terapis</a>.
+          <div class="notice">Nomor WhatsApp dokter diambil dari menu <a href="staff.php">Dokter &amp; Beautician</a>.
             Bila nomornya kosong, tombol akan menampilkan peringatan agar dilengkapi lebih dahulu.</div></div>
         <div class="field" style="grid-column:1/-1"><label>Template Pesan Pengingat ke Dokter</label>
           <textarea class="input" name="wa_template_doctor" rows="6"><?= e(setting('wa_template_doctor')) ?></textarea>

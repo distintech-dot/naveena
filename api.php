@@ -249,7 +249,7 @@ try {
            mengarahkan pengguna kembali begitu pemeliharaan selesai. */
         /* ===== DAFTAR ACUAN FORMULIR RESERVASI UNTUK SATU CABANG =====
            Dipakai saat pemilik memindahkan kolom "Cabang" pada modal Reservasi:
-           pilihan dokter, terapis, dan treatment langsung dimuat ulang agar
+           pilihan dokter, beautician, dan treatment langsung dimuat ulang agar
            hanya memuat data cabang tersebut (ronde 36). */
         case 'res_form':
             require_perm('reservation.manage');

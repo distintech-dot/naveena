@@ -436,6 +436,48 @@
     },
     /**
      * ==================================================================
+     * SALIN TEKS KE PAPAN KLIP (ronde 79).
+     *
+     * Dipakai tombol "Salin tautan kartu" pada Membership Upgrade: tautan unduh
+     * kartu member PDF (berlaku 3 hari) perlu mudah disalin petugas untuk dikirim
+     * lewat WhatsApp/kanal lain. Memakai `navigator.clipboard` bila tersedia
+     * (butuh HTTPS — aplikasi ini memang HTTPS) dengan CADANGAN cara lama
+     * (`document.execCommand('copy')`) supaya tetap bekerja di peramban lama.
+     * Mengembalikan true/false, dan menampilkan pesan singkat pada tombolnya.
+     * ==================================================================
+     */
+    copyText(teks, tombol) {
+      const t = String(teks == null ? '' : teks);
+      const label = tombol ? (tombol.dataset.labelAsli || tombol.innerHTML) : null;
+      const kabari = (ok) => {
+        if (!tombol) return;
+        tombol.dataset.labelAsli = tombol.dataset.labelAsli || tombol.innerHTML;
+        tombol.innerHTML = ok ? '&#10003; Tersalin' : 'Gagal menyalin';
+        setTimeout(() => { tombol.innerHTML = tombol.dataset.labelAsli; }, 1800);
+      };
+      const cara_lama = () => {
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = t;
+          ta.setAttribute('readonly', '');
+          ta.style.cssText = 'position:absolute;left:-9999px;top:0';
+          document.body.appendChild(ta);
+          ta.select();
+          const ok = document.execCommand('copy');
+          document.body.removeChild(ta);
+          return ok;
+        } catch (e) { return false; }
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(t).then(() => kabari(true))
+          .catch(() => kabari(cara_lama()));
+      } else {
+        kabari(cara_lama());
+      }
+      return false;
+    },
+    /**
+     * ==================================================================
      * PETUNJUK GESER KALENDER (ronde 77).
      *
      * Kalender reservasi di HP memakai kolom tanggal 68px sehingga lebarnya
@@ -602,7 +644,7 @@
   /* ============================================================================
    BATAS UKURAN BERKAS YANG DIPILIH (sisi peramban) — permintaan pemilik
    ============================================================================
-   Kolom berkas yang punya `data-max-kb` (foto pasien/dokter/terapis = 300 KB,
+   Kolom berkas yang punya `data-max-kb` (foto pasien/dokter/beautician = 300 KB,
    foto rekam medis = 500 KB) DIPERIKSA saat berkas dipilih. Bila ada berkas yang
    terlalu besar: pilihannya dikosongkan (tidak diunggah) dan muncul pesan jelas
    di bawah kolomnya. Aturan angkanya berasal dari PHP (`img_source_max_kb()`),
@@ -667,7 +709,7 @@
   /* ============================================================================
    FOTO DIPERBESAR (lightbox) — permintaan pemilik
    ============================================================================
-   Foto pasien / dokter / terapis / lampiran klinis dapat DIKLIK untuk dilihat
+   Foto pasien / dokter / beautician / lampiran klinis dapat DIKLIK untuk dilihat
    lebih besar. Elemen apa pun yang punya atribut `data-zoom="<url gambar>"` akan
    membuka lapisan gelap berisi gambar ukuran besar (dapat diperbesar lagi dengan
    klik pada gambar — zoom 1×/2×). Tertutup lewat tombol ×, klik latar, atau Esc.
@@ -710,6 +752,13 @@
     window.Naveena = window.Naveena || {};
     window.Naveena.zoom = buka;
   })();
+
+  /* Penolong global untuk atribut `onclick` pada halaman (mis. tombol
+     "Salin tautan kartu" di Membership Upgrade). */
+  window.nvCopyLink = function (btn) {
+    if (!btn) return false;
+    return window.Naveena.copyText(btn.getAttribute('data-copy') || '', btn);
+  };
 
   document.addEventListener('DOMContentLoaded', function () {
     window.Naveena.tableScroll();
