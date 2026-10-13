@@ -66,8 +66,6 @@ page_head('Riwayat Order', 'order');
     <?php if (has_perm('export.data')): ?>
       <a class="btn" href="export.php?type=transaksi&format=csv&<?= e(qs([], ['page', 'per_page'])) ?>"><?= icon('download') ?> CSV</a>
       <a class="btn" href="export.php?type=transaksi&format=excel&<?= e(qs([], ['page', 'per_page'])) ?>">Excel</a>
-      <a class="btn btn-primary" href="export.php?type=transaksi&format=xlsx&<?= e(qs([], ['page', 'per_page'])) ?>"
-         title="Excel asli berisi data transaksi + lembar foto/lampiran klinis pasien pada periode ini"><?= icon('download') ?> Excel + Foto Klinis</a>
       <a class="btn" href="export.php?type=transaksi&format=pdf&<?= e(qs([], ['page', 'per_page'])) ?>" target="_blank">PDF</a>
     <?php endif; ?>
     <?= retention_manual_button('order') ?>

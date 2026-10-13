@@ -105,7 +105,7 @@ function nav_items(): array
     $rep = [];
     if (has_perm('report.view')) $rep[] = ['laporan.php', 'Laporan', 'chart', 'laporan'];
     if (has_perm('report.view')) $rep[] = ['top5.php', 'Top 5 Penjualan', 'trophy', 'top5'];
-    if (has_perm('report.view')) $rep[] = ['top10_pasien.php', 'Top 10 Pasien', 'star', 'top10'];
+    if (has_perm('report.view')) $rep[] = ['top10_pasien.php', 'Top 10 Pasien', 'medal', 'top10'];
     /* MENU KEUANGAN — tepat di bawah "Top 10 Pasien". Hanya untuk level owner
        (Super Admin & Direktur/Owner) karena memuat HPP & laba bersih yang
        bersifat internal perusahaan; level lain tidak melihat menunya dan
@@ -128,13 +128,14 @@ function nav_items(): array
        pengosongan data. Dipisah dari Pengaturan Sistem supaya halaman pengaturan
        operasional tidak terlalu panjang dan tindakan berisiko terkumpul di satu
        tempat yang jelas. */
-    if (is_super()) $set[] = ['developer.php', 'Developer Settings', 'shield', 'developer'];
+    if (is_super()) $set[] = ['developer.php', 'Developer Settings', 'terminal', 'developer'];
     if (has_perm('patient.manage') || has_perm('medical.manage') || has_perm('skincare.manage') || has_perm('material.manage') || has_perm('treatment.manage')) {
         $set[] = ['import.php', 'Import Data (Excel/CSV)', 'upload', 'import'];
     }
     /* Menu Backup Database hanya untuk pemegang permission `backup.manage`
        (Super Admin) — level lain tidak boleh mengaksesnya sama sekali. */
     if (has_perm('backup.manage') || has_perm('maintenance.manage')) $set[] = ['backup.php', 'Backup Database', 'database', 'backup'];
+    if (is_super()) $set[] = ['update_system.php', 'Update Sistem', 'refresh', 'update_system'];
     if ($set) $items[] = ['Pengaturan', $set];
 
     /* KELOMPOK "AI WORKSPACE" (ronde 42, permintaan pemilik) — menu AI dipisah
@@ -156,6 +157,8 @@ function nav_items(): array
 function icon(string $name): string
 {
     $p = [
+        'terminal'  => '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/>',
+        'medal'     => '<path d="M7 3h4l2 7M13 3h4l-2 7"/><circle cx="12" cy="15" r="6"/><path d="M12 12v6M10 13l2-1"/>',
         'grid'      => '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
         'calendar'  => '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 11h18"/>',
         'users'     => '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c1-3.5 3.5-5 6.5-5s5.5 1.5 6.5 5"/><path d="M17 11a3 3 0 1 0 0-6"/><path d="M18 20c-.2-2-.9-3.6-2-4.6"/>',
@@ -232,7 +235,7 @@ function render_sidebar(array $user, string $active): void
     /* Label tombol dibungkus <span class="btn-label"> supaya dapat disembunyikan
        saat sidebar terlipat (ikonnya tetap tampil & tetap dapat diklik). */
     echo '<a class="btn btn-ghost btn-block btn-sm" href="profile.php" title="Ubah Password">'
-        . icon('user-cog') . '<span class="btn-label">Ubah Password</span></a>';
+        . icon('key') . '<span class="btn-label">Ubah Password</span></a>';
     echo '<a class="btn btn-ghost btn-block btn-sm" href="logout.php" title="Keluar">' . icon('logout')
         . '<span class="btn-label">Keluar</span></a></div>';
     echo '</aside>';

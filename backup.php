@@ -38,6 +38,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $id = (int)$_POST['id'];
             $b = one('SELECT * FROM backups WHERE id = ?', [$id]);
             if (!$b) throw new RuntimeException('Data backup tidak ditemukan.');
+            if (backup_snapshot_protected($b)) throw new RuntimeException('Snapshot update dilindungi selama 30 hari dan belum boleh dihapus.');
             $path = backup_dir_ensure() . '/' . basename($b['filename']);
             if (is_file($path)) @unlink($path);
             q('DELETE FROM backups WHERE id = ?', [$id]);
@@ -694,6 +695,8 @@ page_head('Backup Database', 'backup');
           <td class="small"><?= e(tgl($r['created_at'], true)) ?></td>
           <td class="small"><?= num(round(((int)$r['size']) / 1048576, 2), 2) ?> MB</td>
           <td class="small"><?php
+            $jenis = (string)($r['kind'] ?? 'sql');
+            if ($jenis === '' || $jenis === '0') $jenis = 'sql';
             $jenisBadge = ['branch' => ['Basis data cabang', 'blue'], 'package' => ['Paket lengkap', 'pink'],
                            'sql' => ['Dump seluruh data', 'gray']][$jenis] ?? ['Dump', 'gray']; ?>
             <?= badge($jenisBadge[0], $jenisBadge[1]) ?><br><?= e($r['note'] ?: '-') ?></td>

@@ -157,9 +157,11 @@ page_head('Membership Upgrade', 'member_upgrade');
     <p class="muted">Pasien yang <strong>naik level kartu member</strong>. Email ucapan selamat
       beserta kartu PDF (2 halaman) dikirim otomatis setelah transaksi — bila gagal, dapat dikirim ulang di sini.</p>
   </div>
+  <?php if(role_code() !== 'kasir' && has_perm('report.view')): ?>
   <div class="page-actions">
     <a class="btn btn-sm" href="laporan.php?ps=<?= e($f['dari']) ?>&pe=<?= e($f['sampai']) ?>"><?= icon('chart') ?> Laporan</a>
   </div>
+  <?php endif; ?>
 </div>
 
 <div class="grid g4">

@@ -67,10 +67,10 @@ foreach ($rowsItem as $r) {
     $itemAgg[$t]['s']  += (float)$r['s'];       $itemAgg[$t]['q']  += (float)$r['q'];
     $itemAgg[$t]['st'] += (float)$r['s_today']; $itemAgg[$t]['qt'] += (float)$r['q_today'];
 }
-$kpiTreatment  = ['s' => $itemAgg['treatment']['s'] ?? 0, 'q' => $itemAgg['treatment']['q'] ?? 0];
-$kpiTreatmentM = ['s' => $itemAgg['treatment']['st'] ?? 0, 'q' => $itemAgg['treatment']['qt'] ?? 0];
-$kpiSkincare   = ['s' => $itemAgg['skincare']['s'] ?? 0, 'q' => $itemAgg['skincare']['q'] ?? 0];
-$kpiSkincareM  = ['s' => $itemAgg['skincare']['st'] ?? 0, 'q' => $itemAgg['skincare']['qt'] ?? 0];
+$kpiTreatment  = ['s' => $itemAgg['treatment']['st'] ?? 0, 'q' => $itemAgg['treatment']['qt'] ?? 0];
+$kpiTreatmentM = ['s' => $itemAgg['treatment']['s'] ?? 0, 'q' => $itemAgg['treatment']['q'] ?? 0];
+$kpiSkincare   = ['s' => $itemAgg['skincare']['st'] ?? 0, 'q' => $itemAgg['skincare']['qt'] ?? 0];
+$kpiSkincareM  = ['s' => $itemAgg['skincare']['s'] ?? 0, 'q' => $itemAgg['skincare']['q'] ?? 0];
 
 /* Cakupan SATU cabang → ringkas peta di atas menjadi satu baris (perilaku lama tetap). */
 $petaKpi = []; $petaItem = []; $petaRes = [];

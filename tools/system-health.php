@@ -1,0 +1,4 @@
+<?php
+declare(strict_types=1);
+if(PHP_SAPI!=='cli')exit('CLI only');
+try{$GLOBALS['DB_ROUTE_INSPECT']=true;$GLOBALS['NV_HEALTH_READ_ONLY']=true;require dirname(__DIR__).'/includes/config.php';require dirname(__DIR__).'/includes/backup_lib.php';require dirname(__DIR__).'/includes/system_health.php';$v=json_decode(file_get_contents(APP_DIR.'/app-version.json'),true);$h=new NaveenaSystemHealth(['app'=>APP_DIR,'storage'=>db_store_root(),'uploads'=>local_upload_dir(),'backup'=>NaveenaSystemHealth::backupRoot(),'system'=>nv_system_root(APP_DIR),'schema'=>SCHEMA_VERSION,'version'=>$v['version']]);$r=$h->run($argv[1]??'quick');echo json_encode(['id'=>$r['id'],'status'=>$r['status'],'score'=>$r['score'],'coverage'=>$r['coverage']],JSON_PRETTY_PRINT).PHP_EOL;exit($r['counts']['critical']?2:0);}catch(Throwable $e){fwrite(STDERR,'Health check tidak selesai: '.get_class($e).PHP_EOL);exit(1);}

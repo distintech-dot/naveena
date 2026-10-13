@@ -1,6 +1,8 @@
 <?php
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/login_hint.php';
+require_once __DIR__ . '/includes/login_copy.php';
+$loginCopy = login_copy_values();
 require_once __DIR__ . '/includes/mailer.php';
 require_once __DIR__ . '/includes/login_security.php';
 require_once __DIR__ . '/includes/layout.php';
@@ -147,17 +149,17 @@ unset($_SESSION['deny_notice']);
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover">
 <title>Masuk · <?= e(clinic_name()) ?> Management System</title>
 <?= function_exists('favicon_link_tag') ? favicon_link_tag() : '' ?>
-<link rel="stylesheet" href="assets/css/app.css">
+<link rel="stylesheet" href="assets/css/app.css?v=20261013-auth-center">
 <style id="themeVars"><?= theme_css() ?></style>
 <?= function_exists('wallpaper_style_tag') ? wallpaper_style_tag(true) : '' ?>
 </head>
-<body class="auth-body">
+<body class="auth-body auth-centered">
 <div class="auth-wrap">
   <div class="auth-card">
     <div class="auth-visual">
       <?= brand_block() ?>
       <div>
-        <h2>Website Management System</h2>
+        <h2><?= e(login_copy_resolve($loginCopy['title'])) ?></h2>
         <?php
         /* Nama klinik & daftar cabang diambil dari data aktif supaya halaman
            login ikut berubah saat nama klinik diganti (dulu ditulis tetap). */
@@ -168,15 +170,12 @@ unset($_SESSION['deny_notice']);
         <?php /* `.auth-lead` = informasi lengkap yang SENGAJA disembunyikan di HP
                  (app.css blok ≤767px) supaya header tidak menghabiskan layar
                  pertama; desktop & tablet tetap menampilkannya penuh. */ ?>
-        <p class="auth-lead">Klinik Kecantikan <strong><?= e(clinic_name()) ?></strong><?= $loginBranchTxt !== '' ? ' — ' . e($loginBranchTxt) : '' ?></p>
-        <ul>
-          <li>Multi-cabang &amp; hak akses berbasis role</li>
-          <li>Reservasi, rekam medis, dan order terhubung</li>
-          <li>Inventory &amp; stok otomatis per cabang</li>
-          <li>Laporan, dashboard, dan audit log</li>
-        </ul>
+        <?php if($loginCopy['intro']!==''): ?><p class="auth-lead"><?= nl2br(e(login_copy_resolve($loginCopy['intro'],$loginBranchTxt))) ?></p><?php endif; ?>
+        <?php $loginFeatures=array_filter(array_map('trim',explode("\n",$loginCopy['features']))); if($loginFeatures): ?><ul>
+          <?php foreach($loginFeatures as $feature): ?><li><?= e(login_copy_resolve($feature,$loginBranchTxt)) ?></li><?php endforeach; ?>
+        </ul><?php endif; ?>
       </div>
-      <p class="small" style="color:rgba(255,255,255,.75)">© <?= date('Y') ?> <?= e(clinic_name()) ?></p>
+      <p class="small" style="color:rgba(255,255,255,.75)"><?= e(login_copy_resolve($loginCopy['footer'],$loginBranchTxt)) ?></p>
     </div>
     <div class="auth-form">
       <?= brand_block() ?>
@@ -188,8 +187,8 @@ unset($_SESSION['deny_notice']);
               Super Admin tetap dapat masuk untuk mengelola sistem.</div></div>
         </div>
       <?php endif; ?>
-      <h2 class="mt-3">Masuk ke Sistem</h2>
-      <p class="muted mb-3">Gunakan email dan password akun klinik Anda.</p>
+      <h2 class="mt-3"><?= e(login_copy_resolve($loginCopy['form_title'],$loginBranchTxt)) ?></h2>
+      <p class="muted mb-3"><?= nl2br(e(login_copy_resolve($loginCopy['form_intro'],$loginBranchTxt))) ?></p>
 
       <?php if ($err !== ''): ?>
         <div class="alert alert-error"><?= e($err) ?></div>

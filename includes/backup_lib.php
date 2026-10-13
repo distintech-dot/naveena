@@ -16,6 +16,7 @@
  * menyuruh menghapus backup lama lebih dulu.
  */
 declare(strict_types=1);
+require_once __DIR__ . '/system_snapshot.php';
 
 /** Folder backup (dapat dialihkan lewat NAVEENA_BACKUP_DIR — dipakai skrip uji
  *  supaya hasil uji tidak menumpuk di folder backup milik aplikasi). */
@@ -219,11 +220,12 @@ function backup_prune_to_fit(): array
     $info = backup_storage_info();
     $target = (int)floor($info['quota'] * 0.8);
     $dir = backup_dir_ensure();
-    $rows = all('SELECT id, filename, size FROM backups ORDER BY id ASC');
+    $rows = all('SELECT id, filename, size, auto_run FROM backups ORDER BY id ASC');
     $count = 0;
     $freed = 0;
     $names = [];
     foreach ($rows as $b) {
+        if (backup_snapshot_protected($b)) continue;
         if ($info['used'] - $freed <= $target) break;
         $path = $dir . '/' . basename((string)$b['filename']);
         $size = is_file($path) ? (int)filesize($path) : 0;
@@ -247,6 +249,9 @@ function backup_orphan_files(): array
     $bytes = 0;
     foreach (backup_dir_files() as $f) {
         if (in_array($f['name'], $known, true)) continue;
+        // A restored Central may predate snapshot registration: retain recovery files anyway.
+        if (preg_match('/^naveena-system-snapshot-[0-9]{8}-[0-9]{6}-[a-f0-9]{12}\.zip$/D', $f['name'])
+            && $f['mtime'] + 30 * 86400 > time()) continue;
         $out[] = ['name' => $f['name'], 'size' => $f['size']];
         $bytes += $f['size'];
     }
@@ -486,7 +491,7 @@ function backup_auto_scope_label(string $v): string
 function backup_prune_auto(): int
 {
     $keep = backup_keep_count();
-    $auto = all("SELECT id, filename, COALESCE(NULLIF(auto_run, ''), 'lama-' || date(created_at)) AS set_key
+    $auto = all("SELECT id, filename, auto_run, COALESCE(NULLIF(auto_run, ''), 'lama-' || date(created_at)) AS set_key
                  FROM backups WHERE note LIKE 'Backup otomatis%' ORDER BY id DESC");
     if (count($auto) <= $keep) return 0;
 
@@ -512,6 +517,7 @@ function backup_prune_auto(): int
             continue;
         }
         foreach ($isi as $b) {
+            if (backup_snapshot_protected($b)) continue;
             $path = $dir . '/' . basename((string)$b['filename']);
             if (is_file($path)) @unlink($path);
             q('DELETE FROM backups WHERE id = ?', [(int)$b['id']]);
@@ -1024,6 +1030,7 @@ function backup_zip_create(string $zipPath, array $entries): array
  */
 function backup_create_package(string $note, ?int $userId = null, array $opts = []): array
 {
+    if (!empty($opts['system_snapshot'])) return backup_create_system_snapshot($note, $userId, $opts);
     $enforce = $opts['enforce'] ?? true;
     $info = backup_storage_info();
     if ($enforce && $info['status'] === 'full') {

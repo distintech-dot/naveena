@@ -35,6 +35,8 @@ define('APP_NAME', 'Naveena Skincare');
 const SEQ_START = 1001001;
 const SEQ_DIGITS = 7;
 define('APP_DIR', dirname(__DIR__));
+require_once __DIR__ . '/system_update_guard.php';
+nv_system_request_guard();
 
 /* ------------------------------------------------------------------ *
  * JALUR BASIS DATA = CENTRAL + SATU BERKAS PER CABANG
@@ -210,6 +212,7 @@ function q(string $sql, array $params = []): PDOStatement
        dan ditolak SQLite ("cannot modify … because it is a view"). */
     $daftar = [$sql];
     $c = db_route_sql_verb($sql);
+    if(!empty($GLOBALS['NV_HEALTH_READ_ONLY']) && !in_array($c,['SELECT','EXPLAIN'],true))throw new RuntimeException('Diagnostik read-only menolak perubahan data.');
     if ($c === 'INSERT' || $c === 'UPDATE' || $c === 'REPLACE' || $c === 'DELETE') {
         $daftar = db_route_prepare_all($sql, $params);
     }

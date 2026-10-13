@@ -1812,7 +1812,8 @@ $mCv = member_card_canvas();
         </div>
         <div class="grow">
           <div class="field"><label>Pilih Gambar</label>
-            <input class="input" type="file" name="bg" accept="image/*"></div>
+            <input class="input" type="file" name="bg" accept="image/png,image/jpeg,image/webp,image/gif" data-max-kb="<?= img_source_max_kb('membercard') ?>">
+            <div class="hint">Maksimal <?= img_source_max_kb('membercard') ?> KB; berkas lebih besar ditolak. Kompresi PNG sedang (level 4/9), tanpa penurunan kualitas. Pengurangan ukuran akhir bergantung pada gambar.</div></div>
           <div class="flex gap-sm mt-2">
             <button class="btn btn-primary btn-sm" type="submit"><?= icon('upload') ?> Unggah Background</button>
           </div>

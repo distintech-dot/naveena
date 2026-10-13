@@ -262,6 +262,7 @@ function db_route_conn(bool $siapkanSkema = true): PDO
         try {
         $path = db_central_path();
         if (!is_file($path)) {
+            if(!empty($GLOBALS['NV_HEALTH_READ_ONLY']))throw new RuntimeException('Central diagnostik tidak tersedia.');
             /* Central belum ada: buat + terapkan skema (global) lebih dulu. */
             db_schema_apply($path, 'central');
             $skemaSiap = true;
@@ -355,7 +356,7 @@ function db_route_attach_one(PDO $pdo, int $bid, array &$terpasang): string
     if (isset($terpasang[$bid])) return $terpasang[$bid];
     if (count($terpasang) >= DB_ROUTE_MAX_ATTACH) return '';
     $file = db_branch_path($bid);
-    if (!is_file($file)) db_branch_create($bid);          // cabang baru → otomatis dibuat
+    if (!is_file($file) && empty($GLOBALS['NV_HEALTH_READ_ONLY'])) db_branch_create($bid);          // cabang baru → otomatis dibuat
     if (!is_file($file)) return '';
     $alias = 'b' . $bid;
     try {
@@ -366,7 +367,7 @@ function db_route_attach_one(PDO $pdo, int $bid, array &$terpasang): string
     /* Skema/migrasi cabang hanya diperiksa untuk cabang yang benar-benar dipakai —
        itulah sebabnya pemeriksaan ini dipindah ke sini (dulu dilakukan untuk semua
        cabang yang di-ATTACH, termasuk yang tidak diperlukan permintaan ini). */
-    db_route_ensure_branch_schema($pdo, $alias, $bid);
+    if(empty($GLOBALS['NV_HEALTH_READ_ONLY']))db_route_ensure_branch_schema($pdo, $alias, $bid);
     $terpasang[$bid] = $alias;
     return $alias;
 }

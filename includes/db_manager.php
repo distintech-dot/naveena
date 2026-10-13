@@ -148,6 +148,7 @@ function db_branch_path(int $branchId): string
  */
 function db_open(string $path): PDO
 {
+    if(!empty($GLOBALS['NV_HEALTH_READ_ONLY'])) { if(!is_file($path))throw new RuntimeException('Database diagnostik tidak tersedia.');$p=new PDO('sqlite:'.$path,null,null,[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION,PDO::ATTR_DEFAULT_FETCH_MODE=>PDO::FETCH_ASSOC,PDO::SQLITE_ATTR_OPEN_FLAGS=>PDO::SQLITE_OPEN_READONLY]);$p->exec('PRAGMA busy_timeout=500');return $p; }
     $fresh = !file_exists($path);
     $dir = dirname($path);
     if (!is_dir($dir)) @mkdir($dir, 0770, true);

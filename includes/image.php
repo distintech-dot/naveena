@@ -57,7 +57,8 @@ function img_limits(string $kind): array
         /* Background kartu member: ukuran kartu standar 85,6 × 54 mm @300dpi = 1012 × 638 px.
            `dim` memakai KUNCI setelan (string) — bukan angka — karena img_limits()
            memanggil setting($c['dim']). */
-        'membercard' => ['dim' => 'photo_max_membercard', 'def' => 1012, 'max' => 2024, 'bytes' => 500 * 1024],
+        'membercard' => ['dim' => 'photo_max_membercard', 'def' => 1012, 'max' => 2024, 'bytes' => 500 * 1024,
+            'biteMax' => 500 * 1024, 'medium' => true],
     ];
     $c = $map[$kind] ?? $map['medical'];
     $dim = (int)setting($c['dim'], (string)$c['def']);
@@ -72,6 +73,7 @@ function img_limits(string $kind): array
         'targetBytes' => (int)setting('photo_target_kb', '0') * 1024 ?: $c['bytes'],
         'biteMax' => (int)($c['biteMax'] ?? 0),
         'soft' => !empty($c['soft']),
+        'medium' => !empty($c['medium']),
         'square' => !empty($c['square'])];
 }
 
@@ -254,7 +256,7 @@ function img_process_upload(string $tmpPath, string $origName, string $destDir, 
        semua dokumen PDF tanpa pesan apa pun (pernah terjadi: unggahan .jpg). */
     /* QRIS juga SELALU PNG: kode QR yang dikompresi JPEG bisa berbintik dan
        menyulitkan pemindai (pasien gagal membayar). PNG bersifat lossless. */
-    $forcePng = in_array($kind, ['logo', 'qris'], true);
+    $forcePng = in_array($kind, ['logo', 'qris', 'membercard'], true);
     $target = $lim['targetBytes'];
     $quality = $lim['quality'];
     $out = null;
@@ -266,8 +268,10 @@ function img_process_upload(string $tmpPath, string $origName, string $destDir, 
            TIDAK menurunkan mutu gambar, hanya ukuran berkas. Untuk unggahan yang
            meminta kompresi RINGAN (logo/QRIS) loop turun-level tidak dijalankan
            supaya tidak ada penurunan mutu sedikit pun. */
-        $lvlMin = !empty($lim['soft']) ? 9 : 6;
-        for ($lvl = 9; $lvl >= $lvlMin; $lvl--) {
+        // Member background: medium PNG level 4/9, lossless for readable card text.
+        $lvlStart = !empty($lim['medium']) ? 4 : 9;
+        $lvlMin = !empty($lim['medium']) ? 4 : (!empty($lim['soft']) ? 9 : 6);
+        for ($lvl = $lvlStart; $lvl >= $lvlMin; $lvl--) {
             ob_start();
             imagepng($dst, null, $lvl);
             $out = ob_get_clean();

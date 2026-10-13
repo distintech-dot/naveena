@@ -6,20 +6,7 @@ $scope = scope_branch();
 $period = gp('period', 'month');
 [$ps, $pe] = resolve_period($period, gp('start'), gp('end'));
 
-function top_rows(string $type, string $ps, string $pe, ?int $scope, int $limit = 5): array
-{
-    $cat = $type === 'skincare' ? 's.category' : 't.category';
-    $join = $type === 'skincare' ? 'LEFT JOIN skincare_products s ON s.id = oi.skincare_id' : 'LEFT JOIN treatments t ON t.id = oi.treatment_id';
-    $bs = $scope === null ? '' : ' AND o.branch_id = ?';
-    $params = [$type, $ps, $pe];
-    if ($scope !== null) $params[] = $scope;
-    return all("SELECT oi.item_name name, oi.item_code code, COALESCE({$cat},'-') category,
-                       COALESCE(SUM(oi.quantity),0) qty, COALESCE(SUM(oi.subtotal),0) total,
-                       COUNT(DISTINCT o.id) trx
-                FROM order_items oi JOIN orders o ON o.id = oi.order_id {$join}
-                WHERE o.status='paid' AND oi.item_type = ? AND date(o.created_at) BETWEEN ? AND ? {$bs}
-                GROUP BY oi.item_name ORDER BY total DESC LIMIT " . (int)$limit, $params);
-}
+require_once __DIR__ . '/includes/top_sales.php';
 $topSk = top_rows('skincare', $ps, $pe, $scope);
 $topTr = top_rows('treatment', $ps, $pe, $scope);
 $skTot = array_sum(array_column($topSk, 'total')) ?: 1;
@@ -44,8 +31,8 @@ page_head('Top 5 Penjualan', 'top5');
   <div><h2>Top 5 Penjualan</h2><p class="muted">Peringkat berdasarkan penjualan bersih (transaksi void/refund tidak dihitung).</p></div>
   <div class="page-actions">
     <?php if (has_perm('export.data')): ?>
-      <a class="btn" href="export.php?type=laporan_treatment&format=csv&<?= e(qs([], ['page', 'per_page'])) ?>"><?= icon('download') ?> CSV Treatment</a>
-      <a class="btn" href="export.php?type=laporan_skincare&format=csv&<?= e(qs([], ['page', 'per_page'])) ?>">CSV Skincare</a>
+      <a class="btn" href="export.php?type=top5&amp;format=excel&amp;<?= e(qs([], ['page','per_page','type','format'])) ?>"><?= icon('download') ?> Excel</a>
+      <a class="btn" href="export.php?type=top5&amp;format=pdf&amp;<?= e(qs([], ['page','per_page','type','format'])) ?>" target="_blank" rel="noopener"><?= icon('print') ?> PDF</a>
       <a class="btn btn-primary" href="laporan.php?<?= e(qs()) ?>">Laporan Lengkap</a>
     <?php endif; ?>
   </div>

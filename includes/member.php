@@ -731,7 +731,7 @@ function member_card_bg_save(string $tmp, string $name): array
     imagedestroy($im);
     /* Simpan sebagai PNG (dipakai oleh penulis PDF yang hanya menerima PNG). */
     $target = local_upload_dir() . '/membercard-card-' . bin2hex(random_bytes(6)) . '.png';
-    $ok = @imagepng($dst, $target, 9);
+    $ok = @imagepng($dst, $target, 4);
     imagedestroy($dst);
     if (!$ok) return $made;
     @unlink($src);
@@ -739,6 +739,7 @@ function member_card_bg_save(string $tmp, string $name): array
     $made['width'] = $cv['w'];
     $made['height'] = $cv['h'];
     $made['bytes'] = (int)@filesize($target);
+    $made['saved'] = max(0, (int)@filesize($tmp) - $made['bytes']);
     $made['mime'] = 'image/png';
     $made['cropped'] = true;
     return $made;

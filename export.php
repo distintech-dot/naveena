@@ -509,7 +509,7 @@ if ($type === 'laporan' && $format === 'excel') {
         echo '<tr>'; foreach ($head as $h) echo '<th style="background:#FDF2F7">' . e($h) . '</th>'; echo '</tr>';
         foreach ($body as $r) {
             echo '<tr>';
-            foreach ($r as $c) echo '<td>' . e(is_float($c) ? number_format($c, 0, ',', '.') : (string)$c) . '</td>';
+            foreach ($r as $ci => $c) { $asText=in_array($type,['pasien','reservasi'],true) && in_array($headers[$ci]??'', ['NIK','Telepon','No. Pasien','Member'], true); echo '<td'.($asText?' style="mso-number-format:\'\\@\';"':'').'>' . e(is_float($c) ? number_format($c, 0, ',', '.') : (string)$c) . '</td>'; }
             echo '</tr>';
         }
         echo '</table>';
@@ -618,6 +618,29 @@ $totals = null;
 $meta = 'Periode: ' . tgl($ps) . ' — ' . tgl($pe) . ' · Cabang: ' . ($scope === null ? 'Semua Cabang' : (string)scalar('SELECT name FROM branches WHERE id=?', [$scope], '-'));
 
 switch ($type) {
+    case 'reservasi':
+        require_perm('reservation.view'); require_perm('export.data');
+        $title='Data Reservasi';$headers=['No. Reservasi','Tanggal','Jam','No. Pasien','Pasien','Telepon','Cabang','Dokter','Beautician','Treatment / Paket','Status','Catatan'];
+        $where=['1=1'];$params=[];$from=gp('from');$to=gp('to');if($from===''&&$to===''&&gp('date')!=='')$from=$to=gp('date');
+        if($from!==''){$where[]='a.date>=?';$params[]=$from;}if($to!==''){$where[]='a.date<=?';$params[]=$to;}
+        if(gp('status')!==''){$where[]='a.status=?';$params[]=gp('status');}
+        foreach(['doctor'=>'doctor_id','therapist'=>'therapist_id'] as $key=>$column)if((int)gp($key)>0){$where[]='a.'.$column.'=?';$params[]=(int)gp($key);}
+        if($scope!==null){$where[]='a.branch_id=?';$params[]=$scope;}
+        if(gp('q')!==''){$where[]='(p.name LIKE ? OR p.phone LIKE ? OR a.appointment_number LIKE ? OR p.patient_number LIKE ?)';$q='%'.gp('q').'%';array_push($params,$q,$q,$q,$q);}
+        $data=all("SELECT a.*,p.name patient_name,p.patient_number,p.phone patient_phone,b.name branch_name,d.name doctor_name,th.name therapist_name,t.name treatment_name,
+            (SELECT GROUP_CONCAT(CASE WHEN at2.treatment_id<0 THEN COALESCE('[Paket] '||pk2.name,'[Paket]') ELSE COALESCE(t2.name,'') END, ', ')
+             FROM appointment_treatments at2 LEFT JOIN treatments t2 ON t2.id=at2.treatment_id LEFT JOIN packages pk2 ON pk2.id=-at2.treatment_id WHERE at2.appointment_id=a.id) treatments_all
+            FROM appointments a JOIN patients p ON p.id=a.patient_id JOIN branches b ON b.id=a.branch_id LEFT JOIN doctors d ON d.id=a.doctor_id LEFT JOIN therapists th ON th.id=a.therapist_id LEFT JOIN treatments t ON t.id=a.treatment_id
+            WHERE ".implode(' AND ',$where)." ORDER BY a.date DESC,a.time DESC",$params);
+        foreach($data as $r)$rows[]=[$r['appointment_number'],tgl($r['date']),$r['time'],$r['patient_number'],$r['patient_name'],$r['patient_phone']?:'-',$r['branch_name'],$r['doctor_name']?:'-',$r['therapist_name']?:'-',$r['treatments_all']?:($r['treatment_name']?:'-'),$r['status'],$r['notes']??''];
+        $meta='Rentang: '.($from!==''?tgl($from):'Semua tanggal').' — '.($to!==''?tgl($to):'Semua tanggal').' · Status: '.(gp('status')?:'Semua').' · Cabang: '.($scope===null?'Semua Cabang':(string)scalar('SELECT name FROM branches WHERE id=?',[$scope],'-'));
+        break;
+    case 'top5':
+        require_perm('report.view');require_perm('export.data');require_once __DIR__.'/includes/top_sales.php';
+        $title='Top 5 Penjualan';$headers=['Jenis','Peringkat','Nama','Kode','Kategori','Jumlah Terjual','Total Penjualan','Transaksi'];
+        foreach(['treatment'=>'Treatment','skincare'=>'Skincare'] as $kind=>$label){$rank=0;foreach(top_rows($kind,$ps,$pe,$scope,5) as $r)$rows[]=[$label,++$rank,$r['name'],$r['code'],$r['category'],$r['qty'],$r['total'],$r['trx']];}
+        break;
+
     case 'transaksi':
         $title = 'Laporan Transaksi';
         $w = ['o.status IS NOT NULL'];
@@ -656,12 +679,12 @@ switch ($type) {
         $p = $b2;
         $w = 'p.status = "active" AND 1=1' . $b1;
         if (gp('q') !== '') { $w .= ' AND (p.name LIKE ? OR p.nik LIKE ? OR p.phone LIKE ? OR p.email LIKE ? OR p.member_number LIKE ?)'; $q = '%' . gp('q') . '%'; array_push($p, $q, $q, $q, $q, $q); }
-        $headers = ['No. Pasien', 'Nama', 'JK', 'NIK', 'Telepon', 'Email', 'Member', 'Status', 'Cabang', 'Kunjungan', 'Total Belanja'];
+        $headers = ['No. Pasien', 'Nama', 'JK', 'Tanggal Lahir', 'NIK', 'Telepon', 'Email', 'Alamat', 'Member', 'Status', 'Cabang', 'Kunjungan', 'Total Belanja'];
         require_once __DIR__ . '/includes/patient.php';
         foreach (all("SELECT p.*, b.name branch, " . patient_visits_sql('p') . " AS visits,
                              (SELECT COALESCE(SUM(total),0) FROM orders o WHERE o.patient_id=p.id AND o.status='paid') spent
                       FROM patients p JOIN branches b ON b.id=p.branch_id WHERE {$w} ORDER BY p.name", $p) as $r) {
-            $rows[] = [$r['patient_number'], $r['name'], $r['gender'] ?: '-', $r['nik'] ?: '-', $r['phone'] ?: '-', ($r['email'] ?? '') ?: '-', $r['member_number'] ?: '-', $r['patient_type'], $r['branch'], $r['visits'], $r['spent']];
+            $rows[] = [$r['patient_number'], $r['name'], $r['gender'] ?: '-', !empty($r['birth_date']) ? tgl($r['birth_date']) : '-', $r['nik'] ?: '-', $r['phone'] ?: '-', ($r['email'] ?? '') ?: '-', ($r['address'] ?? '') ?: '-', $r['member_number'] ?: '-', $r['patient_type'], $r['branch'], $r['visits'], $r['spent']];
         }
         $meta = 'Seluruh data pasien aktif · Cabang: ' . ($scope === null ? 'Semua Cabang' : (string)scalar('SELECT name FROM branches WHERE id=?', [$scope], '-'));
         break;
@@ -1121,7 +1144,7 @@ if ($format === 'excel') {
     echo '</tr></thead><tbody>';
     foreach ($rows as $r) {
         echo '<tr>';
-        foreach ($r as $c) echo '<td>' . e(is_float($c) ? number_format($c, 0, ',', '.') : (string)$c) . '</td>';
+        foreach ($r as $ci => $c) { $asText=in_array($type,['pasien','reservasi'],true) && in_array($headers[$ci]??'', ['NIK','Telepon','No. Pasien','Member'], true); echo '<td'.($asText?' style="mso-number-format:\'\\@\';"':'').'>' . e(is_float($c) ? number_format($c, 0, ',', '.') : (string)$c) . '</td>'; }
         echo '</tr>';
     }
     if ($totals) {

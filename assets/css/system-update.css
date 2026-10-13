@@ -1,0 +1,32 @@
+/* Update Sistem uses Naveena's shared .input, .field, .btn and table components. */
+.system-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.system-grid .card{min-width:0;margin-bottom:0}
+.system-wide{grid-column:1/-1}
+.system-grid h2{margin-bottom:16px}
+.system-form{display:grid;gap:16px;margin:0}
+.system-form .field{margin:0}
+.system-form .input{height:40px;min-height:40px;max-width:100%;box-sizing:border-box;padding:8px 12px;line-height:22px}
+.system-form .input[type=file]{height:auto;min-height:42px;line-height:22px;padding:8px 10px}
+.system-form .input[type=file]::file-selector-button{font:inherit;border:1px solid var(--line);border-radius:6px;background:var(--brand-tint);color:var(--ink);padding:3px 8px;margin-right:10px;cursor:pointer}
+.system-form>.btn{justify-self:start;min-height:40px;white-space:normal;text-align:center}
+.system-form+p{margin-top:16px}
+.system-filters{display:grid;grid-template-columns:minmax(240px,2fr) minmax(160px,1fr) minmax(160px,1fr) auto;align-items:end;gap:12px;margin:0 0 20px}
+.system-filters .field{min-width:0;margin:0}
+.system-filters .input,.system-filters>.btn{height:40px;min-height:40px;box-sizing:border-box;padding:8px 12px;line-height:22px}
+.system-filters>.btn{display:inline-flex;align-items:center;justify-content:center;white-space:nowrap}
+.system-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.system-actions form{margin:0;display:inline-flex}
+.system-log{white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto}
+.system-progress{width:100%;accent-color:var(--pink);margin-top:16px}
+.system-grid details{margin-bottom:12px}
+@media(max-width:1100px){.system-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.system-filters>.btn{justify-self:start}}
+@media(max-width:760px){.system-grid{grid-template-columns:1fr}.system-filters{grid-template-columns:minmax(0,1fr)}.system-filters>.btn,.system-form>.btn{width:100%;justify-self:stretch}.system-form .input,.system-filters .input{font-size:16px}.system-actions{gap:8px}.system-actions .btn{white-space:normal;text-align:center}}
+
+.health-filters{grid-template-columns:minmax(240px,2fr) minmax(160px,1fr) auto}.system-grid textarea.input{height:auto;min-height:120px;padding:10px 12px;line-height:1.5}@media(max-width:760px){.health-filters{grid-template-columns:minmax(0,1fr)}}@media print{.sidebar,.topbar,.page-actions,form,.system-actions{display:none!important}.system-grid{display:block}.system-log{max-height:none;overflow:visible}.table-wrap{overflow:visible}}
+
+/* Keep diagnostic details bounded while preserving horizontal table scrolling. */
+#health-detail .table-wrap{max-height:560px;max-height:min(65vh,560px);overflow:auto;overscroll-behavior:auto;border:1px solid var(--line);border-radius:8px}
+#health-detail .table-wrap thead th{position:sticky;top:0;z-index:1;background:var(--card,#fff)}
+@media(max-width:760px){#health-detail .table-wrap{max-height:480px;max-height:min(60vh,480px)}}
+@media print{#health-detail .table-wrap{max-height:none;overflow:visible}#health-detail .table-wrap thead th{position:static}}
+

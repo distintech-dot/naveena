@@ -76,11 +76,11 @@ $status = mail_status_text();
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover">
 <title>Lupa Kata Sandi · <?= e(clinic_name()) ?></title>
 <?= function_exists('favicon_link_tag') ? favicon_link_tag() : '' ?>
-<link rel="stylesheet" href="assets/css/app.css">
+<link rel="stylesheet" href="assets/css/app.css?v=20261013-auth-center">
 <style id="themeVars"><?= theme_css() ?></style>
 <?= function_exists('wallpaper_style_tag') ? wallpaper_style_tag(true) : '' ?>
 </head>
-<body class="auth-body">
+<body class="auth-body auth-centered">
 <div class="auth-wrap">
   <div class="auth-card">
     <div class="auth-visual">

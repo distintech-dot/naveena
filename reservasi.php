@@ -453,10 +453,14 @@ page_head('Reservasi', 'reservasi');
 <div class="page-head">
   <div><h2>Reservasi</h2><p class="muted">Jadwal dan status reservasi pasien.</p></div>
   <div class="page-actions">
-    <a class="btn<?= $view === 'list' ? ' btn-primary' : '' ?>" href="?view=list">Daftar</a>
-    <a class="btn<?= $view === 'cal' ? ' btn-primary' : '' ?>" href="?view=cal&m=<?= e($calMonth) ?>">Kalender</a>
     <?php if (has_perm('reservation.manage')): ?>
       <button class="btn btn-primary" data-modal-open="resModal" onclick="resetResForm()"><?= icon('plus-circle') ?> Reservasi Baru</button>
+    <?php endif; ?>
+    <a class="btn<?= $view === 'list' ? ' btn-primary' : '' ?>" href="?view=list">Daftar</a>
+    <a class="btn<?= $view === 'cal' ? ' btn-primary' : '' ?>" href="?view=cal&m=<?= e($calMonth) ?>">Kalender</a>
+    <?php if(has_perm('export.data')): ?>
+      <a class="btn" href="export.php?type=reservasi&amp;format=excel&amp;<?= e(qs($view==='cal'?['from'=>$calStart,'to'=>$calEnd]:[],['page','per_page','type','format'])) ?>"><?= icon('download') ?> Excel</a>
+      <a class="btn" href="export.php?type=reservasi&amp;format=pdf&amp;<?= e(qs($view==='cal'?['from'=>$calStart,'to'=>$calEnd]:[],['page','per_page','type','format'])) ?>" target="_blank" rel="noopener"><?= icon('print') ?> PDF</a>
     <?php endif; ?>
     <?= retention_manual_button('reservasi') ?>
   </div>
@@ -528,7 +532,7 @@ page_head('Reservasi', 'reservasi');
                  di daftar). Pemisahan ini yang membuat di HP informasi penting
                  terlihat tanpa deretan "…" (permintaan pemilik ronde 77). */
               echo '<a class="' . $cls2 . '" title="' . e($ev['appointment_number'] . ' · ' . $ev['patient_name'] . ' · ' . $ev['status']) . '" href="reservasi.php?view=list&q=' . urlencode($ev['appointment_number']) . '">'
-                . '<span class="ev-t">' . e(substr($ev['time'], 0, 5)) . '</span>'
+                . '<span class="ev-t">' . e(substr($ev['time'], 0, 5)) . '</span> '
                 . '<span class="ev-n">' . e($ev['patient_name']) . '</span></a>';
           }
           echo '</div>';

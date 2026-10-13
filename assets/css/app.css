@@ -2806,3 +2806,16 @@ textarea.auto-grow{min-height:118px;max-height:56vh;overflow-y:auto;resize:verti
   .content code,.content .hint code,.content .muted code,.content .notice code,
   .content .small code,table.tbl code{overflow-wrap:anywhere;word-break:break-word}
 }
+
+/* Login/reset cards: centered in the visible viewport; tall content can scroll. */
+.auth-body.auth-centered{
+  display:flex;flex-direction:column;align-items:center;justify-content:flex-start;
+  min-height:100vh;min-height:100dvh;
+}
+.auth-body.auth-centered>.auth-wrap{flex:0 0 auto;margin:auto;min-width:0}
+/* Compensate the shared desktop UI zoom so viewport centering stays accurate. */
+@supports (zoom:1){
+  @media screen and (min-width:1025px){
+    .auth-body.auth-centered{min-height:calc(100vh / var(--ui-scale));min-height:calc(100dvh / var(--ui-scale))}
+  }
+}

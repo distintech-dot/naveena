@@ -99,7 +99,7 @@ function xlsx_sheet_xml(array $rows, array $widths = [], bool $header = true, in
             $v = (string)$val;
             if ($v === '') {
                 $xml .= '<c r="' . $ref . '"' . $style . '/>';
-            } elseif (is_numeric($v) && !preg_match('/^0\d/', $v)) {
+            } elseif (is_numeric($v) && !preg_match('/^0\d/', $v) && !($header && in_array((string)($rows[0][$ci] ?? ''), ['NIK', 'Telepon', 'No. Pasien', 'Member'], true))) {
                 $xml .= '<c r="' . $ref . '"' . $style . '><v>' . $v . '</v></c>';
             } else {
                 $xml .= '<c r="' . $ref . '"' . $style . ' t="inlineStr"><is><t xml:space="preserve">'

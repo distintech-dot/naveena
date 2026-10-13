@@ -23,6 +23,7 @@ require_once __DIR__ . '/includes/platform.php';
 require_once __DIR__ . '/includes/pdf.php';
 require_once __DIR__ . '/includes/app_summary.php';
 require_once __DIR__ . '/includes/login_hint.php';
+require_once __DIR__ . '/includes/login_copy.php';
 require_once __DIR__ . '/includes/mailer.php';
 require_once __DIR__ . '/includes/login_security.php';
 require_once __DIR__ . '/includes/twofa_ui.php';
@@ -39,6 +40,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $act = (string)($_POST['action'] ?? '');
     try {
 
+        if($act==='login_copy_save'){
+            if(!is_super())deny('Teks halaman login hanya dapat diubah oleh Super Admin.');
+            $before=login_copy_values();$after=login_copy_validate($_POST['login_copy']??[]);
+            set_setting('login_page_copy',json_encode($after,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR));
+            audit('Ubah Teks Halaman Login','Pengaturan',null,$before,$after,'Teks login disimpan; autentikasi tidak diubah.');flash('Teks halaman login berhasil disimpan.');header('Location: developer.php#tekslogin');exit;
+        }
         if ($act === 'github_save') {
             if (!is_super()) deny('Pengaturan GitHub hanya dapat diubah oleh Super Admin.');
             $repo = trim((string)($_POST['github_repo'] ?? ''));
@@ -1302,6 +1309,27 @@ page_head('Developer Settings', 'developer');
     </div>
   </form>
 </div>
+<?php if(is_super()): $loginCopyFields=login_copy_values(); ?>
+<div class="card" id="tekslogin">
+  <div class="card-head"><h3>Teks Halaman Login</h3></div>
+  <div class="card-body">
+    <p class="muted">Atur judul, deskripsi, daftar fitur dan teks bawah halaman login. Teks biasa; HTML tidak dijalankan. Nama klinik dan daftar cabang tetap dapat mengikuti data sistem.</p>
+    <form method="post">
+      <?= csrf_field() ?><input type="hidden" name="action" value="login_copy_save">
+      <div class="form-grid">
+        <?php foreach(['title'=>'Judul utama','intro'=>'Deskripsi klinik','features'=>'Daftar fitur (satu poin per baris, maksimal 10)','footer'=>'Teks bawah / copyright','form_title'=>'Judul formulir login','form_intro'=>'Petunjuk formulir login'] as $key=>$label): ?>
+        <div class="field"><label for="login-copy-<?= e($key) ?>"><?= e($label) ?></label>
+          <?php if(in_array($key,['intro','features','form_intro'],true)): ?><textarea class="input" id="login-copy-<?= e($key) ?>" name="login_copy[<?= e($key) ?>]" rows="<?= $key==='features'?5:3 ?>" maxlength="<?= ['intro'=>800,'features'=>1600,'form_intro'=>500][$key] ?>"><?= e($loginCopyFields[$key]) ?></textarea>
+          <?php else: ?><input class="input" id="login-copy-<?= e($key) ?>" name="login_copy[<?= e($key) ?>]" value="<?= e($loginCopyFields[$key]) ?>" maxlength="<?= $key==='footer'?250:120 ?>" <?= $key!=='footer'?'required':'' ?>><?php endif; ?>
+        </div><?php endforeach; ?>
+      </div>
+      <p class="small muted">Placeholder: {nama_klinik}, {tahun}, {cabang}, {daftar_cabang}. {daftar_cabang} menyertakan pemisah — bila ada cabang. Kosongkan deskripsi/fitur/copyright bila tidak ingin ditampilkan.</p>
+      <button class="btn btn-primary" type="submit"><?= icon('settings') ?> Simpan Teks Login</button>
+      <p class="small muted">Lihat hasilnya dengan membuka halaman login melalui jendela privat/incognito.</p>
+    </form>
+  </div>
+</div>
+<?php endif; ?>
 <script>
 (function () {
   var input = document.getElementById('clinicNameInput');
@@ -2017,3 +2045,5 @@ document.addEventListener('click', function (ev) {
 });
 </script>
 <?php page_foot(); ?>
+
+
